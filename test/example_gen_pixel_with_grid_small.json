@@ -1,0 +1,9 @@
+{
+    "HoleRadius" : 1.9,
+    "PcbWidth" : 3.2,
+    "pixelPlaneLowEdgePosition" : 10,
+    "pixelPlaneWidth" : 0.1,
+    "pixelSize" : 2.2,
+    "pixelGap" : 1.6,
+    "Npixels" : 5
+}
