@@ -93,6 +93,7 @@ class Main:
         Save an array to key in output store.
         '''
         key = self.key(key)
+        print(key)
         return self.outstore.put(key, array, **metadata)
 
 
