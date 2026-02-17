@@ -413,35 +413,38 @@ def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
     speed_unit = units.mm/units.us
     speed_z = varr[2][:,:,:]/speed_unit
     #Draw for PCB
-    x = numpy.linspace(0,420,4200)
+    # x = numpy.linspace(0,420,4200)
+    # x = numpy.linspace(0, 200, 2000) ## original
+    x = numpy.linspace(0, 200, 1500) ## changed this to 1500
     for i in range(0,25):
         for j in range(0,17):
+            # print(f'len(x) = {len(x)}, len(speed_z[i,j,:]) = {len(speed_z[i,j,:])}')
             plt.plot(x,speed_z[i,j,:])
-            #if i==10 and j==8:
-            #    for l in range(1,len(x)-1):
-            #        print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
+    #         #if i==10 and j==8:
+    #         #    for l in range(1,len(x)-1):
+    #         #        print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
     # Draw for Pixel
-    #x = numpy.linspace(0,150,1500)
-    #for i in range(0,38):
+    # x = numpy.linspace(0,150,1500)
+    # for i in range(0,38):
     #    for j in range(0,38):
-    #        plt.plot(x,speed_z[i,j,:])
-            #if i==10 and j==8:
-                #for l in range(1,len(x)-1):
-                 #   print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
-    plt.show()
+    #     plt.plot(x,speed_z[i,j,:])
+    #     if i==10 and j==8:
+    #         for l in range(1,len(x)-1):
+    #             print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
+    # plt.show()
+    # plt.savefig('store/velocity_z.png')
     params = dict(domain=domain, command="velo",
                   potential=potential, temperature=temp)
     # save velocity
     ctx.obj.put(velocity, varr, **{**params, "taxon": "velocity"})
-
+    print("velocity shape=",varr.shape)
     # save dl/dt if keys provided
     if dl_key is not None:
         ctx.obj.put(dl_key, dl, **{**params, "taxon": "diffusion_longitudinal"})
-
+    print("dl shape=",dl_key)
     if dt_key is not None:
         ctx.obj.put(dt_key, dt, **{**params, "taxon": "diffusion_transverse"})
-
-
+    print("dt shape=",dt_key)
 
 @cli.command()
 @click.option("-s", "--scalar", type=str,
@@ -473,11 +476,7 @@ def starts(ctx, starts, mode, points):
     '''
     Store "starting" points.
     '''
-    npoints = len(points)
-    if not npoints:
-        raise ValueError("require at least one point")
-    points = [pochoir.arrays.fromstr1(p) for p in points]
-    
+    import numpy
     # fixme: we say we don't allow numpy in main...
     if mode=="yes":
         points=[]
@@ -497,11 +496,17 @@ def starts(ctx, starts, mode, points):
         for i in range(1,step):
             points.append([spacing*(step+1),i*spacing,148.0])
         points.append([spacing*(step+1),spacing*(step+1),148.0])
+    else:
+        npoints = len(points)
+        if not npoints:
+            raise ValueError("require at least one point")
+        points = [pochoir.arrays.fromstr1(p) for p in points]
     
     print(points)
+    print('POINTS')
     print(len(points))
-        
-    import numpy
+    
+    # import numpy
     arr = numpy.asarray(points)
     print("whatether we save: ",arr)
     ctx.obj.put(starts, arr, taxon="points", command="starts")
@@ -529,6 +534,7 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, steps):
     '''
     Calculate drift paths.
     '''
+    print('START DRIFT ')
     start_points = ctx.obj.get(starts)
     print("all start_points: ",start_points)
     if start_points is None:
@@ -838,6 +844,7 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
     shift_y = 0#dom.shape[1]*dom.spacing[1]/2.0
     shifted_paths = []
     print("input paths shape : ",the_paths.shape)
+    # sys.exit()
     if npixels>1:
         #dx = dom.shape[0]*dom.spacing[0]/npixels
         #print("dx=",dx)
@@ -853,6 +860,7 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
         sp2 = 5 # 5, 4 , 3
         for lvl in range(sp1):
             for i in range(sp1):
+                # print(f'indices of the paths : {i+lvl*sp1}')
                 newpath=[[0.3+3.8/2+2.0*(4.4)+x[0],x[1]+2*4.4+0.3+3.8/2,x[2]] for x in the_paths[i+lvl*sp1]]
                 shifted_paths.append(newpath)
             for i in range(sp1):
@@ -894,20 +902,26 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
     endpoints=[]
     for num,p in enumerate(shifted_paths):
         #print(num," Path Starts=",p[0])
-        print(num," Path Starts=",p[0])
+        # print(num," Path Starts=",p[0])
         startpoints.append(p[0])
         endpoints.append(p[-1])
     Q = charge * rgi(shifted_paths) #/ units.V
+    print(f'Charge Q : {Q}')
     assert len(Q.shape) == 2
     #assert Q.shape[0] == npaths
     assert Q.shape[1] == nsteps
     numpy.set_printoptions(threshold=sys.maxsize)
 
     dQ = Q[:, 1:] - Q[:, :-1]
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(10,6))
+    plt.plot(ticks[1:], Q[0,1:], label="Charge")
+    plt.savefig('store/charge.png')
+    plt.close()
     dT = ticks[1:] - ticks[:-1]
     I = []
     I_tot = dQ/dT
-    
+    print(f'Induced current I_tot : {I_tot}')
     if average>0:
         print("Average ", average," paths along the stip")
         tot_paths = int(len(I_tot)/average)
@@ -920,11 +934,13 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
     if average<=0:
         print("No Averaging")
         I=I_tot
+        # print("I shape=",I.shape)
+        # print("I=",I)
     import numpy as np
     #np.save('fr_4p4pitch_3.8pix_circgrid_1p9.npy', I)
-    np.save('fr_4p4pitch_3.8pix_nogrid_10pathsperpixel.npy', I)
-    np.save('startpoints.npy', startpoints)
-    np.save('endpoints.npy', endpoints)
+    np.save('store/fr_4p4pitch_3.8pix_nogrid_10pathsperpixel.npy', I)
+    np.save('store/startpoints.npy', startpoints)
+    np.save('store/endpoints.npy', endpoints)
     ctx.obj.put(output, I, command="induce", taxon="current",
                 charge = charge,
                 domain=domain, paths=paths,average=average,nsteps=nsteps, weighting=weighting)
