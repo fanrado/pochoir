@@ -163,6 +163,13 @@ def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePo
     
     trimCorner(barr,int(p_size/2)+p_gap,int(p_size/2)+p_gap,pp_loweredge,pp_width+pp_loweredge+1,2)
         #arr[i*(p_size+p_gap):i*(p_size+p_gap)+p_size,i*(p_size+p_gap):i*(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
+    ## draw pixel plane for drift field
+    plt.figure(figsize=(10,10))
+    plt.imshow(barr[:,:,pp_loweredge],origin='lower')
+    plt.title('pixel plane')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.savefig('store/domain_drift.png')
     
 def generator(dom, cfg):
     
