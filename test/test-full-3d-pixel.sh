@@ -60,7 +60,7 @@ do_fdm () {
          --potential potential/$name \
          --increment increment/$name
 }
-do_fdm drift3d  10      1300000      0.00000002     per,per,fix #130,000,000
+do_fdm drift3d  10      13000000      0.00000002     per,per,fix #130,000,000
 # do_fdm weight2d 1      1200      0.00000002   fix,fix #1250000
 
 ##
@@ -77,8 +77,8 @@ do_domain () {
          --shape=$shape --spacing $spacing
 }
 
-do_domain weight3d 396,396,1500 '0.1*mm' #220,220,1500 '0.1*mm'
-
+# do_domain weight3d 396,396,1500 '0.1*mm' #220,220,1500 '0.1*mm'
+do_domain weight3d 220,220,1500 '0.1*mm'
 
 ## Initial/Boundary Value Arrays ##
 do_gen () {
@@ -125,11 +125,19 @@ want velocity/drift3d \
 
 ## Need to be run separately
 echo "=== Paths ==="
+
+dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
+points=()
+for d in "${dist[@]}"; do
+     for d2 in "${dist[@]}"; do
+         points+=("${d}*mm,${d2}*mm,148*mm")
+     done
+done
 ## Paths
 want starts/drift3d \
     pochoir starts --starts starts/drift3d \
-    -m yes \
-    '0.1*mm,0.1*mm,148*mm'
+    -m no \
+    ${points[@]}
 
 #rm -r /Users/sergey/Desktop/ICARUS/LArStand/pochoir/test/store/paths
 
