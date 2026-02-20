@@ -167,6 +167,7 @@ def domain(ctx, shape, origin, spacing, domain):
         origin = pochoir.arrays.zeros(ndim)
 
     dom = pochoir.domain.Domain(shape, spacing, origin)
+
     ctx.obj.put_domain(domain, dom)
 
 
@@ -482,7 +483,7 @@ def starts(ctx, starts, mode, points):
         points=[]
         spacing = 0.4 #0.4 for 10x10 ; 0.49 for 8x8 ; 0.63 for 6x6
         step= 9 # 9 for 10x10, 7 for 8x8 , 5 for 6x6x
-        
+        ### ((4.4)/10)/2 + 4.4/10
         points.append([spacing,spacing,148.0])
         for i in range(1,step):
             points.append([spacing,i*spacing,148.0])
@@ -508,6 +509,15 @@ def starts(ctx, starts, mode, points):
     
     # import numpy
     arr = numpy.asarray(points)
+    import matplotlib.pyplot as plt
+    # draw points for PCB
+    plt.figure(figsize=(10,10))
+    plt.scatter(arr[:,0],arr[:,1])
+    plt.title('starting points')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.savefig('store/starting_points.png')
+    plt.close()
     print("whatether we save: ",arr)
     ctx.obj.put(starts, arr, taxon="points", command="starts")
 
@@ -571,6 +581,21 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, steps):
             path = drift_numpy.solve_sde(dom, point, velo, dl, dt , ticks, verbose=verbose)
         thepaths[ind]=path
 
+    # plot the drift paths
+    import matplotlib.pyplot as plt
+    # plt.figure(figsize=(10,10))
+    # create 3d plot 
+    fig = plt.figure(figsize=(10,10))
+    ax = fig.add_subplot(111, projection='3d')
+    for i in range(0,thepaths.shape[0]):
+        # plt.plot(thepaths[i,:,0],thepaths[i,:,1])
+        ax.plot(thepaths[i,:,0],thepaths[i,:,1],thepaths[i,:,2])
+    plt.title('drift paths')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('z')
+    plt.savefig('store/drift_paths_3d.png')
+    plt.close()
     params=dict(taxon="paths", command="drift", domain=domain,
                 tstart=start, tstop=stop, nsteps=nsteps)
     ctx.obj.put(paths, thepaths, **params)
@@ -858,40 +883,55 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
         #100 paths for ND
         sp1 = 10 # 10 ,8 , 6
         sp2 = 5 # 5, 4 , 3
+        # old_paths = []
         for lvl in range(sp1):
             for i in range(sp1):
                 # print(f'indices of the paths : {i+lvl*sp1}')
                 newpath=[[0.3+3.8/2+2.0*(4.4)+x[0],x[1]+2*4.4+0.3+3.8/2,x[2]] for x in the_paths[i+lvl*sp1]]
+                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
                 shifted_paths.append(newpath)
             for i in range(sp1):
                 newpath=[[0.3+3.8/2+2.0*(4.4)+x[0],x[1]+2*4.4+0.3+3.8/2+4.4,x[2]] for x in the_paths[i+lvl*sp1]]
+                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
                 shifted_paths.append(newpath)
             for i in range(sp2):
                 newpath=[[0.3+3.8/2+2.0*(4.4)+x[0],x[1]+2*4.4+0.3+3.8/2+4.4*2,x[2]] for x in the_paths[i+lvl*sp1]]
+                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
                 shifted_paths.append(newpath)
         for lvl in range(sp1):
             for i in range(sp1):
                 newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4,x[1]+2*4.4+0.3+3.8/2,x[2]] for x in the_paths[i+lvl*sp1]]
+                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
                 shifted_paths.append(newpath)
             for i in range(sp1):
                 newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4,x[1]+2*4.4+0.3+3.8/2+4.4,x[2]] for x in the_paths[i+lvl*sp1]]
+                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
                 shifted_paths.append(newpath)
             for i in range(sp2):
                 newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4,x[1]+2*4.4+0.3+3.8/2+4.4*2,x[2]] for x in the_paths[i+lvl*sp1]]
+                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
                 shifted_paths.append(newpath)
 
         for lvl in range(sp2):
             for i in range(sp1):
                 newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4*2,x[1]+2*4.4+0.3+3.8/2,x[2]] for x in the_paths[i+lvl*sp1]]
+                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
                 shifted_paths.append(newpath)
             for i in range(sp1):
                 newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4*2,x[1]+2*4.4+0.3+3.8/2+4.4,x[2]] for x in the_paths[i+lvl*sp1]]
+                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
                 shifted_paths.append(newpath)
             for i in range(sp2):
                 newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4*2,x[1]+2*4.4+0.3+3.8/2+4.4*2,x[2]] for x in the_paths[i+lvl*sp1]]
+                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
                 shifted_paths.append(newpath)
 
-            
+    # print(f'Shifted_paths[0,0] : {shifted_paths[0][0]}') 
+    # print(f'old_paths[0,0] : {old_paths[0][0]}')
+    # print("TotalPaths after shifting=",len(shifted_paths))
+    # for i in range(0,len(shifted_paths)):
+    #     print(f'shifted_paths[0,{i}] : {shifted_paths[i][0]} \t old_paths[0,{i}] : {old_paths[i][0]}') 
+    # sys.exit()   
     if npixels<=1:
         for i in range(0,len(the_paths)):
             newpath = [[shift_x+x[0],x[1]+shift_y,x[2]] for x in the_paths[i]]
@@ -919,6 +959,9 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
     plt.savefig('store/charge.png')
     plt.close()
     dT = ticks[1:] - ticks[:-1]
+    # print(f'dT [:10] : {dT[:10]}r')
+    # print(f'len(dT) : {len(dT)}')
+    # sys.exit()
     I = []
     I_tot = dQ/dT
     print(f'Induced current I_tot : {I_tot}')
