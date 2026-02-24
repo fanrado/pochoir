@@ -62,6 +62,16 @@ import click
 import pochoir
 from . import units
 # no others than click and pochoir!
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    filename='pochoir.log',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    filemode='a'
+)
+info_msg = logging.info
+err_msg = logging.error
+debug_msg = logging.debug
 
 @click.group()
 @click.option("-s","--store",type=click.Path(),
@@ -149,6 +159,7 @@ def domain(ctx, shape, origin, spacing, domain):
     Note: this description corresponds to vtk/paraview uniform
     rectilinear grid, aka an "image".
     '''
+    info_msg("generating domain with shape={}, origin={}, spacing={}".format(shape, origin, spacing))
     shape = pochoir.arrays.fromstr1(shape, int)
     ndim = shape.size
 
@@ -188,11 +199,11 @@ def gen(ctx, domain, generator, initial, boundary, configs):
     generator.
     '''
     if generator is None:
-        print("available geometry generators:")
+        info_msg("available geometry generators:")
         for one in pochoir.gen.__dict__:
             if one[0] == "_":
                 continue
-            print('\t'+one)
+            info_msg('\t'+one)
         return
 
     cfg = dict()
@@ -202,7 +213,14 @@ def gen(ctx, domain, generator, initial, boundary, configs):
     meth = getattr(pochoir.gen, generator)
 
     dom = ctx.obj.get_domain(domain)
+    info_msg("domain={}".format(dom))
+    info_msg("cfg={}".format(cfg))
+    
     iarr, barr = meth(dom, cfg)
+    
+    info_msg("initial array shape={}, boundary array shape={}".format(iarr.shape, barr.shape))
+    info_msg("initial array dtype={}, boundary array dtype={}".format(iarr.dtype, barr.dtype))
+
     params = dict(domain=domain, generator=generator,
                   command="gen", config=','.join(configs))
     ctx.obj.put(initial, iarr, taxon="initial", **params)
@@ -307,8 +325,10 @@ def fdm(ctx, initial, boundary,
     import pochoir.fdm
     try:
         solve = getattr(pochoir.fdm, f'solve_{engine}')
+        info_msg(f"using FDM engine {engine}")
     except AttributeError as err:
         click.echo(f'no fdm solver engine {engine}')
+        info_msg(f'no fdm solver engine {engine}')
         click.echo(err)
         sys.exit(-1)
 
@@ -316,8 +336,13 @@ def fdm(ctx, initial, boundary,
     barr, bmd = ctx.obj.get(boundary, True)
     if not "domain" in bmd:
         click.echo(f'failed to get domain for {boundary}')
+        info_msg(f'failed to get domain for {boundary}')
         click.echo(bmd)
         sys.exit(-1)
+    info_msg(f'got initial and boundary arrays with shapes {iarr.shape} and {barr.shape}')
+    info_msg(f'got initial and boundary arrays with dtypes {iarr.dtype} and {barr.dtype}')
+    info_msg(f'got domain: {bmd["domain"]}')
+
     domain = bmd['domain']
 
     bool_edges = [e.startswith("per") for e in edges.split(",")]
@@ -325,8 +350,8 @@ def fdm(ctx, initial, boundary,
         raise ValueError("the number of periodic condition do not match problem dimensions")
 
     arr, err = solve(iarr, barr, bool_edges,
-                     precision, epoch, nepochs)
-
+                     precision, epoch, nepochs, info_msg=info_msg)
+    # print(f'final error = {err}')
     params = dict(operation="fdm", domain=domain,
                   initial=initial, boundary=boundary,
                   edges=edges, epoch=epoch, nepochs=nepochs,
