@@ -146,8 +146,9 @@ def trimCorner(arr,x,y,z1,z2,corner):
         arr[x+1,y-1,z1:z2]=0
 
 def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential):
-    draw_plane(arr,-1,cathodePotential)
-    draw_plane(barr,-1,1)
+    draw_plane(arr,-1,cathodePotential) # This line sets the initial values
+    draw_plane(barr,-1,1) # This line sets the boundary values
+
     dims = p_size*n_pix+p_gap*(n_pix-1)
     barr[0:int(p_size/2),0:int(p_size/2),pp_loweredge:pp_width+pp_loweredge+1]=1
     barr[0:int(p_size/2),int(p_size/2)+p_gap:,pp_loweredge:pp_width+pp_loweredge+1]=1
@@ -162,16 +163,29 @@ def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePo
     trimCorner(barr,int(p_size/2)+p_gap,int(p_size/2)-1,pp_loweredge,pp_width+pp_loweredge+1,3)
     
     trimCorner(barr,int(p_size/2)+p_gap,int(p_size/2)+p_gap,pp_loweredge,pp_width+pp_loweredge+1,2)
-        #arr[i*(p_size+p_gap):i*(p_size+p_gap)+p_size,i*(p_size+p_gap):i*(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
-    ## draw pixel plane for drift field
+    # arr[(p_size+p_gap):(p_size+p_gap)+p_size,(p_size+p_gap):(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
+    # draw pixel plane for drift field
+    # print(f'pp_loweredge={pp_loweredge}')
+    # print(f'barr shape={barr.shape}')
     plt.figure(figsize=(10,10))
-    plt.imshow(barr[:,:,pp_loweredge],origin='lower')
+    plt.imshow(barr[:, :, pp_loweredge], origin='lower')
+    # plt.plot(barr[22, 22, :], label='barr[22, 22, :]')
     plt.title('pixel plane')
     plt.xlabel('x')
     plt.ylabel('y')
-    plt.savefig('store/domain_drift.png')
+    plt.savefig('store/domain_drift_bc.png')
+    plt.close()
+
+    # plt.figure(figsize=(10,10))
+    # plt.imshow(arr[:, :, pp_loweredge], origin='lower')
+    # print(f'kdlsjfew arr[43, 43, 1499]={arr[:, :, 1499]}')
+    # plt.title('pixel plane')
+    # plt.xlabel('x')
+    # plt.ylabel('y')
+    # plt.savefig('store/domain_drift_initial_cond.png')
+    # plt.close()
     
-def generator(dom, cfg):
+def generator(dom, cfg, info_msg=None):
     
     r1 = int(cfg['HoleRadius']/dom.spacing[0]-1)
     pcb_width = int(cfg['PcbWidth']/dom.spacing[2])
@@ -181,6 +195,7 @@ def generator(dom, cfg):
 
     arr = numpy.zeros(dom.shape)
     barr = numpy.ones(dom.shape)
+    # print(f'arr shape = {arr.shape}, barr shape = {barr.shape}')
     #draw_pcb_plane((len(arr),len(arr[0])),arr,pp_loweredge+pcb_width,r1,-1000)
     barr[arr==0]=0
     p_size=int(round(cfg["pixelSize"]/dom.spacing[0]))
@@ -189,4 +204,19 @@ def generator(dom, cfg):
     pp_width = int(cfg['pixelPlaneWidth']/dom.spacing[0])
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential)
 
+    if info_msg is not None:
+        info_msg(f'cathode potential : {cathodePotential} V')
+        info_msg(f'arr[:, :, 0] = {arr[:, :, 0]}')
+        info_msg(f'arr[:, :, -1] = {arr[:, :, -1]}')
+        info_msg(f'arr.shape = {arr.shape}')
+        info_msg(f'arr[22, 22, :] = {arr[22, 22, :]}')
+        info_msg('----------------------------------')
+        info_msg(f'barr[:, :, 0] = {barr[:, :, 0]}')
+        info_msg(f'barr[:, :, -1] = {barr[:, :, -1]}')
+        info_msg(f'barr.shape = {barr.shape}')
+        info_msg(f'barr[22, 22, :] = {barr[22, 22, :]}')
+        info_msg(f'pixelPlaneLowEdgePosition = {pp_loweredge}')
+        info_msg(f'barr[:, :, pp_loweredge] = {barr[:, :, pp_loweredge]}')
+        
+        info_msg(f'p_size = {p_size}, p_gap = {p_gap}, n_pix = {n_pix}, pp_width = {pp_width}')
     return arr,barr
