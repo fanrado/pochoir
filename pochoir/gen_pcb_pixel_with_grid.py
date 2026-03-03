@@ -139,14 +139,23 @@ def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width):
                     trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,3)
     
                     trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,2)
-    # draw pixel plane
-    plt.figure(figsize=(10,10))
-    plt.imshow(barr[:,:,pp_loweredge],origin='lower')
-    plt.title('pixel plane')
-    plt.xlabel('x')
-    plt.ylabel('y')
-    plt.savefig('store/pixel_plane.png')
+    # # draw pixel plane
+    # plt.figure(figsize=(10,10))
+    # plt.imshow(barr[:,:,pp_loweredge],origin='lower')
+    # plt.title('pixel plane')
+    # plt.xlabel('x')
+    # plt.ylabel('y')
+    # plt.savefig('store/pixel_plane_bc.png')
+    # plt.close()
 
+    # plt.figure(figsize=(10,10))
+    # plt.imshow(arr[:,:,pp_loweredge],origin='lower')
+    # plt.title('pixel plane')
+    # plt.xlabel('x')
+    # plt.ylabel('y')
+    # plt.tight_layout()
+    # plt.savefig('store/pixel_plane_initialcond.png')
+    # plt.close()
 def generator(dom, cfg):
     
     
@@ -166,4 +175,12 @@ def generator(dom, cfg):
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
     barr[:,:,0]=1
+    # draw pixel plane
+    # plt.figure(figsize=(10,10))
+    # plt.imshow(barr[:,:,pp_loweredge],origin='lower')
+    # plt.title('pixel plane')
+    # plt.xlabel('x')
+    # plt.ylabel('y')
+    # plt.savefig('store/pixel_plane_bc.png')
+    # plt.close()
     return arr,barr
