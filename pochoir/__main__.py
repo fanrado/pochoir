@@ -159,7 +159,7 @@ def domain(ctx, shape, origin, spacing, domain):
     Note: this description corresponds to vtk/paraview uniform
     rectilinear grid, aka an "image".
     '''
-    info_msg("generating domain with shape={}, origin={}, spacing={}".format(shape, origin, spacing))
+    # info_msg("generating domain with shape={}, origin={}, spacing={}".format(shape, origin, spacing))
     shape = pochoir.arrays.fromstr1(shape, int)
     ndim = shape.size
 
@@ -213,13 +213,13 @@ def gen(ctx, domain, generator, initial, boundary, configs):
     meth = getattr(pochoir.gen, generator)
 
     dom = ctx.obj.get_domain(domain)
-    info_msg("domain={}".format(dom))
-    info_msg("cfg={}".format(cfg))
+    # info_msg("domain={}".format(dom))
+    # info_msg("cfg={}".format(cfg))
     
-    iarr, barr = meth(dom, cfg)
+    iarr, barr = meth(dom, cfg)#, info_msg) # iarr is initial array, barr is boundary array
     
-    info_msg("initial array shape={}, boundary array shape={}".format(iarr.shape, barr.shape))
-    info_msg("initial array dtype={}, boundary array dtype={}".format(iarr.dtype, barr.dtype))
+    # info_msg("initial array shape={}, boundary array shape={}".format(iarr.shape, barr.shape))
+    # info_msg("initial array dtype={}, boundary array dtype={}".format(iarr.dtype, barr.dtype))
 
     params = dict(domain=domain, generator=generator,
                   command="gen", config=','.join(configs))
@@ -339,9 +339,9 @@ def fdm(ctx, initial, boundary,
         info_msg(f'failed to get domain for {boundary}')
         click.echo(bmd)
         sys.exit(-1)
-    info_msg(f'got initial and boundary arrays with shapes {iarr.shape} and {barr.shape}')
-    info_msg(f'got initial and boundary arrays with dtypes {iarr.dtype} and {barr.dtype}')
-    info_msg(f'got domain: {bmd["domain"]}')
+    # info_msg(f'got initial and boundary arrays with shapes {iarr.shape} and {barr.shape}')
+    # info_msg(f'got initial and boundary arrays with dtypes {iarr.dtype} and {barr.dtype}')
+    # info_msg(f'got domain: {bmd["domain"]}')
 
     domain = bmd['domain']
 
@@ -434,10 +434,11 @@ def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
     varr = [e*mu/units.mm**2 for e in efield]
     varr=numpy.array(varr)
     #varr[2][:,:,:101]=0
-    import matplotlib.pyplot as plt
+    
     speed= emag
     speed_unit = units.mm/units.us
     speed_z = varr[2][:,:,:]/speed_unit
+    import matplotlib.pyplot as plt
     #Draw for PCB
     # x = numpy.linspace(0,420,4200)
     # x = numpy.linspace(0, 200, 2000) ## original
@@ -458,10 +459,14 @@ def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
     #         for l in range(1,len(x)-1):
     #             print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
     # plt.show()
-    # plt.savefig('store/velocity_z.png')
+    plt.savefig('store/velocity_z.png')
+    plt.close()
+    # print(f'units.V : {units.V}, units.mm : {units.mm}, units.us : {units.us}')
     params = dict(domain=domain, command="velo",
                   potential=potential, temperature=temp)
     # save velocity
+    efield_path = '/'.join([velocity.split('/')[0], 'efield'])
+    ctx.obj.put(efield_path, efield, **{**params, "taxon": "efield"})
     ctx.obj.put(velocity, varr, **{**params, "taxon": "velocity"})
     print("velocity shape=",varr.shape)
     # save dl/dt if keys provided
