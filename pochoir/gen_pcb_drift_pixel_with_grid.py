@@ -147,6 +147,8 @@ def trimCorner(arr,x,y,z1,z2,corner):
 
 def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential):
     draw_plane(arr,-1,cathodePotential) # This line sets the initial values
+    for i in range(pp_loweredge, arr.shape[2]):
+        arr[:, :, i] = (-7000/1399)*(i-100)
     draw_plane(barr,-1,1) # This line sets the boundary values
 
     dims = p_size*n_pix+p_gap*(n_pix-1)
@@ -208,6 +210,8 @@ def generator(dom, cfg, info_msg=None):
         info_msg(f'cathode potential : {cathodePotential} V')
         info_msg(f'arr[:, :, 0] = {arr[:, :, 0]}')
         info_msg(f'arr[:, :, -1] = {arr[:, :, -1]}')
+        info_msg('----------------------------------')
+        info_msg(f'arr[:, :, 10] = {arr[:, :, 10]}')
         info_msg(f'arr.shape = {arr.shape}')
         info_msg(f'arr[22, 22, :] = {arr[22, 22, :]}')
         info_msg('----------------------------------')
