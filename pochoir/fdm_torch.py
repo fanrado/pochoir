@@ -55,6 +55,11 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None):
     mutable_core = torch.tensor(numpy.invert(barr.astype(numpy.bool)), requires_grad=False, dtype=_dtype).to(device)
     tmp_core = torch.zeros(iarr.shape, requires_grad=False, dtype=_dtype).to(device)
 
+    # device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    # bi_core = torch.tensor(iarr*barr, requires_grad=False).to(device)
+    # mutable_core = torch.tensor(numpy.invert(barr.astype(numpy.bool)), requires_grad=False).to(device)
+    # tmp_core = torch.zeros(iarr.shape, requires_grad=False).to(device)
+
     barr_pad = torch.tensor(numpy.pad(barr, 1), requires_grad=False, dtype=_dtype).to(device)
     iarr_pad = torch.tensor(numpy.pad(iarr, 1), requires_grad=False, dtype=_dtype).to(device)
     core = core_slices1(iarr_pad)
@@ -67,6 +72,7 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None):
     prev = None
     for iepoch in range(nepochs):
         info_msg(f'====== epoch: {iepoch}/{nepochs} x {epoch} ===============')
+        epoch_start_time = time.time()
         for istep in range(epoch):
             # info_msg(f'step: {istep}/{epoch}')
             # prev = iarr_pad.clone().detach().requires_grad_(False)
@@ -89,11 +95,14 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None):
             if epoch-istep == 1: # last in the iteration
                 err = iarr_pad[core] - prev[core]
                 maxerr = torch.max(torch.abs(err))
-                # info_msg(f'maxerr = {maxerr}, prec = {prec}, dtype = {maxerr.dtype}')
-                if prec and maxerr < prec:
-                    info_msg(f'fdm reach max precision: {prec} > {maxerr}')
-                    return (iarr_pad[core].cpu(), err.cpu())
-
+                info_msg(f'maxerr = {maxerr}, prec = {prec}, dtype = {maxerr.dtype}')
+                # # Removed this part for debugging ---- this is part of the original script
+                # # Allowing the solver to run for all epochs to check the precision at the end of all epochs
+                # if prec and maxerr < prec:
+                #     info_msg(f'fdm reach max precision: {prec} > {maxerr}')
+                #     return (iarr_pad[core].cpu(), err.cpu())
+        epoch_end_time = time.time()
+        info_msg(f'epoch {iepoch} time: {epoch_end_time - epoch_start_time:.2f} seconds')
     info_msg(f'iarr_pad_shape = {iarr_pad.shape}, periodic = {periodic}, prec = {prec}, epoch = {epoch}, nepochs = {nepochs}')
     info_msg(f'iarr_pad_dtype = {iarr_pad.dtype}, err dtype = {err.dtype}, maxerr = {maxerr}')
     info_msg(f'fdm reach max epoch {epoch} x {nepochs}, last prec {prec} < {maxerr}')
