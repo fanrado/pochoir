@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import numpy
+import torch
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from .gen_pcb_drift_pixel_with_grid import draw_quarter_circle as draw_quarter
+from pochoir.InverseDistanceWeight_torch import init_idw_pcb_pixel, plot_idw_pcb_pixel
 
 def fill_area(arr,barr,val):
     for b in barr:
@@ -148,14 +150,14 @@ def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width):
     # plt.savefig('store/pixel_plane_bc.png')
     # plt.close()
 
-    # plt.figure(figsize=(10,10))
-    # plt.imshow(arr[:,:,pp_loweredge],origin='lower')
-    # plt.title('pixel plane')
-    # plt.xlabel('x')
-    # plt.ylabel('y')
-    # plt.tight_layout()
-    # plt.savefig('store/pixel_plane_initialcond.png')
-    # plt.close()
+    plt.figure(figsize=(10,10))
+    plt.imshow(arr[:,:,pp_loweredge],origin='lower')
+    plt.title('pixel plane')
+    plt.xlabel('x')
+    plt.ylabel('y')
+    plt.tight_layout()
+    plt.savefig('store/pixel_plane_initialcond.png')
+    plt.close()
 def generator(dom, cfg):
     
     
@@ -171,8 +173,52 @@ def generator(dom, cfg):
     n_pix = cfg['Npixels']
     pp_width = int(cfg['pixelPlaneWidth']/dom.spacing[0])
     pp_loweredge = int(cfg['pixelPlaneLowEdgePosition']/dom.spacing[0])
-    #draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1)
+
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
+
+    print(f'p_size={p_size}, p_gap={p_gap}, n_pix={n_pix}, pp_width={pp_width}, pp_loweredge={pp_loweredge}')
+
+    # Target pixel centre coordinates (used for iterative target_voltage seeding)
+    center    = int(n_pix / 2)
+    x0_tgt    = int(p_gap / 2) + center * (p_size + p_gap)
+    x_tgt_mid = x0_tgt + p_size // 2
+    y0_tgt    = x0_tgt
+    y_tgt_mid = x_tgt_mid
+    z_tgt_mid = pp_loweredge + pp_width // 2
+
+    # Iterative IDW initialisation along z-axis in chunks of chunk_size.
+    # For the first chunk the target voltage is 1.0 (the electrode voltage).
+    # For every subsequent chunk the target voltage is taken from the value at
+    # the target pixel's (x, y) position at the last z-plane of the previous chunk.
+    # _device = 'cuda:1'
+    # chunk_size = 110
+    # # nz_total = arr.shape[2]
+    # nz_total = 300
+    # target_voltage = 1.0
+    # out = init_idw_pcb_pixel(
+    #     arr[:, :, pp_loweredge],
+    #     p_size=p_size,
+    #     p_gap=p_gap,
+    #     n_pix=n_pix,
+    #     target_voltage=target_voltage,
+    #     ground_voltage=0.0,
+    #     power=1.0,
+    #     batch_size=1024,
+    #     device=_device,
+    #     dtype=torch.float32
+    # )
+    # arr[:, :, pp_loweredge] = out.cpu().numpy()
+
+    # plot_idw_pcb_pixel(
+    #     phi=arr[:, :, pp_loweredge],
+    #     title="init_idw_pcb_pixel — IDW initial guess",
+    #     save_path='idw_init_pcb_pixel.png',
+    #     vmin=0.0,
+    #     vmax=1.0,
+    #     cmap="RdBu_r",
+    # ) 
+    #draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1)
+    # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
     barr[:,:,0]=1
     # draw pixel plane
