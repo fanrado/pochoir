@@ -349,13 +349,17 @@ def fdm(ctx, initial, boundary,
     if len(bool_edges) != iarr.ndim:
         raise ValueError("the number of periodic condition do not match problem dimensions")
 
-    arr, err = solve(iarr, barr, bool_edges,
-                     precision, epoch, nepochs, info_msg=info_msg)
-    # print(f'final error = {err}')
     params = dict(operation="fdm", domain=domain,
                   initial=initial, boundary=boundary,
                   edges=edges, epoch=epoch, nepochs=nepochs,
                   precision=precision, command="fdm")
+    arr, err = solve(iarr, barr, bool_edges,
+                     precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+    # print(f'final error = {err}')
+    # params = dict(operation="fdm", domain=domain,
+    #               initial=initial, boundary=boundary,
+    #               edges=edges, epoch=epoch, nepochs=nepochs,
+    #               precision=precision, command="fdm")
     ctx.obj.put(potential, arr, taxon="potential", **params)
     ctx.obj.put(increment, err, taxon="increment", **params)
 
