@@ -57,7 +57,10 @@ def stencil(array, res = None):
     if res is None:
         core_shape = [s-2 for s in array.shape]
         amod = arrays.module(array)
-        res = amod.zeros(core_shape)
+        if arrays.is_torch(array):
+            res = amod.zeros(core_shape, dtype=array.dtype, device=array.device)
+        else:
+            res = amod.zeros(core_shape)
     else:
         res[:] = 0
     # stencil1_time = time.time()
@@ -77,7 +80,7 @@ def stencil(array, res = None):
     return res
 
 
-def stencil_poisson(array, source, spacing=1.0, res=None):
+def stencil_poisson(array, source=None, spacing=1.0, res=None):
     '''
     Return the Poisson-equation update for an N-D array.
 
@@ -106,12 +109,15 @@ def stencil_poisson(array, source, spacing=1.0, res=None):
     slices = [slice(1, s - 1) for s in array.shape]
     nd = len(slices)
     norm = 1.0 / (2 * nd)
-
+    source = 2*nd * source / (spacing ** 2) if source is not None else source 
     amod = arrays.module(array)
 
     if res is None:
         core_shape = [s - 2 for s in array.shape]
-        res = amod.zeros(core_shape)
+        if arrays.is_torch(array):
+            res = amod.zeros(core_shape, dtype=array.dtype, device=array.device)
+        else:
+            res = amod.zeros(core_shape)
     else:
         res[:] = 0
 
@@ -125,7 +131,8 @@ def stencil_poisson(array, source, spacing=1.0, res=None):
         res += array[tuple(neg)]
 
     # Subtract the source term contribution: h² * f / (2N)
-    res -= (spacing ** 2) * source[tuple(slices)]
+    if source is not None:
+        res -= (spacing ** 2) * source[tuple(slices)]
 
     res *= norm
     return res

@@ -7,7 +7,7 @@ import numpy
 import torch
 from .arrays import core_slices1
 
-from .fdm_generic import edge_condition, stencil
+from .fdm_generic import edge_condition, stencil, stencil_poisson
 
 # torch.set_default_dtype(torch.float32)
 # torch.float64 = torch.float32
@@ -19,13 +19,18 @@ def set_core2(dst, src, core):
     dst[core] = src
 
 @torch.compile
-def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, periodic):
-    stencil(iarr_pad, tmp_core)
+def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, periodic, phi0=None, spacing=1.0):
+    # stencil(iarr_pad, tmp_core)
+    source = None
+    if phi0 is not None:
+        source = stencil(phi0) - phi0[core]
+        source = torch.tensor(numpy.pad(source.cpu().numpy(), 1), requires_grad=False, dtype=phi0.dtype).to(phi0.device)
+    stencil_poisson(iarr_pad, source=source, spacing=spacing, res=tmp_core)
     iarr_pad[core] = bi_core + mutable_core * tmp_core
     edge_condition(iarr_pad, *periodic, info_msg=None)
 
 import sys
-def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, ctx=None, potential=None, increment=None, params=None):
+def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torch.float64, phi0=None, ctx=None, potential=None, increment=None, params=None):
     '''
     Solve boundary value problem
 
@@ -56,19 +61,16 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, ctx=None, p
     torch.cuda.synchronize() # Ensure all GPU operations are complete before measuring time
     start_time = time.time()
 
-    _dtype = torch.float64
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    _dtype = _dtype
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     bi_core = torch.tensor(iarr*barr, requires_grad=False, dtype=_dtype).to(device)
     mutable_core = torch.tensor(numpy.invert(barr.astype(numpy.bool)), requires_grad=False, dtype=_dtype).to(device)
     tmp_core = torch.zeros(iarr.shape, requires_grad=False, dtype=_dtype).to(device)
 
-    # device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-    # bi_core = torch.tensor(iarr*barr, requires_grad=False).to(device)
-    # mutable_core = torch.tensor(numpy.invert(barr.astype(numpy.bool)), requires_grad=False).to(device)
-    # tmp_core = torch.zeros(iarr.shape, requires_grad=False).to(device)
-
     barr_pad = torch.tensor(numpy.pad(barr, 1), requires_grad=False, dtype=_dtype).to(device)
     iarr_pad = torch.tensor(numpy.pad(iarr, 1), requires_grad=False, dtype=_dtype).to(device)
+    if phi0 is not None:
+        phi0 = torch.tensor(numpy.pad(phi0, 1), requires_grad=False, dtype=_dtype).to(device)
     core = core_slices1(iarr_pad)
     # info_msg(f'core slices = {core}, dtype : {type(core)}')
     # sys.exit()
@@ -94,30 +96,12 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, ctx=None, p
             if istep%100 ==0:
                 prev = iarr_pad.clone().detach().requires_grad_(False)
 
-            # # disable this part for debugging ---- this is part of the original script
-            # if epoch-istep == 1: # last in the iteration
-            #     prev = iarr_pad.clone().detach().requires_grad_(False)
-
-            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic)
+            # _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic)
+            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, phi0=phi0, spacing=1.0)
             # stencil(iarr_pad, tmp_core)
             # iarr_pad[core] = bi_core + mutable_core * tmp_core
             # edge_condition(iarr_pad, *periodic, info_msg=None)
-            # # err = iarr_pad[core] - prev[core]
-            # # maxerr = torch.max(torch.abs(err))
-            # # info_msg(f'maxerr = {maxerr}, prec = {prec}, dtype = {maxerr.dtype}')
-
-            # # if prec and maxerr < prec:
-            # #     break
-            # ## disable this part for debugging ---- this is part of the original script
-            # if epoch-istep == 1: # last in the iteration
-            #     err = iarr_pad[core] - prev[core]
-            #     maxerr = torch.max(torch.abs(err))
-            #     info_msg(f'maxerr = {maxerr}, prec = {prec}, dtype = {maxerr.dtype}')
-            #     # # Removed this part for debugging ---- this is part of the original script
-            #     # # Allowing the solver to run for all epochs to check the precision at the end of all epochs
-            #     # if prec and maxerr < prec:
-            #     #     info_msg(f'fdm reach max precision: {prec} > {maxerr}')
-            #     #     return (iarr_pad[core].cpu(), err.cpu())
+            
             # if epoch-istep == 1: # last in the iteration
             if istep%100 ==0:
                 err = iarr_pad[core] - prev[core]
@@ -131,6 +115,13 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, ctx=None, p
                     epoch_end_time = time.time()
                     info_msg(f'epoch {iepoch} time: {epoch_end_time - epoch_start_time:.2f} seconds')
                     return (iarr_pad[core].cpu(), err.cpu())
+                elif maxerr == 0.0:
+                    info_msg(f'fdm reached maxerr = {maxerr} at iteration {istep}, epoch {iepoch}')
+                    torch.cuda.synchronize()
+                    epoch_end_time = time.time()
+                    info_msg(f'epoch {iepoch} time: {epoch_end_time - epoch_start_time:.2f} seconds')
+                    return (iarr_pad[core].cpu(), err.cpu())
+
         torch.cuda.synchronize()
         epoch_end_time = time.time()
         info_msg(f'epoch {iepoch} time: {epoch_end_time - epoch_start_time:.2f} seconds')
