@@ -66,7 +66,7 @@ Pochoir solves FDM (Laplace/Poisson) for LAr TPC detectors. `fdm_torch.py` has s
 
 ---
 
-## Phase 6 — Testing & Validation
+## Phase 6 — Testing & Validation ✅ DONE
 
 **Target:** `test/`
 
