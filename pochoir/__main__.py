@@ -313,10 +313,14 @@ def init(ctx, initial, boundary, ambient, domain, filenames):
               help="Output array holding solution for potential")
 @click.option("-I", "--increment", type=str,
               help="Output array holding increment (error) on the solution")
+@click.option("--amp", is_flag=True, default=False,
+              help="Enable Automatic Mixed Precision (float16) for torch engine on CUDA")
+@click.option("--profile", is_flag=True, default=False,
+              help="Wrap solve in torch.profiler and export Chrome trace to pochoir_fdm_trace.json")
 @click.pass_context
 def fdm(ctx, initial, boundary,
         edges, precision, epoch, nepochs, engine,
-        potential, increment):
+        potential, increment, amp, profile):
     '''
     Apply finite-difference method.
 
@@ -356,7 +360,7 @@ def fdm(ctx, initial, boundary,
                   precision=precision, command="fdm")
     # first step is to solve \nabla^2 \phi_0 = 0 with given boundary conditions, using float32. 
     phi_0, err_phi0 = solve(iarr, barr, bool_edges,
-                     precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float32) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+                     precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float32, amp=amp, profile=profile) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
     # second step is to solve \nabla^2 \delta = -\nabla^2 \phi_0 with given boundary conditions, using float64.
     print(f'phi_0 shape = {phi_0.shape}, phi_0 dtype = {phi_0.dtype}')
     print(f'iarr shape = {iarr.shape}, iarr dtype = {iarr.dtype}')
@@ -367,7 +371,7 @@ def fdm(ctx, initial, boundary,
     print(f'phi_0 shape after cast = {phi_0.shape}, phi_0 dtype after cast = {phi_0.dtype}, type(phi_0) = {type(phi_0)}')
 
     delta_phi, err_delta_phi0 = solve(iarr, barr, bool_edges,
-                     precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=phi_0, _dtype=torch.float64)
+                     precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=phi_0, _dtype=torch.float64, amp=amp, profile=profile)
     arr = phi_0 + delta_phi
     err = torch.sqrt(err_phi0**2 + err_delta_phi0**2)
     # print(f'final error = {err}')

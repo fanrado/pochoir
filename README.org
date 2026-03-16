@@ -141,6 +141,40 @@ Options:
 #+end_example
 
 
+* GPU Usage
+
+The ~torch~ engine supports CUDA GPU acceleration.  Select it with ~--engine torch~.
+
+** Memory Requirements
+
+The solver holds several copies of the grid in GPU memory (padded input, boundary
+mask, mutable mask, scratch buffer, and optionally a Poisson source term).  Peak
+GPU memory scales roughly as ~7 × dtype_bytes × N~ elements, where ~N~ is the total
+number of grid points.
+
+Typical estimates for float32 (4 bytes) and float64 (8 bytes):
+
+| Grid size          | Approx. peak GPU memory (float32) | Approx. peak GPU memory (float64) |
+|--------------------+------------------------------------+------------------------------------|
+| 128 × 128 (2D)     | ~50 MB                             | ~100 MB                            |
+| 512 × 512 (2D)     | ~750 MB                            | ~1.5 GB                            |
+| 64 × 64 × 64 (3D)  | ~100 MB                            | ~200 MB                            |
+| 128 × 128 × 128 (3D)| ~800 MB                           | ~1.6 GB                            |
+| 256 × 256 × 256 (3D)| ~6 GB                             | ~13 GB                             |
+
+The two-pass solver (float32 pass + float64 pass) runs sequentially, so the peak
+usage is determined by the float64 pass.
+
+** Performance Flags
+
+~--amp~ enables Automatic Mixed Precision (~torch.autocast~, float16 compute) which
+can roughly halve memory bandwidth pressure on Tensor-Core GPUs (Volta and later)
+at the cost of reduced numerical range.  Not recommended for the float64 pass.
+
+~--profile~ wraps the solve in ~torch.profiler.profile~ and writes a Chrome trace
+to ~pochoir_fdm_trace.json~ in the current directory.  Open it in
+~chrome://tracing~ or Perfetto UI to inspect kernel timings.
+
 * Documentation
 
 The ~pochoir~ command attempts to be simple and accessible.  However,

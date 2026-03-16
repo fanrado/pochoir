@@ -3,6 +3,7 @@
 Apply FDM solution to solve Laplace boundary value problem with torch.
 '''
 
+import contextlib
 import logging
 import time
 
@@ -35,7 +36,7 @@ def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, periodic, ph
     iarr_pad[core] = bi_core + mutable_core * tmp_core
     edge_condition(iarr_pad, *periodic, info_msg=None)
 
-def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torch.float64, phi0=None, ctx=None, potential=None, increment=None, params=None, profile=False):
+def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torch.float64, phi0=None, ctx=None, potential=None, increment=None, params=None, profile=False, amp=False):
     '''
     Solve boundary value problem
 
@@ -61,6 +62,10 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
     err = None
     start_time = time.time()
 
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
     _dtype = _dtype
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     bi_core = torch.tensor(iarr*barr, requires_grad=False, dtype=_dtype).to(device)
@@ -82,6 +87,25 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
     # print(f'potential path name = {potential}, increment path name = {increment}')
     # print('params = ', params)
     # sys.exit()
+    cuda_available = torch.cuda.is_available()
+    _profiler = None
+    if profile and cuda_available:
+        _profiler = torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            record_shapes=True,
+        )
+        _profiler.__enter__()
+
+    def _export_profiler():
+        if _profiler is not None:
+            _profiler.__exit__(None, None, None)
+            trace_path = "pochoir_fdm_trace.json"
+            _profiler.export_chrome_trace(trace_path)
+            info_msg(f"Chrome trace exported to {trace_path}")
+
     prev = None
     for iepoch in range(nepochs):
         info_msg(f'====== epoch: {iepoch}/{nepochs} x {epoch} ===============')
@@ -95,11 +119,13 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
                 prev = iarr_pad.clone().detach().requires_grad_(False)
 
             # _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic)
-            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, phi0=phi0, spacing=1.0)
+            with (torch.autocast(device_type='cuda', dtype=torch.float16)
+                  if (amp and cuda_available) else contextlib.nullcontext()):
+                _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, phi0=phi0, spacing=1.0)
             # stencil(iarr_pad, tmp_core)
             # iarr_pad[core] = bi_core + mutable_core * tmp_core
             # edge_condition(iarr_pad, *periodic, info_msg=None)
-            
+
             # if epoch-istep == 1: # last in the iteration
             if istep%100 ==0:
                 err = iarr_pad[core] - prev[core]
@@ -111,14 +137,16 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
                     info_msg(f'fdm reach max precision: {prec} > {maxerr}')
                     epoch_end_time = time.time()
                     info_msg(f'epoch {iepoch} time: {epoch_end_time - epoch_start_time:.2f} seconds')
+                    _export_profiler()
                     return (iarr_pad[core].cpu(), err.cpu())
                 elif maxerr == 0.0:
                     info_msg(f'fdm reached maxerr = {maxerr} at iteration {istep}, epoch {iepoch}')
                     epoch_end_time = time.time()
                     info_msg(f'epoch {iepoch} time: {epoch_end_time - epoch_start_time:.2f} seconds')
+                    _export_profiler()
                     return (iarr_pad[core].cpu(), err.cpu())
 
-        if profile:
+        if profile and cuda_available:
             torch.cuda.synchronize()
         epoch_end_time = time.time()
         info_msg(f'epoch {iepoch} time: {epoch_end_time - epoch_start_time:.2f} seconds')
@@ -128,13 +156,14 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
         # ctx.obj.put(potential_path, iarr_pad[core].cpu(), taxon='potential', **params)
         # ctx.obj.put(increment_path, err.cpu(), taxon='increment', **params)
         # print(f'potential saved to {potential_path}, increment saved to {increment_path}')
-        
+
     info_msg(f'iarr_pad_shape = {iarr_pad.shape}, periodic = {periodic}, prec = {prec}, epoch = {epoch}, nepochs = {nepochs}')
     info_msg(f'iarr_pad_dtype = {iarr_pad.dtype}, err dtype = {err.dtype}, maxerr = {maxerr}')
     info_msg(f'fdm reach max epoch {epoch} x {nepochs}, last prec {prec} < {maxerr}')
-    if profile:
+    if profile and cuda_available:
         torch.cuda.synchronize()
     end_time = time.time()
     info_msg(f'FDM solve time: {end_time - start_time:.2f} seconds, Nepochs = {nepochs}, steps per epoch = {epoch}')
 
+    _export_profiler()
     return (iarr_pad[core].cpu(), err.cpu())

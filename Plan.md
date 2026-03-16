@@ -56,7 +56,7 @@ Pochoir solves FDM (Laplace/Poisson) for LAr TPC detectors. `fdm_torch.py` has s
 
 ---
 
-## Phase 5 — Memory & Precision Management
+## Phase 5 — Memory & Precision Management ✅ DONE
 
 **Cross-cutting:**
 - Add `torch.cuda.empty_cache()` + `torch.cuda.reset_peak_memory_stats()` at start of each `solve()` call
