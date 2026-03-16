@@ -32,7 +32,7 @@ Pochoir solves FDM (Laplace/Poisson) for LAr TPC detectors. `fdm_torch.py` has s
 
 ---
 
-## Phase 3 — IDW Initialization (`InverseDistanceWeight_torch.py`)
+## Phase 3 — IDW Initialization (`InverseDistanceWeight_torch.py`) ✅ DONE
 
 **Target file:** `pochoir/InverseDistanceWeight_torch.py`
 
