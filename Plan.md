@@ -44,7 +44,7 @@ Pochoir solves FDM (Laplace/Poisson) for LAr TPC detectors. `fdm_torch.py` has s
 
 ---
 
-## Phase 4 — Drift Solver (`drift_torch.py`)
+## Phase 4 — Drift Solver (`drift_torch.py`) ✅ DONE
 
 **Target file:** `pochoir/drift_torch.py`
 
