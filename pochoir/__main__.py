@@ -357,6 +357,10 @@ def fdm(ctx, initial, boundary,
     # first step is to solve \nabla^2 \phi_0 = 0 with given boundary conditions, using float32. 
     phi_0, err_phi0 = solve(iarr, barr, bool_edges,
                      precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float32) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+    potential_float32 = potential+"_float32"
+    increment_float32 = increment+"_float32"
+    ctx.obj.put(potential_float32, phi_0, taxon="potential", **params)
+    ctx.obj.put(increment_float32, err_phi0, taxon="increment", **params)
     # second step is to solve \nabla^2 \delta = -\nabla^2 \phi_0 with given boundary conditions, using float64.
     print(f'phi_0 shape = {phi_0.shape}, phi_0 dtype = {phi_0.dtype}')
     print(f'iarr shape = {iarr.shape}, iarr dtype = {iarr.dtype}')
@@ -365,9 +369,14 @@ def fdm(ctx, initial, boundary,
 
     phi_0 = phi_0.to(torch.float64)
     print(f'phi_0 shape after cast = {phi_0.shape}, phi_0 dtype after cast = {phi_0.dtype}, type(phi_0) = {type(phi_0)}')
-
-    delta_phi, err_delta_phi0 = solve(iarr, barr, bool_edges,
+    nepochs = 1
+    epoch = 100000
+    delta_phi, err_delta_phi0 = solve(iarr*0, barr, bool_edges,
                      precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=phi_0, _dtype=torch.float64)
+    potential_float64 = potential+"_float64_delta" ## delta
+    increment_float64 = increment+"_float64_delta" ## error on delta
+    ctx.obj.put(potential_float64, delta_phi, taxon="potential", **params)
+    ctx.obj.put(increment_float64, err_delta_phi0, taxon="increment", **params)
     arr = phi_0 + delta_phi
     err = torch.sqrt(err_phi0**2 + err_delta_phi0**2)
     # print(f'final error = {err}')

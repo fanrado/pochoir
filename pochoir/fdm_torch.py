@@ -23,7 +23,12 @@ def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, periodic, ph
     # stencil(iarr_pad, tmp_core)
     source = None
     if phi0 is not None:
-        source = stencil(phi0) - phi0[core]
+        # stencil(phi0) computes (1/2N)*Σ(neighbours) — the Jacobi update value for phi0.
+        # Subtracting phi0[core] gives the discrete Laplacian residual:
+        #   stencil(phi0) − phi0[core] = (1/2N)·Σ(nbrs) − phi0 = ∇²φ₀ / (2N)
+        # This reuses the existing stencil() call instead of computing the Laplacian separately.
+        # The negation yields −∇²φ₀ / (2N), the correct source for the correction equation ∇²δ = −∇²φ₀.
+        source = -(stencil(phi0) - phi0[core])
         source = torch.tensor(numpy.pad(source.cpu().numpy(), 1), requires_grad=False, dtype=phi0.dtype).to(phi0.device)
     stencil_poisson(iarr_pad, source=source, spacing=spacing, res=tmp_core)
     iarr_pad[core] = bi_core + mutable_core * tmp_core
