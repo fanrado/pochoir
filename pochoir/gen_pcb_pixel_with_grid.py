@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from .gen_pcb_drift_pixel_with_grid import draw_quarter_circle as draw_quarter
-from pochoir.InverseDistanceWeight_torch import init_idw_pcb_pixel, plot_idw_pcb_pixel
+# from pochoir.InverseDistanceWeight_torch import init_idw_pcb_pixel, plot_idw_pcb_pixel
 
 def fill_area(arr,barr,val):
     for b in barr:

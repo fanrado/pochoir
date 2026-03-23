@@ -56,6 +56,7 @@ def stencil(array, res = None):
 
     if res is None:
         core_shape = [s-2 for s in array.shape]
+        # core_shape = [s for s in array.shape]
         amod = arrays.module(array)
         if arrays.is_torch(array):
             res = amod.zeros(core_shape, dtype=array.dtype, device=array.device)
@@ -84,10 +85,10 @@ def stencil_poisson(array, source=None, spacing=1.0, res=None):
     '''
     Return the Poisson-equation update for an N-D array.
 
-    Solves  ∇²φ = f  in the finite-difference sense.  Each interior
+    Solves  ∇²φ = -f  in the finite-difference sense.  Each interior
     cell is updated to
 
-        φ_new = (1/(2N)) * Σ(neighbours) - (spacing² / (2N)) * f
+        φ_new = (1/(2N)) * Σ(neighbours) + (spacing² / (2N)) * f
 
     which is the standard Gauss-Seidel / Jacobi relaxation step for
     the Poisson equation.
@@ -109,11 +110,11 @@ def stencil_poisson(array, source=None, spacing=1.0, res=None):
     slices = [slice(1, s - 1) for s in array.shape]
     nd = len(slices)
     norm = 1.0 / (2 * nd)
-    source = 2*nd * source / (spacing ** 2) if source is not None else source 
     amod = arrays.module(array)
 
     if res is None:
         core_shape = [s - 2 for s in array.shape]
+        # core_shape = [s for s in array.shape]
         if arrays.is_torch(array):
             res = amod.zeros(core_shape, dtype=array.dtype, device=array.device)
         else:
@@ -129,10 +130,10 @@ def stencil_poisson(array, source=None, spacing=1.0, res=None):
         neg = list(slices)
         neg[dim] = slice(0, n - 2)
         res += array[tuple(neg)]
-
+    res *= norm
+    
     # Subtract the source term contribution: h² * f / (2N)
     if source is not None:
-        res -= (spacing ** 2) * source[tuple(slices)]
+        res += (spacing ** 2) * source*norm
 
-    res *= norm
     return res

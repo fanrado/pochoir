@@ -18,7 +18,7 @@ do_domain () {
          pochoir domain --domain domain/$name \
          --shape=$shape --spacing $spacing
 }
-do_domain drift3d  44,44,1500  '0.1*mm'
+do_domain drift3d  44,44,150  '0.1*mm'
 
 # fixme: these weight* identifiers need to split up for N planes.
 #do_domain weight2d 1092,2000   '0.1*mm'
@@ -60,59 +60,59 @@ do_fdm () {
          --potential potential/$name \
          --increment increment/$name
 }
-do_fdm drift3d  10      13000000      0.00000002     per,per,fix #130,000,000
+do_fdm drift3d  10      1000000      0.00000002     per,per,fix #130,000,000
 # do_fdm weight2d 1      1200      0.00000002   fix,fix #1250000
 
 ##
-echo "=== Weighting potentials ==="
-## Weighting potentials
-## Domains ##
-do_domain () {
-    local name=$1 ; shift
-    local shape=$1; shift
-    local spacing=$1; shift
+# echo "=== Weighting potentials ==="
+# ## Weighting potentials
+# ## Domains ##
+# do_domain () {
+#     local name=$1 ; shift
+#     local shape=$1; shift
+#     local spacing=$1; shift
 
-    want domain/$name \
-         pochoir domain --domain domain/$name \
-         --shape=$shape --spacing $spacing
-}
+#     want domain/$name \
+#          pochoir domain --domain domain/$name \
+#          --shape=$shape --spacing $spacing
+# }
 
-# do_domain weight3d 396,396,1500 '0.1*mm' #220,220,1500 '0.1*mm'
-do_domain weight3d 220,220,1500 '0.1*mm'
+# # do_domain weight3d 396,396,1500 '0.1*mm' #220,220,1500 '0.1*mm'
+# do_domain weight3d 220,220,1500 '0.1*mm'
 
-## Initial/Boundary Value Arrays ##
-do_gen () {
-    local name=$1 ; shift
-    local geom=$1; shift
-    local gen="pcb_pixel_with_grid"
-    local cfg="example_gen_pixel_with_grid.json"
+# ## Initial/Boundary Value Arrays ##
+# do_gen () {
+#     local name=$1 ; shift
+#     local geom=$1; shift
+#     local gen="pcb_pixel_with_grid"
+#     local cfg="example_gen_pixel_with_grid.json"
 
-    want initial/$name \
-         pochoir gen --generator $gen --domain domain/$name \
-         --initial initial/$name --boundary boundary/$name \
-         $cfg
+#     want initial/$name \
+#          pochoir gen --generator $gen --domain domain/$name \
+#          --initial initial/$name --boundary boundary/$name \
+#          $cfg
 
-}
-do_gen weight3d 3D
+# }
+# do_gen weight3d 3D
 
-## Fields
-do_fdm () {
-    local name=$1 ; shift
-    local nepochs=$1 ; shift
-    local epoch=$1 ; shift
-    local prec=$1 ; shift
-    local edges=$1 ; shift
+# ## Fields
+# do_fdm () {
+#     local name=$1 ; shift
+#     local nepochs=$1 ; shift
+#     local epoch=$1 ; shift
+#     local prec=$1 ; shift
+#     local edges=$1 ; shift
 
-    want potential/$name \
-         pochoir fdm \
-         --nepochs $nepochs --epoch $epoch --precision $prec \
-         --edges $edges \
-	 --engine torch \
-         --initial initial/$name --boundary boundary/$name \
-         --potential potential/$name \
-         --increment increment/$name
-}
-do_fdm weight3d 1      500000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
+#     want potential/$name \
+#          pochoir fdm \
+#          --nepochs $nepochs --epoch $epoch --precision $prec \
+#          --edges $edges \
+# 	 --engine torch \
+#          --initial initial/$name --boundary boundary/$name \
+#          --potential potential/$name \
+#          --increment increment/$name
+# }
+# do_fdm weight3d 1      500000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
 
 #
 echo "=== Velocities ==="
@@ -123,35 +123,35 @@ want velocity/drift3d \
      --velocity velocity/drift3d
 #
 
-## Need to be run separately
-echo "=== Paths ==="
+# ## Need to be run separately
+# echo "=== Paths ==="
 
-dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
-points=()
-for d in "${dist[@]}"; do
-     for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,148*mm")
-     done
-done
-## Paths
-want starts/drift3d \
-    pochoir starts --starts starts/drift3d \
-    -m no \
-    ${points[@]}
+# dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
+# points=()
+# for d in "${dist[@]}"; do
+#      for d2 in "${dist[@]}"; do
+#          points+=("${d}*mm,${d2}*mm,148*mm")
+#      done
+# done
+# ## Paths
+# want starts/drift3d \
+#     pochoir starts --starts starts/drift3d \
+#     -m no \
+#     ${points[@]}
 
-#rm -r /Users/sergey/Desktop/ICARUS/LArStand/pochoir/test/store/paths
+# #rm -r /Users/sergey/Desktop/ICARUS/LArStand/pochoir/test/store/paths
 
-want paths/drift3d_tight \
-     pochoir drift --starts starts/drift3d \
-     --velocity velocity/drift3d \
-     --paths paths/drift3d_tight '0*us,320*us,0.05*us'
+# want paths/drift3d_tight \
+#      pochoir drift --starts starts/drift3d \
+#      --velocity velocity/drift3d \
+#      --paths paths/drift3d_tight '0*us,320*us,0.05*us'
 
 
-##
-echo "=== Induced currents ==="
-## Induced currents
-want current/induced_current \
-     pochoir induce-pixel --weighting potential/weight3d \
-     --paths paths/drift3d_tight \
-     --output current/induced_current \
-     --npixels 2.0
+# ##
+# echo "=== Induced currents ==="
+# ## Induced currents
+# want current/induced_current \
+#      pochoir induce-pixel --weighting potential/weight3d \
+#      --paths paths/drift3d_tight \
+#      --output current/induced_current \
+#      --npixels 2.0

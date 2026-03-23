@@ -355,22 +355,25 @@ def fdm(ctx, initial, boundary,
                   edges=edges, epoch=epoch, nepochs=nepochs,
                   precision=precision, command="fdm")
     # first step is to solve \nabla^2 \phi_0 = 0 with given boundary conditions, using float32. 
+    epoch = 1000000
     phi_0, err_phi0 = solve(iarr, barr, bool_edges,
                      precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float32) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
     potential_float32 = potential+"_float32"
     increment_float32 = increment+"_float32"
     ctx.obj.put(potential_float32, phi_0, taxon="potential", **params)
     ctx.obj.put(increment_float32, err_phi0, taxon="increment", **params)
+
     # second step is to solve \nabla^2 \delta = -\nabla^2 \phi_0 with given boundary conditions, using float64.
     print(f'phi_0 shape = {phi_0.shape}, phi_0 dtype = {phi_0.dtype}')
     print(f'iarr shape = {iarr.shape}, iarr dtype = {iarr.dtype}')
     print(f'barr shape = {barr.shape}, barr dtype = {barr.dtype}')
     ## cast phi_0 to float64 for the second step, and use it as source term in the poisson equation.
 
-    phi_0 = phi_0.to(torch.float64)
+    # phi_0 = phi_0.to(torch.float64) # remove this first to check the laplacian of phi_0 in float32. It should give me zero
     print(f'phi_0 shape after cast = {phi_0.shape}, phi_0 dtype after cast = {phi_0.dtype}, type(phi_0) = {type(phi_0)}')
     nepochs = 1
-    epoch = 100000
+    epoch = 1000000
+    # iarr = phi_0.clone().to(torch.float64) # use phi_0 as initial guess for the second step
     delta_phi, err_delta_phi0 = solve(iarr*0, barr, bool_edges,
                      precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=phi_0, _dtype=torch.float64)
     potential_float64 = potential+"_float64_delta" ## delta
@@ -470,25 +473,25 @@ def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
     #Draw for PCB
     # x = numpy.linspace(0,420,4200)
     # x = numpy.linspace(0, 200, 2000) ## original
-    x = numpy.linspace(0, 200, 1500) ## changed this to 1500
-    for i in range(0,25):
-        for j in range(0,17):
-            # print(f'len(x) = {len(x)}, len(speed_z[i,j,:]) = {len(speed_z[i,j,:])}')
-            plt.plot(x,speed_z[i,j,:])
-    #         #if i==10 and j==8:
-    #         #    for l in range(1,len(x)-1):
-    #         #        print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
-    # Draw for Pixel
-    # x = numpy.linspace(0,150,1500)
-    # for i in range(0,38):
-    #    for j in range(0,38):
-    #     plt.plot(x,speed_z[i,j,:])
-    #     if i==10 and j==8:
-    #         for l in range(1,len(x)-1):
-    #             print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
-    # plt.show()
-    plt.savefig('store/velocity_z.png')
-    plt.close()
+    # x = numpy.linspace(0, 200, 1500) ## changed this to 1500
+    # for i in range(0,25):
+    #     for j in range(0,17):
+    #         # print(f'len(x) = {len(x)}, len(speed_z[i,j,:]) = {len(speed_z[i,j,:])}')
+    #         plt.plot(x,speed_z[i,j,:])
+    # #         #if i==10 and j==8:
+    # #         #    for l in range(1,len(x)-1):
+    # #         #        print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
+    # # Draw for Pixel
+    # # x = numpy.linspace(0,150,1500)
+    # # for i in range(0,38):
+    # #    for j in range(0,38):
+    # #     plt.plot(x,speed_z[i,j,:])
+    # #     if i==10 and j==8:
+    # #         for l in range(1,len(x)-1):
+    # #             print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
+    # # plt.show()
+    # plt.savefig('store/velocity_z.png')
+    # plt.close()
     # print(f'units.V : {units.V}, units.mm : {units.mm}, units.us : {units.us}')
     params = dict(domain=domain, command="velo",
                   potential=potential, temperature=temp)
