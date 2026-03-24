@@ -34,20 +34,36 @@ def _compute_dynamic_batch_size(N: int, dtype: torch.dtype, dev: torch.device) -
     return 1024
 
 
-@torch.compile
-def _idw_dist_batch(elec_batch: torch.Tensor, grid_coords: torch.Tensor) -> torch.Tensor:
+def _idw_dist_batch(
+    elec_batch: torch.Tensor,
+    grid_coords: torch.Tensor,
+    grid_chunk: int = 65536,
+) -> torch.Tensor:
     """Min distance from each grid voxel to a batch of electrode voxels.
-
-    Uses ``torch.cdist`` (fused CUDA kernel) instead of manual broadcast ops.
 
     Parameters
     ----------
     elec_batch  : (B, D) float — electrode coords in this batch
     grid_coords : (N, D) float — all grid voxel coords
+    grid_chunk  : max number of grid voxels to process at once.
+                  Limits peak memory to O(B * grid_chunk) instead of O(B * N).
+                  Set to 0 to disable chunking (materialises the full matrix).
     Returns     : (N,)   float — per-voxel minimum distance to this batch
+
+    Note: @torch.compile is intentionally omitted.  The inductor backend
+    benchmarks pad_mm candidates by allocating full (B, N) trial tensors,
+    which OOMs when N is large (e.g. z_chunk * ny * nx).  torch.cdist is
+    already dispatched to an optimised CUDA kernel without compilation.
     """
-    dist = torch.cdist(elec_batch, grid_coords)  # (B, N)
-    return dist.min(dim=0).values
+    N = grid_coords.shape[0]
+    if grid_chunk <= 0 or N <= grid_chunk:
+        return torch.cdist(elec_batch, grid_coords).min(dim=0).values  # (B, N) → (N,)
+
+    d_min = torch.empty(N, device=grid_coords.device, dtype=grid_coords.dtype)
+    for start in range(0, N, grid_chunk):
+        end = min(start + grid_chunk, N)
+        d_min[start:end] = torch.cdist(elec_batch, grid_coords[start:end]).min(dim=0).values
+    return d_min
 
 
 def _mask_to_device(mask, dev: torch.device) -> torch.Tensor:
@@ -65,125 +81,6 @@ def _mask_to_device(mask, dev: torch.device) -> torch.Tensor:
 # Core IDW function
 # ---------------------------------------------------------------------------
 
-def init_idw_3d_torch(
-    grid_shape: tuple,
-    electrodes: list,
-    power: float = 1.0,
-    batch_size: int = 0,
-    device: str | None = None,
-    dtype: torch.dtype = torch.float32,
-) -> torch.Tensor:
-    """
-    IDW initial guess for a 3D weighting field using PyTorch.
-
-    Parameters
-    ----------
-    grid_shape : (nz, ny, nx) — size of the 3D grid
-    electrodes : list of dicts, each with:
-                   'mask'    — (nz, ny, nx) bool numpy array or torch BoolTensor
-                   'voltage' — float
-    power      : IDW exponent (1 = linear, 2 = quadratic drop-off)
-    batch_size : number of electrode voxels per GPU batch.
-                 0 (default) = auto-size from GPU memory.
-    device     : 'cuda', 'cpu', or None (auto-detect)
-    dtype      : torch float dtype (float32 recommended for GPU)
-
-    Returns
-    -------
-    phi : torch.Tensor of shape (nz, ny, nx) on `device`
-    """
-    # ---- Device selection ------------------------------------------------
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    dev = torch.device(device)
-    print(f"Running IDW on: {dev}"
-          + (f" [{torch.cuda.get_device_name(dev)}]"
-             if dev.type == "cuda" else ""))
-
-    nz, ny, nx = grid_shape
-
-    # ---- Build coordinate grids (on GPU) ---------------------------------
-    # Each has shape (nz, ny, nx)
-    kk, jj, ii = torch.meshgrid(
-        torch.arange(nz, device=dev, dtype=dtype),
-        torch.arange(ny, device=dev, dtype=dtype),
-        torch.arange(nx, device=dev, dtype=dtype),
-        indexing="ij",
-    )
-    # Flatten to (N,) for vectorised distance computation
-    kk_flat = kk.reshape(-1)   # (N,)
-    jj_flat = jj.reshape(-1)
-    ii_flat = ii.reshape(-1)
-    N = kk_flat.shape[0]       # total number of voxels = nz*ny*nx
-
-    # Pre-stack grid coords once for reuse across electrodes
-    grid_coords = torch.stack([kk_flat, jj_flat, ii_flat], dim=1)  # (N, 3)
-
-    # Dynamic batch size from GPU memory
-    if batch_size <= 0:
-        batch_size = _compute_dynamic_batch_size(N, dtype, dev)
-
-    numerator   = torch.zeros(N, device=dev, dtype=dtype)
-    denominator = torch.zeros(N, device=dev, dtype=dtype)
-
-    # ---- Loop over electrodes --------------------------------------------
-    for elec in electrodes:
-        mask    = _mask_to_device(elec["mask"], dev)
-        voltage = float(elec["voltage"])
-
-        # Electrode voxel coordinates  shape (n_elec,)
-        ek, ej, ei = torch.where(mask)
-        n_elec = ek.shape[0]
-        if n_elec == 0:
-            continue
-
-        ek = ek.to(dtype)
-        ej = ej.to(dtype)
-        ei = ei.to(dtype)
-
-        # Minimum distance from every grid voxel to this electrode,
-        # computed in batches over electrode voxels to save VRAM.
-        d_min = torch.full((N,), float("inf"), device=dev, dtype=dtype)
-
-        for start in range(0, n_elec, batch_size):
-            end = min(start + batch_size, n_elec)
-            # Stack electrode batch coords: (B, 3)
-            elec_batch = torch.stack(
-                [ek[start:end], ej[start:end], ei[start:end]], dim=1
-            )
-            d_min = torch.minimum(d_min, _idw_dist_batch(elec_batch, grid_coords))
-
-        # Avoid division by zero directly on electrode voxels
-        d_min = torch.clamp(d_min, min=1e-10)
-
-        w = 1.0 / d_min**power         # (N,)
-        numerator   += w * voltage
-        denominator += w
-
-    # ---- Normalise -------------------------------------------------------
-    phi_flat = torch.where(denominator > 0, numerator / denominator,
-                           torch.zeros_like(numerator))
-
-    phi = phi_flat.reshape(nz, ny, nx)
-
-    # ---- Enforce exact boundary values on electrode voxels ---------------
-    for elec in electrodes:
-        mask = _mask_to_device(elec["mask"], dev)
-        phi[mask] = float(elec["voltage"])
-
-    return phi
-
-
-# ---------------------------------------------------------------------------
-# Convenience wrapper: numpy in → numpy out  (useful for existing code)
-# ---------------------------------------------------------------------------
-
-def init_idw_3d_torch_numpy(grid_shape, electrodes, **kwargs) -> np.ndarray:
-    """Same as init_idw_3d_torch but returns a numpy array."""
-    phi = init_idw_3d_torch(grid_shape, electrodes, **kwargs)
-    return phi.cpu().numpy()
-
-
 # ---------------------------------------------------------------------------
 # 2-D IDW core
 # ---------------------------------------------------------------------------
@@ -195,6 +92,7 @@ def init_idw_2d_torch(
     batch_size: int = 0,
     device: str | None = None,
     dtype: torch.dtype = torch.float32,
+    out: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     IDW initial guess for a 2D weighting field using PyTorch.
@@ -273,7 +171,11 @@ def init_idw_2d_torch(
     phi_flat = torch.where(denominator > 0, numerator / denominator,
                            torch.zeros_like(numerator))
 
-    phi = phi_flat.reshape(ny, nx)
+    if out is not None:
+        out.view(-1).copy_(phi_flat)
+        phi = out
+    else:
+        phi = phi_flat.reshape(ny, nx)
 
     for elec in electrodes:
         mask = _mask_to_device(elec["mask"], dev)
@@ -318,6 +220,123 @@ def _apply_trim_corner(
         mask[x+1,   y-1,     z1:z2] = False
 
 
+## 3D
+def init_idw_3d_torch(
+    grid_shape: tuple,
+    electrodes: list,
+    power: float = 1.0,
+    batch_size: int = 0,
+    device: str | None = None,
+    dtype: torch.dtype = torch.float32,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """
+    IDW initial guess for a 3D weighting field using PyTorch.
+
+    Parameters
+    ----------
+    grid_shape : (nz, ny, nx) — size of the 3D grid
+    electrodes : list of dicts, each with:
+                   'mask'    — (nz, ny, nx) bool numpy array or torch BoolTensor
+                   'voltage' — float
+    power      : IDW exponent (1 = linear, 2 = quadratic drop-off)
+    batch_size : number of electrode voxels per GPU batch.
+                 0 (default) = auto-size from GPU memory.
+    device     : 'cuda', 'cpu', or None (auto-detect)
+    dtype      : torch float dtype (float32 recommended for GPU)
+
+    Returns
+    -------
+    phi : torch.Tensor of shape (nz, ny, nx) on `device`
+    """
+    # ---- Device selection ------------------------------------------------
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    dev = torch.device(device)
+    print(f"Running IDW on: {dev}"
+          + (f" [{torch.cuda.get_device_name(dev)}]"
+             if dev.type == "cuda" else ""))
+
+    nz, ny, nx = grid_shape
+
+    # ---- Build coordinate grids (on GPU) ---------------------------------
+    # Each has shape (nz, ny, nx)
+    kk, jj, ii = torch.meshgrid(
+        torch.arange(nz, device=dev, dtype=dtype),
+        torch.arange(ny, device=dev, dtype=dtype),
+        torch.arange(nx, device=dev, dtype=dtype),
+        indexing="ij",
+    )
+    # Flatten to (N,) for vectorised distance computation
+    kk_flat = kk.reshape(-1)   # (N,)
+    jj_flat = jj.reshape(-1)
+    ii_flat = ii.reshape(-1)
+    N = kk_flat.shape[0]       # total number of voxels = nz*ny*nx
+
+    # Pre-stack grid coords once for reuse across electrodes
+    grid_coords = torch.stack([kk_flat, jj_flat, ii_flat], dim=1)  # (N, 3)
+
+    # Dynamic batch size from GPU memory
+    if batch_size <= 0:
+        batch_size = _compute_dynamic_batch_size(N, dtype, dev)
+
+    numerator   = torch.zeros(N, device=dev, dtype=dtype)
+    denominator = torch.zeros(N, device=dev, dtype=dtype)
+
+    # ---- Loop over electrodes --------------------------------------------
+    for elec in electrodes:
+        mask    = _mask_to_device(elec["mask"], dev)
+        voltage = float(elec["voltage"])
+
+        # Electrode voxel coordinates  shape (n_elec,)
+        ek, ej, ei = torch.where(mask)
+        n_elec = ek.shape[0]
+        if n_elec == 0:
+            continue
+        print(f"Processing electrode with voltage {voltage:.2f} V, "
+              f"{n_elec} voxels")
+        ek = ek.to(dtype)
+        ej = ej.to(dtype)
+        ei = ei.to(dtype)
+
+        # Batch over electrode voxels to bound peak memory to
+        # O(batch_size * N) instead of O(n_elec * N).
+        d_min = torch.full((N,), float("inf"), device=dev, dtype=dtype)
+        for start in range(0, n_elec, batch_size):
+            end = min(start + batch_size, n_elec)
+            elec_batch = torch.stack(
+                [ek[start:end], ej[start:end], ei[start:end]], dim=1
+            )  # (B, 3)
+            d_min = torch.minimum(d_min, _idw_dist_batch(elec_batch, grid_coords))
+
+        # Avoid division by zero directly on electrode voxels
+        d_min = torch.clamp(d_min, min=1e-10)
+
+        w = 1.0 / d_min**power         # (N,)
+        numerator   += w * voltage
+        denominator += w
+
+    # ---- Normalise -------------------------------------------------------
+    phi_flat = torch.where(denominator > 0, numerator / denominator,
+                           torch.zeros_like(numerator))
+
+    if out is not None:
+        out.view(-1).copy_(phi_flat)
+        phi = out
+    else:
+        phi = phi_flat.clone()
+
+    # ---- Enforce exact boundary values on electrode voxels ---------------
+    for elec in electrodes:
+        mask = elec["mask"]
+        if isinstance(mask, np.ndarray):
+            mask = torch.from_numpy(mask).to(dev)
+        if phi.dim() == 1:
+            phi[mask.reshape(-1)] = float(elec["voltage"])
+        else:
+            phi[mask] = float(elec["voltage"])
+
+    return phi
 # ---------------------------------------------------------------------------
 # PCB pixel IDW initialisation
 # ---------------------------------------------------------------------------
@@ -333,9 +352,12 @@ def init_idw_pcb_pixel(
     batch_size: int = 0,
     device: str | None = None,
     dtype: torch.dtype = torch.float32,
+    dim: int = 2,
+    z_electrode_start: int = 0,
+    z_electrode_end: int | None = None,
 ) -> torch.Tensor:
     """
-    IDW initial guess for a 2D weighting field using the PCB pixel geometry.
+    IDW initial guess for a 2D or 3D weighting field using the PCB pixel geometry.
 
     The target electrode is the centre pixel of the n_pix × n_pix grid
     (index i == j == int(n_pix / 2)).  All other pixels form the ground
@@ -343,50 +365,157 @@ def init_idw_pcb_pixel(
 
     Parameters
     ----------
-    arr             : 2D array whose shape (nx, ny) defines the domain
-    p_size          : pixel size  in grid units
-    p_gap           : pixel gap   in grid units
-    n_pix           : number of pixels per side
-    target_voltage  : voltage on the centre pixel   [default 1.0]
-    ground_voltage  : voltage on all other pixels   [default 0.0]
-    power           : IDW exponent
-    batch_size      : electrode-pixel batch size for GPU (0 = auto from VRAM)
-    device          : 'cuda', 'cpu', or None (auto-detect)
-    dtype           : torch float dtype
+    arr              : array whose shape defines the domain:
+                         dim=2 → (nx, ny)
+                         dim=3 → (nx, ny, nz)
+    p_size           : pixel size  in grid units
+    p_gap            : pixel gap   in grid units
+    n_pix            : number of pixels per side
+    target_voltage   : voltage on the centre pixel   [default 1.0]
+    ground_voltage   : voltage on all other pixels   [default 0.0]
+    power            : IDW exponent
+    batch_size       : electrode-pixel batch size for GPU (0 = auto from VRAM)
+    device           : 'cuda', 'cpu', or None (auto-detect)
+    dtype            : torch float dtype
+    z_electrode_start: (dim=3 only) first z index of the electrode slab
+    z_electrode_end  : (dim=3 only) one-past-last z index of the electrode slab.
+                       None = nz (electrode spans the full z range — not
+                       recommended; gives z-independent results).
 
     Returns
     -------
-    phi : torch.Tensor of shape (nx, ny) on `device`
+    phi : torch.Tensor of shape (nx, ny) or (nx, ny, nz) on `device`
     """
-    nx, ny = arr.shape[0], arr.shape[1]
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    dev = torch.device(device)
+    print(f"Running {dim}D IDW on: {dev}"
+          + (f" [{torch.cuda.get_device_name(dev)}]" if dev.type == "cuda" else ""))
+
+    # Convert arr to a torch tensor on device — this is the output buffer.
+    # .to() is a no-op when arr is already the correct dtype/device.
+    if isinstance(arr, np.ndarray):
+        arr_t = torch.from_numpy(arr).to(dev, dtype=dtype)
+    else:
+        arr_t = arr.to(dev=dev, dtype=dtype)
+
+    N = arr_t.numel()
     center = int(n_pix / 2)
 
-    target_mask = torch.zeros((nx, ny), dtype=torch.bool)
-    ground_mask = torch.zeros((nx, ny), dtype=torch.bool)
+    # Build flat grid coordinates once; reused across all electrodes.
+    # For dim==3 the IDW is computed on the 2D electrode plane (x, y only) and
+    # then scaled by a linear z-decay, so N = nx*ny regardless of nz.
+    if dim == 2:
+        nx, ny = arr_t.shape[0], arr_t.shape[1]
+        gx, gy = torch.meshgrid(
+            torch.arange(nx, device=dev, dtype=dtype),
+            torch.arange(ny, device=dev, dtype=dtype),
+            indexing="ij",
+        )
+        grid_coords = torch.stack([gx.reshape(-1), gy.reshape(-1)], dim=1)  # (N, 2)
+        N = nx * ny
+    else:  # dim == 3
+        nx, ny, nz = arr_t.shape[0], arr_t.shape[1], arr_t.shape[2]
+        z_end = z_electrode_end if z_electrode_end is not None else nz
+        gx, gy = torch.meshgrid(
+            torch.arange(nx, device=dev, dtype=dtype),
+            torch.arange(ny, device=dev, dtype=dtype),
+            indexing="ij",
+        )
+        grid_coords = torch.stack([gx.reshape(-1), gy.reshape(-1)], dim=1)  # (nx*ny, 2)
+        N = nx * ny
 
-    for i in range(n_pix):
-        for j in range(n_pix):
-            x0 = int(p_gap / 2) + i * (p_size + p_gap)
-            x1 = x0 + p_size
-            y0 = int(p_gap / 2) + j * (p_size + p_gap)
-            y1 = y0 + p_size
+    if batch_size <= 0:
+        batch_size = _compute_dynamic_batch_size(N, dtype, dev)
 
-            mask = target_mask if (i == center and j == center) else ground_mask
-            mask[x0:x1, y0:y1] = True
+    # IDW accumulators — written in-place throughout.
+    numerator   = torch.zeros(N, device=dev, dtype=dtype)
+    denominator = torch.zeros(N, device=dev, dtype=dtype)
 
-    electrodes = [
-        {"mask": target_mask, "voltage": target_voltage},
-        {"mask": ground_mask, "voltage": ground_voltage},
-    ]
+    # Single mask tensor — zeroed and refilled per electrode, never reallocated.
+    mask = torch.zeros(arr_t.shape, dtype=torch.bool, device=dev)
 
-    return init_idw_2d_torch(
-        (nx, ny),
-        electrodes,
-        power=power,
-        batch_size=batch_size,
-        device=device,
-        dtype=dtype,
-    )
+    # Collect 2-D boundary indices per electrode for boundary enforcement.
+    # For dim==3 we store (nx*ny)-space indices derived from the xy projection.
+    boundaries: list[tuple[torch.Tensor, float]] = []
+
+    for is_target in (True, False):
+        voltage = target_voltage if is_target else ground_voltage
+
+        mask.zero_()
+        for i in range(n_pix):
+            for j in range(n_pix):
+                x0 = int(p_gap / 2) + i * (p_size + p_gap)
+                x1 = x0 + p_size
+                y0 = int(p_gap / 2) + j * (p_size + p_gap)
+                y1 = y0 + p_size
+                if (i == center and j == center) == is_target:
+                    if dim == 2:
+                        mask[x0:x1, y0:y1] = True
+                    else:
+                        mask[x0:x1, y0:y1, z_electrode_start:z_end] = True
+
+        if dim == 2:
+            flat_idx = mask.view(-1).nonzero(as_tuple=False).squeeze(1)
+            coords = torch.where(mask)
+        else:
+            # Project the 3-D electrode slab onto the xy plane for 2-D IDW.
+            mask_2d = mask.any(dim=2)                                          # (nx, ny)
+            flat_idx = mask_2d.view(-1).nonzero(as_tuple=False).squeeze(1)    # (nx*ny)-space
+            coords = torch.where(mask_2d)
+
+        boundaries.append((flat_idx, voltage))
+
+        n_elec = coords[0].shape[0]
+        if n_elec == 0:
+            continue
+        print(f"  Electrode voltage={voltage:.2f} V, {n_elec} voxels")
+
+        elec_coords = torch.stack([c.to(dtype) for c in coords], dim=1)  # (n_elec, 2)
+
+        d_min = torch.full((N,), float("inf"), device=dev, dtype=dtype)
+        for start in range(0, n_elec, batch_size):
+            end = min(start + batch_size, n_elec)
+            torch.minimum(d_min, _idw_dist_batch(elec_coords[start:end], grid_coords), out=d_min)
+
+        d_min.clamp_(min=1e-10)
+        d_min.pow_(-power)              # in-place: d_min now holds weights = 1/d^power
+        numerator.add_(d_min, alpha=voltage)
+        denominator.add_(d_min)
+
+    if dim == 2:
+        # Write 2-D IDW result directly into arr_t.
+        flat = arr_t.view(-1)
+        valid = denominator > 0
+        flat[valid]  = numerator[valid] / denominator[valid]
+        flat[~valid] = 0.0
+        for flat_idx, voltage in boundaries:
+            flat[flat_idx] = voltage
+    else:
+        # 2-D IDW gives the lateral (x,y) distribution at the electrode plane.
+        # Multiply by a linear z-decay (1 at z_electrode_start → 0 at z=nz-1)
+        # so the field decreases monotonically with depth.
+        valid = denominator > 0
+        numerator[valid] = numerator[valid] / denominator[valid]
+        numerator[~valid] = 0.0
+        idw_2d = numerator.reshape(nx, ny)                                     # (nx, ny)
+
+        nz_span = max(nz - 1 - z_electrode_start, 1)
+        decay = ((nz - 1 - torch.arange(nz, device=dev, dtype=dtype)) / nz_span).clamp_(min=0.0)
+        # decay[z_electrode_start] == 1, decay[nz-1] == 0
+
+        arr_t[:, :, :z_electrode_start] = 0.0
+        arr_t[:, :, z_electrode_start:] = idw_2d.unsqueeze(-1) * decay[z_electrode_start:]
+
+        # Enforce exact electrode voltages on the electrode slab.
+        for flat_idx, voltage in boundaries:
+            mask_2d = torch.zeros(N, dtype=torch.bool, device=dev)
+            mask_2d[flat_idx] = True
+            arr_t[:, :, z_electrode_start:z_end][mask_2d.reshape(nx, ny)] = voltage
+
+    return arr_t
+        
+
 
 
 # ---------------------------------------------------------------------------
