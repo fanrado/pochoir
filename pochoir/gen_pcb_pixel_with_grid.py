@@ -190,11 +190,11 @@ def generator(dom, cfg):
     # For the first chunk the target voltage is 1.0 (the electrode voltage).
     # For every subsequent chunk the target voltage is taken from the value at
     # the target pixel's (x, y) position at the last z-plane of the previous chunk.
-    # _device = 'cuda:1'
+    _device = 'cuda:1'
     # chunk_size = 110
     # # nz_total = arr.shape[2]
     # nz_total = 300
-    # target_voltage = 1.0
+    target_voltage = 1.0
     # out = init_idw_pcb_pixel(
     #     arr[:, :, pp_loweredge],
     #     p_size=p_size,
@@ -207,16 +207,32 @@ def generator(dom, cfg):
     #     device=_device,
     #     dtype=torch.float32
     # )
-    # arr[:, :, pp_loweredge] = out.cpu().numpy()
+    out = init_idw_pcb_pixel(
+        arr[:,:,:],
+        p_size=p_size,
+        p_gap=p_gap,
+        n_pix=n_pix,
+        target_voltage=target_voltage,
+        ground_voltage=0.0,
+        power=1.0,
+        batch_size=2048,
+        device=_device,
+        dtype=torch.float32,
+        dim=3,
+        z_electrode=pp_loweredge,
+    )
+    arr[:, :, :] = out.cpu().numpy()
 
-    # plot_idw_pcb_pixel(
-    #     phi=arr[:, :, pp_loweredge],
-    #     title="init_idw_pcb_pixel — IDW initial guess",
-    #     save_path='idw_init_pcb_pixel.png',
-    #     vmin=0.0,
-    #     vmax=1.0,
-    #     cmap="RdBu_r",
-    # ) 
+    plot_idw_pcb_pixel(
+        phi=arr[:, :, :],
+        title="init_idw_pcb_pixel — IDW initial guess",
+        save_path='idw_init_pcb_pixel.png',
+        vmin=0.0,
+        vmax=1.0,
+        cmap="viridis",
+        n_slices=10,
+        # plot_3d=True
+    ) 
     #draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1)
     # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
