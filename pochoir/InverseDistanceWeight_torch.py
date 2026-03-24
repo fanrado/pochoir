@@ -353,8 +353,7 @@ def init_idw_pcb_pixel(
     device: str | None = None,
     dtype: torch.dtype = torch.float32,
     dim: int = 2,
-    z_electrode_start: int = 0,
-    z_electrode_end: int | None = None,
+    z_electrode: int = 0,
 ) -> torch.Tensor:
     """
     IDW initial guess for a 2D or 3D weighting field using the PCB pixel geometry.
@@ -365,22 +364,21 @@ def init_idw_pcb_pixel(
 
     Parameters
     ----------
-    arr              : array whose shape defines the domain:
-                         dim=2 → (nx, ny)
-                         dim=3 → (nx, ny, nz)
-    p_size           : pixel size  in grid units
-    p_gap            : pixel gap   in grid units
-    n_pix            : number of pixels per side
-    target_voltage   : voltage on the centre pixel   [default 1.0]
-    ground_voltage   : voltage on all other pixels   [default 0.0]
-    power            : IDW exponent
-    batch_size       : electrode-pixel batch size for GPU (0 = auto from VRAM)
-    device           : 'cuda', 'cpu', or None (auto-detect)
-    dtype            : torch float dtype
-    z_electrode_start: (dim=3 only) first z index of the electrode slab
-    z_electrode_end  : (dim=3 only) one-past-last z index of the electrode slab.
-                       None = nz (electrode spans the full z range — not
-                       recommended; gives z-independent results).
+    arr          : array whose shape defines the domain:
+                     dim=2 → (nx, ny)
+                     dim=3 → (nx, ny, nz)
+    p_size       : pixel size  in grid units
+    p_gap        : pixel gap   in grid units
+    n_pix        : number of pixels per side
+    target_voltage : voltage on the centre pixel   [default 1.0]
+    ground_voltage : voltage on all other pixels   [default 0.0]
+    power        : IDW exponent
+    batch_size   : electrode-pixel batch size for GPU (0 = auto from VRAM)
+    device       : 'cuda', 'cpu', or None (auto-detect)
+    dtype        : torch float dtype
+    z_electrode  : (dim=3 only) z-index of the single electrode plane.
+                   Voxels at z < z_electrode are kept as zero.
+                   Field decays linearly from 1 at z_electrode to 0 at z=nz-1.
 
     Returns
     -------
@@ -416,7 +414,6 @@ def init_idw_pcb_pixel(
         N = nx * ny
     else:  # dim == 3
         nx, ny, nz = arr_t.shape[0], arr_t.shape[1], arr_t.shape[2]
-        z_end = z_electrode_end if z_electrode_end is not None else nz
         gx, gy = torch.meshgrid(
             torch.arange(nx, device=dev, dtype=dtype),
             torch.arange(ny, device=dev, dtype=dtype),
@@ -453,7 +450,7 @@ def init_idw_pcb_pixel(
                     if dim == 2:
                         mask[x0:x1, y0:y1] = True
                     else:
-                        mask[x0:x1, y0:y1, z_electrode_start:z_end] = True
+                        mask[x0:x1, y0:y1, z_electrode] = True
 
         if dim == 2:
             flat_idx = mask.view(-1).nonzero(as_tuple=False).squeeze(1)
@@ -500,18 +497,18 @@ def init_idw_pcb_pixel(
         numerator[~valid] = 0.0
         idw_2d = numerator.reshape(nx, ny)                                     # (nx, ny)
 
-        nz_span = max(nz - 1 - z_electrode_start, 1)
+        nz_span = max(nz - 1 - z_electrode, 1)
         decay = ((nz - 1 - torch.arange(nz, device=dev, dtype=dtype)) / nz_span).clamp_(min=0.0)
-        # decay[z_electrode_start] == 1, decay[nz-1] == 0
+        # decay[z_electrode] == 1, decay[nz-1] == 0
 
-        arr_t[:, :, :z_electrode_start] = 0.0
-        arr_t[:, :, z_electrode_start:] = idw_2d.unsqueeze(-1) * decay[z_electrode_start:]
+        arr_t[:, :, :z_electrode] = 0.0
+        arr_t[:, :, z_electrode:] = idw_2d.unsqueeze(-1) * decay[z_electrode:]
 
-        # Enforce exact electrode voltages on the electrode slab.
+        # Enforce exact electrode voltages on the electrode plane.
         for flat_idx, voltage in boundaries:
             mask_2d = torch.zeros(N, dtype=torch.bool, device=dev)
             mask_2d[flat_idx] = True
-            arr_t[:, :, z_electrode_start:z_end][mask_2d.reshape(nx, ny)] = voltage
+            arr_t[:, :, z_electrode][mask_2d.reshape(nx, ny)] = voltage
 
     return arr_t
         
@@ -529,37 +526,129 @@ def plot_idw_pcb_pixel(
     vmin: float = 0.0,
     vmax: float = 1.0,
     cmap: str = "RdBu_r",
+    n_slices: int = 6,
+    plot_3d: bool = False,
+    threshold_3d: float = 0.01,
 ) -> None:
     """
-    Plot the 2D weighting field returned by init_idw_pcb_pixel.
+    Plot the weighting field returned by init_idw_pcb_pixel.
+
+    For a 2D field (nx, ny): single xy heatmap.
+    For a 3D field (nx, ny, nz):
+      - plot_3d=False (default): grid of n_slices xy heatmaps at evenly
+        spaced z depths, plus a row of xz slices at evenly spaced y.
+      - plot_3d=True: rotatable 3-D view — n_slices semi-transparent xy
+        planes stacked along z, coloured by phi value. Voxels at or below
+        threshold_3d are rendered fully transparent (appear white/absent).
 
     Parameters
     ----------
-    phi       : torch.Tensor or numpy array of shape (nx, ny)
-    title     : figure title
-    save_path : if given, save the figure to this path
-    vmin/vmax : colour-scale limits
-    cmap      : matplotlib colourmap
+    phi          : torch.Tensor or numpy array, shape (nx, ny) or (nx, ny, nz)
+    title        : figure title
+    save_path    : if given, save the figure to this path
+    vmin/vmax    : colour-scale limits
+    cmap         : matplotlib colourmap
+    n_slices     : number of xy / xz panels (slice mode) or z-planes (3D mode)
+    plot_3d      : (3D only) render as stacked imshow planes instead of slices
+    threshold_3d : (3D mode) voxels with phi <= threshold_3d are transparent
     """
     import matplotlib.pyplot as plt
+    from matplotlib import cm as mpl_cm
+    from matplotlib.colors import Normalize
 
     if hasattr(phi, "cpu"):
         phi_np = phi.cpu().numpy()
     else:
         phi_np = np.asarray(phi)
 
-    fig, ax = plt.subplots(figsize=(6, 5))
-    im = ax.imshow(phi_np.T, origin="lower", cmap=cmap,
-                   vmin=vmin, vmax=vmax, aspect="equal")
-    ax.set_xlabel("x-index")
-    ax.set_ylabel("y-index")
-    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="φ (V)")
-    plt.title(title, fontsize=11, fontweight="bold")
-    plt.tight_layout()
+    if phi_np.ndim == 2:
+        # ---- 2D ----
+        fig, ax = plt.subplots(figsize=(6, 5))
+        im = ax.imshow(phi_np.T, origin="lower", cmap=cmap,
+                       vmin=vmin, vmax=vmax, aspect="equal")
+        ax.set_xlabel("x-index")
+        ax.set_ylabel("y-index")
+        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="φ (V)")
+        plt.title(title, fontsize=11, fontweight="bold")
+        plt.tight_layout()
+
+    elif phi_np.ndim == 3:
+        if plot_3d:
+            # ---- 3D stacked imshow planes ----
+            # Each selected z-level is drawn as a flat surface coloured by phi.
+            # Voxels at or below threshold_3d get alpha=0 (transparent).
+            nx, ny, nz = phi_np.shape
+            z_indices = np.linspace(0, nz - 1, n_slices, dtype=int)
+
+            norm = Normalize(vmin=vmin, vmax=vmax)
+            cmap_func = mpl_cm.get_cmap(cmap)
+
+            fig = plt.figure(figsize=(10, 8))
+            ax3d = fig.add_subplot(111, projection="3d")
+
+            X, Y = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
+
+            for z in z_indices:
+                img = phi_np[:, :, z]          # (nx, ny)
+                rgba = cmap_func(norm(img)).copy()   # (nx, ny, 4)
+                # transparent where at or below threshold, semi-opaque otherwise
+                rgba[..., 3] = np.where(img > threshold_3d, 0.85, 0.0)
+                ax3d.plot_surface(
+                    X, Y, np.full_like(X, float(z)),
+                    facecolors=rgba,
+                    rstride=1, cstride=1,
+                    shade=False, antialiased=False,
+                )
+
+            ax3d.set_xlabel("x")
+            ax3d.set_ylabel("y")
+            ax3d.set_zlabel("z")
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+            sm.set_array([])
+            plt.colorbar(sm, ax=ax3d, shrink=0.5, pad=0.1, label="φ (V)")
+            plt.title(title, fontsize=11, fontweight="bold")
+            plt.tight_layout()
+
+        else:
+            # ---- 3D slices: grid of xy + xz panels ----
+            _, ny, nz = phi_np.shape
+            z_indices = np.linspace(0, nz - 1, n_slices, dtype=int)
+
+            ncols = n_slices
+            fig, axes = plt.subplots(2, ncols, figsize=(3 * ncols, 7))
+            fig.suptitle(title, fontsize=11, fontweight="bold")
+
+            # Top row: xy slices at selected z depths
+            for col, z in enumerate(z_indices):
+                ax = axes[0, col]
+                im = ax.imshow(phi_np[:, :, z].T, origin="lower", cmap=cmap,
+                               vmin=vmin, vmax=vmax, aspect="equal")
+                ax.set_title(f"z = {z}", fontsize=9)
+                ax.set_xlabel("x")
+                ax.set_ylabel("y") if col == 0 else ax.set_yticks([])
+
+            plt.colorbar(im, ax=axes[0, :], fraction=0.02, pad=0.02, label="φ (V)")
+
+            # Bottom row: xz slices at selected y positions
+            y_indices = np.linspace(0, ny - 1, n_slices, dtype=int)
+            for col, y in enumerate(y_indices):
+                ax = axes[1, col]
+                im2 = ax.imshow(phi_np[:, y, :].T, origin="lower", cmap=cmap,
+                                vmin=vmin, vmax=vmax, aspect="auto")
+                ax.set_title(f"y = {y}", fontsize=9)
+                ax.set_xlabel("x")
+                ax.set_ylabel("z") if col == 0 else ax.set_yticks([])
+
+            plt.colorbar(im2, ax=axes[1, :], fraction=0.02, pad=0.02, label="φ (V)")
+            plt.tight_layout()
+
+    else:
+        raise ValueError(f"phi must be 2D or 3D, got shape {phi_np.shape}")
+
     if save_path is not None:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"  Plot saved → {save_path}")
-    plt.show()
+    # plt.show()
 
 
 # ---------------------------------------------------------------------------
