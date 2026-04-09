@@ -74,13 +74,12 @@ def mirror_yaxis(id_circ1,x0,y0,r):
     return id_circ2
 
 
-def draw_3Dstrips(arr,barr,Nstrips,z,r1):
+def draw_3Dstrips(arr,barr,Nstrips,z,r1,thickness=1):
 
     shape = (int(len(barr)/Nstrips),int(len(barr[0])/Nstrips))
     
     xc=int(shape[0]/2-1)
     yc=int(shape[1]/2-1)
-    draw_plane(barr,z,1)
     id_circ3 = draw_quarter(xc,yc,r1)
     id_circ2 = mirror_xaxis(id_circ3,xc,yc,r1)
     id_circ4 = mirror_yaxis(id_circ3,xc,yc,r1)
@@ -89,13 +88,15 @@ def draw_3Dstrips(arr,barr,Nstrips,z,r1):
     barr2=form_quarter_boundary(id_circ2,xc,yc)
     barr3=form_quarter_boundary(id_circ3,xc,yc)
     barr4=form_quarter_boundary(id_circ4,xc,yc)
-    fill_area(barr,barr1,0)
-    fill_area(barr,barr2,0)
-    fill_area(barr,barr3,0)
-    fill_area(barr,barr4,0)
-    for i in range(Nstrips):
-        for j in range(Nstrips):
-            barr[i*shape[0]:(i+1)*shape[0],j*shape[1]:(j+1)*shape[1],z]=barr[:shape[0],:shape[1],z]
+    for iz in range(z, z+thickness):
+        draw_plane(barr,iz,1)
+        fill_area(barr[:,:,iz],barr1,0)
+        fill_area(barr[:,:,iz],barr2,0)
+        fill_area(barr[:,:,iz],barr3,0)
+        fill_area(barr[:,:,iz],barr4,0)
+        for i in range(Nstrips):
+            for j in range(Nstrips):
+                barr[i*shape[0]:(i+1)*shape[0],j*shape[1]:(j+1)*shape[1],iz]=barr[:shape[0],:shape[1],iz]
 
 def trimCorner(arr,x,y,z1,z2,corner):
     if corner==0:
@@ -217,11 +218,11 @@ def generator(dom, cfg):
     #     vmax=1.0,
     #     cmap="RdBu_r",
     # ) 
-    #draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1)
+    draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1,thickness=pcb_width)
     # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
     barr[:,:,0]=1
-    # draw pixel plane
+    # # draw pixel plane
     # plt.figure(figsize=(10,10))
     # plt.imshow(barr[:,:,pp_loweredge],origin='lower')
     # plt.title('pixel plane')
@@ -229,4 +230,35 @@ def generator(dom, cfg):
     # plt.ylabel('y')
     # plt.savefig('store/pixel_plane_bc.png')
     # plt.close()
+
+    # 3D voxel plot of the whole volume
+    z_pcb_start = pp_loweredge + pcb_width
+    z_pcb_end   = z_pcb_start + pcb_width
+
+    # Build a boolean volume restricted to the z-range we care about
+    filled = barr.astype(bool)
+
+    # Colour map: assign RGBA per voxel
+    colors = numpy.empty(filled.shape + (4,), dtype=float)
+    # default transparent
+    colors[..., :] = 0
+    # ground plane: gray
+    colors[:, :, 0:2, :] = [0.5, 0.5, 0.5, 0.9]
+    # pixel plane: orange
+    colors[:, :, pp_loweredge:pp_loweredge + pp_width + 1, :] = [1.0, 0.6, 0.1, 0.9]
+    # PCB strip: steelblue
+    colors[:, :, z_pcb_start:z_pcb_end, :] = [0.27, 0.51, 0.71, 0.9]
+
+    fig3d = plt.figure(figsize=(12, 10))
+    ax3d = fig3d.add_subplot(111, projection='3d')
+    ax3d.voxels(filled, facecolors=colors, edgecolors='none')
+    ax3d.set_xlabel('X')
+    ax3d.set_ylabel('Y')
+    ax3d.set_zlabel('Z')
+    ax3d.set_title('Full geometry: ground plane, pixel plane, PCB strip')
+    plt.tight_layout()
+    # plt.show()
+    plt.savefig('store/full_geometry.png')
+    plt.close()
+
     return arr,barr
