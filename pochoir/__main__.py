@@ -369,36 +369,21 @@ def fdm(ctx, initial, boundary,
         ctx.obj.put(increment_float32, err_phi0, taxon="increment", **params)
 
         # second step is to solve \nabla^2 \delta = -\nabla^2 \phi_0 with given boundary conditions, using float64.
-        # print(f'phi_0 shape = {phi_0.shape}, phi_0 dtype = {phi_0.dtype}')
-        # print(f'iarr shape = {iarr.shape}, iarr dtype = {iarr.dtype}')
-        # print(f'barr shape = {barr.shape}, barr dtype = {barr.dtype}')
         ## cast phi_0 to float64 for the second step, and use it as source term in the poisson equation.
 
         phi_0 = phi_0.to(torch.float64) # remove this first to check the laplacian of phi_0 in float32. It should give me zero
-        # print(f'phi_0 shape after cast = {phi_0.shape}, phi_0 dtype after cast = {phi_0.dtype}, type(phi_0) = {type(phi_0)}')
-        # nepochs = 1
-        # epoch = 10000
-        # iarr = phi_0.clone().to(torch.float64) # use phi_0 as initial guess for the second step
         # precision = 3e-5
         delta_phi, err_delta_phi0 = solve(iarr*0, barr, bool_edges,
                         precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=phi_0, _dtype=torch.float64)
-        # potential_float64 = potential+"_float64_delta" ## delta
-        # increment_float64 = increment+"_float64_delta" ## error on delta
         potential_float64 = potential+"_float64_delta" ## delta
         increment_float64 = increment+"_float64_delta" ## error on delta
-        # ctx.obj.put(potential_float64, delta_phi, taxon="potential", **params)
-        # ctx.obj.put(increment_float64, err_delta_phi0, taxon="increment", **params)
         ctx.obj.put(potential_float64, delta_phi, taxon="potential", **params)
         ctx.obj.put(increment_float64, err_delta_phi0, taxon="increment", **params)
         ## cast delta_phi back to float64 and add it to phi_0 to get the final solution.
         delta_phi = delta_phi.to(torch.float64)
         arr = phi_0 + delta_phi
         err = torch.sqrt(err_phi0**2 + err_delta_phi0**2)
-        # print(f'final error = {err}')
-        # params = dict(operation="fdm", domain=domain,
-        #               initial=initial, boundary=boundary,
-        #               edges=edges, epoch=epoch, nepochs=nepochs,
-        #               precision=precision, command="fdm")
+
         ctx.obj.put(potential, arr, taxon="potential", **params)
         ctx.obj.put(increment, err, taxon="increment", **params)
     else:
@@ -667,7 +652,7 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, steps):
     ax = fig.add_subplot(111, projection='3d')
     for i in range(0,thepaths.shape[0]):
         # plt.plot(thepaths[i,:,0],thepaths[i,:,1])
-        ax.plot(thepaths[i,:,0]/0.1,thepaths[i,:,1]/0.1,thepaths[i,:,2]/0.1)
+        ax.plot(thepaths[i,:,0],thepaths[i,:,1],thepaths[i,:,2])
     plt.title('drift paths')
     ax.set_xlabel('x')
     ax.set_ylabel('y')
@@ -910,6 +895,99 @@ def induce(ctx, charge, weighting, paths, average,nstrips, output):
                 domain=domain, paths=paths,average=average,nsteps=nsteps, weighting=weighting)
             
         
+def _shift_paths_pixel_grid(the_paths, n_paths=100, n_pixels=25,
+                             pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8):
+    """Shift drift paths onto a 3x3 pixel grid centred on the collection pixel.
+
+    The input ``the_paths`` array contains ``n_paths`` prototype paths that
+    were simulated inside a single pixel cell.  This function tiles those paths
+    across the 3x3 neighbourhood of pixels surrounding (and including) the
+    central collection pixel so that induced-current contributions from
+    neighbouring pixels can be evaluated.
+
+    Geometry
+    --------
+    ``pixel_pitch``  – centre-to-centre distance between adjacent pixels.
+    ``pixel_gap``    – gap between pixel edges (= pixel_pitch - pixel_size).
+                       Half of this value (``pixel_gap/2``) is the offset from
+                       a pixel edge to the coordinate origin used in the
+                       simulation.
+    ``pixel_size``   – physical side length of one pixel.
+
+    The origin of the simulated paths sits at the corner of the pixel cell.
+    Each shifted path is translated so that its origin coincides with the
+    centre of the target pixel.  The base offset applied to every path is:
+
+        base_x = pixel_gap/2 + pixel_size/2 + 2 * pixel_pitch
+        base_y = 2 * pixel_pitch + pixel_gap/2 + pixel_size/2
+
+    which places the path set at pixel column 0, row 0 of the 3×3 grid.
+    Subsequent columns and rows are reached by adding multiples of
+    ``pixel_pitch`` in x and y respectively.
+
+    Path sampling
+    -------------
+    ``n_paths``   – number of prototype paths (default 100 = 10×10 grid).
+    ``n_pixels``  – total pixels in the 3×3 neighbourhood (default 25 = 5×5
+                    sub-grid per pixel, but the outer loop dimension is the
+                    square root, ``sp1 = int(n_paths**0.5) = 10`` and
+                    ``sp2 = int(n_pixels**0.5) = 5``).
+
+    The 3×3 pixel columns use ``sp1`` levels for columns 0 and 1, and ``sp2``
+    levels for column 2.  Similarly, each column iterates ``sp1`` paths for
+    pixel rows 0 and 1, and ``sp2`` paths for pixel row 2.  This asymmetry
+    reflects the fact that only a 5×5 sub-sample of the 10×10 path grid is
+    needed for the two outermost pixel positions.
+
+    Parameters
+    ----------
+    the_paths : array-like, shape (n_paths, n_steps, 3)
+        Prototype drift paths.  Each path is a list of [x, y, z] positions.
+    n_paths : int
+        Number of prototype paths (must equal sp1**2 where sp1 = sqrt(n_paths)).
+    n_pixels : int
+        Number of neighbouring pixels (must equal sp2**2 where sp2 = sqrt(n_pixels)).
+    pixel_pitch : float
+        Centre-to-centre pixel pitch in the same units as the path coordinates.
+    pixel_gap : float
+        Gap between pixel edges (pixel_pitch - pixel_size).
+    pixel_size : float
+        Physical side length of one pixel.
+
+    Returns
+    -------
+    shifted_paths : list of list
+        Flattened list of shifted paths, one entry per (pixel column, pixel row,
+        path index) combination.
+    """
+    sp1 = int(n_paths ** 0.5)       # 10 — paths per dimension
+    sp2 = int(n_pixels ** 0.5)      # 5  — outer-pixel levels per dimension
+
+    half_gap = pixel_gap / 2.0
+    half_size = pixel_size / 2.0
+    base_x = half_gap + half_size + 2.0 * pixel_pitch
+    base_y = 2.0 * pixel_pitch + half_gap + half_size
+
+    # Row counts per pixel row index (0-based): sp1 paths for rows 0 & 1, sp2 for row 2
+    row_counts = [sp1, sp1, sp2]
+    # Level counts per pixel column index: sp1 levels for cols 0 & 1, sp2 for col 2
+    col_levels = [sp1, sp1, sp2]
+
+    shifted_paths = []
+    for px_col, n_levels in enumerate(col_levels):
+        dx = px_col * pixel_pitch
+        for lvl in range(n_levels):
+            for px_row, n_rows in enumerate(row_counts):
+                dy = px_row * pixel_pitch
+                for i in range(n_rows):
+                    newpath = [
+                        [base_x + dx + x[0], base_y + dy + x[1], x[2]]
+                        for x in the_paths[i + lvl * sp1]
+                    ]
+                    shifted_paths.append(newpath)
+    return shifted_paths
+
+
 @cli.command()
 @click.option("-q","--charge", default=1.0,
               help="The amount of drifting charge")
@@ -959,50 +1037,8 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
         #        #newpath = [[0.8+2.2/2+x[0]+i*1.0*(3.8),x[1]+3.8+0.8+2.2/2,x[2]] for x in the_paths[j]]
         #        shifted_paths.append(newpath)
         #100 paths for ND
-        sp1 = 10 # 10 ,8 , 6
-        sp2 = 5 # 5, 4 , 3
-        # old_paths = []
-        for lvl in range(sp1):
-            for i in range(sp1):
-                # print(f'indices of the paths : {i+lvl*sp1}')
-                newpath=[[0.3+3.8/2+2.0*(4.4)+x[0],x[1]+2*4.4+0.3+3.8/2,x[2]] for x in the_paths[i+lvl*sp1]]
-                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
-                shifted_paths.append(newpath)
-            for i in range(sp1):
-                newpath=[[0.3+3.8/2+2.0*(4.4)+x[0],x[1]+2*4.4+0.3+3.8/2+4.4,x[2]] for x in the_paths[i+lvl*sp1]]
-                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
-                shifted_paths.append(newpath)
-            for i in range(sp2):
-                newpath=[[0.3+3.8/2+2.0*(4.4)+x[0],x[1]+2*4.4+0.3+3.8/2+4.4*2,x[2]] for x in the_paths[i+lvl*sp1]]
-                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
-                shifted_paths.append(newpath)
-        for lvl in range(sp1):
-            for i in range(sp1):
-                newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4,x[1]+2*4.4+0.3+3.8/2,x[2]] for x in the_paths[i+lvl*sp1]]
-                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
-                shifted_paths.append(newpath)
-            for i in range(sp1):
-                newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4,x[1]+2*4.4+0.3+3.8/2+4.4,x[2]] for x in the_paths[i+lvl*sp1]]
-                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
-                shifted_paths.append(newpath)
-            for i in range(sp2):
-                newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4,x[1]+2*4.4+0.3+3.8/2+4.4*2,x[2]] for x in the_paths[i+lvl*sp1]]
-                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
-                shifted_paths.append(newpath)
-
-        for lvl in range(sp2):
-            for i in range(sp1):
-                newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4*2,x[1]+2*4.4+0.3+3.8/2,x[2]] for x in the_paths[i+lvl*sp1]]
-                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
-                shifted_paths.append(newpath)
-            for i in range(sp1):
-                newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4*2,x[1]+2*4.4+0.3+3.8/2+4.4,x[2]] for x in the_paths[i+lvl*sp1]]
-                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
-                shifted_paths.append(newpath)
-            for i in range(sp2):
-                newpath=[[0.3+3.8/2+2.0*(4.4)+x[0]+4.4*2,x[1]+2*4.4+0.3+3.8/2+4.4*2,x[2]] for x in the_paths[i+lvl*sp1]]
-                # old_paths.append([[x[0], x[1], x[2]] for x in the_paths[i+lvl*sp1]])
-                shifted_paths.append(newpath)
+        shifted_paths = _shift_paths_pixel_grid(the_paths, n_paths=100, n_pixels=25,
+                             pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
 
     # print(f'Shifted_paths[0,0] : {shifted_paths[0][0]}') 
     # print(f'old_paths[0,0] : {old_paths[0][0]}')
