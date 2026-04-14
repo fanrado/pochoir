@@ -56,7 +56,7 @@ Additional metadata may be stored such as:
     - command :: name the command that produced the array
 '''
 
-import sys
+import sys, os
 import json
 import click
 import pochoir
@@ -64,9 +64,12 @@ import torch
 from . import units
 # no others than click and pochoir!
 import logging
+if not os.path.exists('store'):
+    os.makedirs('store')
+log_filename = os.environ.get('POCHOIR_LOG', 'store/pochoir.log')
 logging.basicConfig(
     level=logging.INFO,
-    filename='pochoir.log',
+    filename=log_filename,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     filemode='a'
 )
@@ -313,10 +316,12 @@ def init(ctx, initial, boundary, ambient, domain, filenames):
               help="Output array holding solution for potential")
 @click.option("-I", "--increment", type=str,
               help="Output array holding increment (error) on the solution")
+@click.option("-M", "--multisteps", type=str, default="N",
+              help="Whether to use multistep method (Y/N)")
 @click.pass_context
 def fdm(ctx, initial, boundary,
         edges, precision, epoch, nepochs, engine,
-        potential, increment):
+        potential, increment, multisteps):
     '''
     Apply finite-difference method.
 
@@ -354,41 +359,53 @@ def fdm(ctx, initial, boundary,
                   initial=initial, boundary=boundary,
                   edges=edges, epoch=epoch, nepochs=nepochs,
                   precision=precision, command="fdm")
-    # first step is to solve \nabla^2 \phi_0 = 0 with given boundary conditions, using float32. 
-    epoch = 1000000
-    phi_0, err_phi0 = solve(iarr, barr, bool_edges,
-                     precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float32) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
-    potential_float32 = potential+"_float32"
-    increment_float32 = increment+"_float32"
-    ctx.obj.put(potential_float32, phi_0, taxon="potential", **params)
-    ctx.obj.put(increment_float32, err_phi0, taxon="increment", **params)
+    if multisteps.lower() in ["y", "yes"]:
+        # first step is to solve \nabla^2 \phi_0 = 0 with given boundary conditions, using float32. 
+        phi_0, err_phi0 = solve(iarr, barr, bool_edges,
+                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float32) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+        potential_float32 = potential+"_float32"
+        increment_float32 = increment+"_float32"
+        ctx.obj.put(potential_float32, phi_0, taxon="potential", **params)
+        ctx.obj.put(increment_float32, err_phi0, taxon="increment", **params)
 
-    # second step is to solve \nabla^2 \delta = -\nabla^2 \phi_0 with given boundary conditions, using float64.
-    print(f'phi_0 shape = {phi_0.shape}, phi_0 dtype = {phi_0.dtype}')
-    print(f'iarr shape = {iarr.shape}, iarr dtype = {iarr.dtype}')
-    print(f'barr shape = {barr.shape}, barr dtype = {barr.dtype}')
-    ## cast phi_0 to float64 for the second step, and use it as source term in the poisson equation.
+        # second step is to solve \nabla^2 \delta = -\nabla^2 \phi_0 with given boundary conditions, using float64.
+        # print(f'phi_0 shape = {phi_0.shape}, phi_0 dtype = {phi_0.dtype}')
+        # print(f'iarr shape = {iarr.shape}, iarr dtype = {iarr.dtype}')
+        # print(f'barr shape = {barr.shape}, barr dtype = {barr.dtype}')
+        ## cast phi_0 to float64 for the second step, and use it as source term in the poisson equation.
 
-    # phi_0 = phi_0.to(torch.float64) # remove this first to check the laplacian of phi_0 in float32. It should give me zero
-    print(f'phi_0 shape after cast = {phi_0.shape}, phi_0 dtype after cast = {phi_0.dtype}, type(phi_0) = {type(phi_0)}')
-    nepochs = 1
-    epoch = 1000000
-    # iarr = phi_0.clone().to(torch.float64) # use phi_0 as initial guess for the second step
-    delta_phi, err_delta_phi0 = solve(iarr*0, barr, bool_edges,
-                     precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=phi_0, _dtype=torch.float64)
-    potential_float64 = potential+"_float64_delta" ## delta
-    increment_float64 = increment+"_float64_delta" ## error on delta
-    ctx.obj.put(potential_float64, delta_phi, taxon="potential", **params)
-    ctx.obj.put(increment_float64, err_delta_phi0, taxon="increment", **params)
-    arr = phi_0 + delta_phi
-    err = torch.sqrt(err_phi0**2 + err_delta_phi0**2)
-    # print(f'final error = {err}')
-    # params = dict(operation="fdm", domain=domain,
-    #               initial=initial, boundary=boundary,
-    #               edges=edges, epoch=epoch, nepochs=nepochs,
-    #               precision=precision, command="fdm")
-    ctx.obj.put(potential, arr, taxon="potential", **params)
-    ctx.obj.put(increment, err, taxon="increment", **params)
+        phi_0 = phi_0.to(torch.float64) # remove this first to check the laplacian of phi_0 in float32. It should give me zero
+        # print(f'phi_0 shape after cast = {phi_0.shape}, phi_0 dtype after cast = {phi_0.dtype}, type(phi_0) = {type(phi_0)}')
+        # nepochs = 1
+        # epoch = 10000
+        # iarr = phi_0.clone().to(torch.float64) # use phi_0 as initial guess for the second step
+        # precision = 3e-5
+        delta_phi, err_delta_phi0 = solve(iarr*0, barr, bool_edges,
+                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=phi_0, _dtype=torch.float64)
+        # potential_float64 = potential+"_float64_delta" ## delta
+        # increment_float64 = increment+"_float64_delta" ## error on delta
+        potential_float64 = potential+"_float64_delta" ## delta
+        increment_float64 = increment+"_float64_delta" ## error on delta
+        # ctx.obj.put(potential_float64, delta_phi, taxon="potential", **params)
+        # ctx.obj.put(increment_float64, err_delta_phi0, taxon="increment", **params)
+        ctx.obj.put(potential_float64, delta_phi, taxon="potential", **params)
+        ctx.obj.put(increment_float64, err_delta_phi0, taxon="increment", **params)
+        ## cast delta_phi back to float64 and add it to phi_0 to get the final solution.
+        delta_phi = delta_phi.to(torch.float64)
+        arr = phi_0 + delta_phi
+        err = torch.sqrt(err_phi0**2 + err_delta_phi0**2)
+        # print(f'final error = {err}')
+        # params = dict(operation="fdm", domain=domain,
+        #               initial=initial, boundary=boundary,
+        #               edges=edges, epoch=epoch, nepochs=nepochs,
+        #               precision=precision, command="fdm")
+        ctx.obj.put(potential, arr, taxon="potential", **params)
+        ctx.obj.put(increment, err, taxon="increment", **params)
+    else:
+        phi_0, err_phi0 = solve(iarr, barr, bool_edges,
+                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+        ctx.obj.put(potential, phi_0, taxon="potential", **params)
+        ctx.obj.put(increment, err_phi0, taxon="increment", **params)
 
 
 
@@ -650,7 +667,7 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, steps):
     ax = fig.add_subplot(111, projection='3d')
     for i in range(0,thepaths.shape[0]):
         # plt.plot(thepaths[i,:,0],thepaths[i,:,1])
-        ax.plot(thepaths[i,:,0],thepaths[i,:,1],thepaths[i,:,2])
+        ax.plot(thepaths[i,:,0]/0.1,thepaths[i,:,1]/0.1,thepaths[i,:,2]/0.1)
     plt.title('drift paths')
     ax.set_xlabel('x')
     ax.set_ylabel('y')

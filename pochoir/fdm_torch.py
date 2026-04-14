@@ -10,6 +10,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
 
+from torch.profiler import profile, record_function, ProfilerActivity # For profiling the performance of the solver
+
 from .fdm_generic import edge_condition, stencil, stencil_poisson
 
 # torch.set_default_dtype(torch.float32)
@@ -191,21 +193,22 @@ def plot_boundary_analysis(lap: torch.Tensor):
     print(f"Boundary W={W-1} — mean: {boundary_w1.mean():.3e}  |  max|val|: {np.abs(boundary_w1).max():.3e}")
 
 # @torch.compile
-def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, periodic, phi0=None, spacing=1.0):
-    source = None
-    if phi0 is not None:
-        source = -(6/spacing**2)*(stencil(phi0) - phi0[core])
-        plt.figure(figsize=(8, 6))
-        plt.plot(source.cpu().numpy()[0,0,:], label=r'Source term $-f=\frac{6}{h^2}(\mathrm{stencil}(\phi_0) - \phi_0)$')
-        plt.xlabel('Index along z-axis')
-        plt.title("Source term for Poisson equation")
-        plt.grid()
-        plt.legend()
-        plt.savefig("source_term_plot.png", dpi=150, bbox_inches="tight")
-        plt.close()
-        sys.exit()
-        # source = -6*1e5*torch.ones_like(phi0[core])
-        # source[:, :, :100] = 0
+def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, 
+                   core, periodic, spacing=1.0, source=None):
+    # if source is not None:
+    #     # warmup outside of the profiler so one-time CUDA costs don't pollute results
+    #     stencil_poisson(iarr_pad.clone(), source=source.clone(), spacing=spacing, res=tmp_core.clone())
+
+    #     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], record_shapes=True, profile_memory=True, with_stack=False) as prof:
+    #         # with record_function("compiled_step"):
+    #             stencil_poisson(iarr_pad, source=source, spacing=spacing, res=tmp_core)
+    #             # torch.cuda.synchronize() # Ensure all GPU operations are complete before measuring time
+    #     print(prof.key_averages().table(
+    #         sort_by="cuda_time_total", 
+    #         row_limit=20
+    #     ))
+    #     prof.export_chrome_trace(f"stencil_poisson_runtime_profile.json")
+    #     sys.exit()
     stencil_poisson(iarr_pad, source=source, spacing=spacing, res=tmp_core)
     iarr_pad[core] = bi_core + mutable_core * tmp_core
     edge_condition(iarr_pad, *periodic, info_msg=None)
@@ -250,10 +253,88 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
 
     barr_pad = torch.tensor(numpy.pad(barr, 1), requires_grad=False, dtype=_dtype).to(device)
     iarr_pad = torch.tensor(numpy.pad(iarr, 1), requires_grad=False, dtype=_dtype).to(device)
-    if phi0 is not None:
-        phi0 = torch.tensor(numpy.pad(phi0, 1), requires_grad=False, dtype=_dtype).to(device)
-        print(f'phi0 shape {phi0.shape}')
     core = core_slices1(iarr_pad)
+
+    iarr_pad_source = iarr_pad.clone().detach().requires_grad_(False).to(device)
+    source = None ## Variable to hold the source term for poisson equation, if phi0 is provided
+    non_padded_phi0 = None ## Variable to hold the original phi0 before padding, for computing the source term without the influence of padding values.
+    if phi0 is not None:
+        non_padded_phi0 = phi0.clone().detach().requires_grad_(False).to(device)
+        spacing = 1.0 ## Need to include this at the top of the function later.
+        # print(f'device for phi0: {phi0.device}, dtype for phi0: {phi0.dtype}')
+        iarr_pad = torch.zeros(iarr_pad.shape, requires_grad=False, dtype=_dtype).to(device)
+        # phi0_ = torch.tensor(numpy.pad(phi0, 1), requires_grad=False, dtype=_dtype).to(device)
+        # cast phi0 to float64 and zero-pad it
+        phi0_ = torch.tensor(numpy.pad(phi0, 1), requires_grad=False, dtype=torch.float64).to(device)
+        # numpy.pad fills the halo with zeros, but stencil(phi0) at the outermost interior
+        # cells will then pull in those zeros as neighbour values, making the computed source
+        # term artificially large at the domain edges.  edge_condition propagates the actual
+        # interior values into the halo (same BCs as iarr_pad), fixing the stencil there.
+        path_to_padded_phi0 = potential.split('/')[0] + '/padded_phi0'
+        ctx.obj.put(path_to_padded_phi0, phi0_.cpu(), taxon='padded_phi0', **params)
+        # print(f'padded phi0 saved to {path_to_padded_phi0}')
+        edge_condition(phi0_, *periodic)
+        # print(f'---shape of phi0 after edge condition: {phi0.shape}, max value: {torch.max(phi0)}, min value: {torch.min(phi0)}')
+        s = stencil(phi0_).detach()
+        # edge_condition(s, *periodic)
+        # iarr_pad_source[core] = bi_core + mutable_core * s
+        
+        # Multiply by mutable_core to zero out the source at fixed boundary cells (barr=True).
+        # At those cells ss[core]=bi_core, so any mismatch with phi0[core] would produce a
+        # spurious non-zero source — but boundary cells are overwritten by bi_core anyway,
+        # so their source term is physically meaningless and should be suppressed.
+        # source = -(6/spacing**2)*(iarr_pad_source[core] - phi0[core]) * mutable_core
+        source = -(6/spacing**2)*(s - non_padded_phi0)* mutable_core # * mutable_core to zero out the source at fixed boundary cells (barr=True) ::: This is the correct condition to apply when solving the Poisson equation.
+
+        ##
+        ## For debugging purposes, let's save the output of stencil and the source term without the changes first
+        path_to_stencil = potential.split('/')[0] + '/stencil'
+        path_to_source = potential.split('/')[0] + '/source'
+        path_to_withBC = potential.split('/')[0] + '/phi0_withBC'
+        ctx.obj.put(path_to_stencil, s.cpu(), taxon='stencil', **params)
+        ctx.obj.put(path_to_source, source.cpu(), taxon='source', **params)
+        ctx.obj.put(path_to_withBC, phi0_.cpu(), taxon='phi0_withBC', **params)
+        # print(f'stencil saved to {path_to_stencil}, source saved to {path_to_source}, withBC saved to {path_to_withBC}')
+        # print(f'shape of mutable core : {mutable_core.shape}, shape of stencil : {s.shape}')
+
+        ## cast source to _dtype
+        source = source.to(_dtype)
+        ## save the source term casted to _dtype for debugging
+        path_to_source = potential.split('/')[0] + '/source_FP32'
+        ctx.obj.put(path_to_source, source.cpu(), taxon='source_FP32', **params)
+
+        # # warmup outside of the profiler so one-time CUDA costs don't pollute results
+        # _compiled_step(iarr_pad.clone(), tmp_core.clone(), bi_core.clone(), mutable_core.clone(), core, tuple(periodic), spacing=1.0, source=source.clone())
+
+        # with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], record_shapes=True, profile_memory=True, with_stack=False) as prof:
+        #     # with record_function("compiled_step"):
+        #         _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, tuple(periodic), spacing=1.0, source=source)
+        #         # torch.cuda.synchronize() # Ensure all GPU operations are complete before measuring time
+        # print(prof.key_averages().table(
+        #     sort_by="cuda_time_total", 
+        #     row_limit=20
+        # ))
+        # prof.export_chrome_trace(f"fdm_step_trace_epoch.json")
+        # sys.exit()
+    # if phi0 is not None:
+    #     ## create a copy of the original phi0 before zero-padding.
+    #     non_padded_phi0 = phi0.clone().detach().requires_grad_(False).to(device)
+    #     spacing = 1.0 ## Need to include this at the top of the function later.
+    #     ##
+    #     ## zero-pad phi0
+    #     phi0 = torch.tensor(numpy.pad(phi0, 1), requires_grad=False, dtype=_dtype).to(device)
+    #     ##
+    #     ## Apply the boundary conditions: periodic along x- and y-axes, fixed along z-axis.
+    #     edge_condition(phi0, *periodic)
+    #     ##
+    #     ## Compute the average of the 6 neighboring cells for each interior cell.
+    #     s = stencil(phi0).detach()
+    #     ##
+    #     ## Calculate the source term for the Poisson equation
+    #     source = -(6/spacing**2)*(s - non_padded_phi0)
+        
+    #     print(f'phi0 shape {phi0.shape}')
+    # core = core_slices1(iarr_pad)
     # info_msg(f'core slices = {core}, dtype : {type(core)}')
     # sys.exit()
     # Get indices of fixed boundary values and values themselves
@@ -270,23 +351,25 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
         info_msg(f'====== epoch: {iepoch}/{nepochs} x {epoch} ===============')
         print(f'====== epoch: {iepoch}/{nepochs} x {epoch} ===============')
         epoch_start_time = time.time()
-        potential_path = f'{potential}_epoch{iepoch}'
-        increment_path = f'{increment}_epoch{iepoch}'
+        # potential_path = f'{potential}_epoch{iepoch}'
+        # increment_path = f'{increment}_epoch{iepoch}'
         _periodic = tuple(periodic)
         for istep in range(epoch):
             # # info_msg(f'step: {istep}/{epoch}')
-            if istep%100 ==0:
+            if istep%1000 ==0:
                 prev = iarr_pad.clone().detach().requires_grad_(False)
 
             # _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic)
-            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, phi0=phi0, spacing=1.0)
+            # _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, phi0=phi0, spacing=1.0, iarr_pad_source=iarr_pad_source)
+            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, spacing=1.0, source=source)
             # stencil(iarr_pad, tmp_core)
             # iarr_pad[core] = bi_core + mutable_core * tmp_core
             # edge_condition(iarr_pad, *periodic, info_msg=None)
             
             # if epoch-istep == 1: # last in the iteration
-            if istep%100 ==0:
-                err = iarr_pad[core] - prev[core]
+            if (istep%1000 ==0) and (istep !=0):
+                # err = iarr_pad[core] - prev[core]
+                err = iarr_pad[core].clone().detach().to(torch.float64) - prev[core].to(torch.float64)
                 maxerr = torch.max(torch.abs(err))
                 info_msg(f'iteration : {istep}, maxerr = {maxerr}, prec = {prec}, dtype = {maxerr.dtype}')
                 # # Removed this part for debugging ---- this is part of the original script
@@ -297,6 +380,7 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
                     epoch_end_time = time.time()
                     info_msg(f'epoch {iepoch} time: {epoch_end_time - epoch_start_time:.2f} seconds')
                     return (iarr_pad[core].cpu(), err.cpu())
+                    # break
                 
                 if maxerr == 0.0:
                     info_msg(f'fdm reached maxerr = {maxerr} at iteration {istep}, epoch {iepoch}')
@@ -322,4 +406,31 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
     end_time = time.time()
     info_msg(f'FDM solve time: {end_time - start_time:.2f} seconds, Nepochs = {nepochs}, steps per epoch = {epoch}')
 
+    if source is not None:
+        spacing = 1.0 ## Need to include this at the top of the function later.
+        # print(f'device for phi0: {phi0.device}, dtype for phi0: {phi0.dtype}')
+        # iarr_pad = torch.zeros(iarr_pad.shape, requires_grad=False, dtype=_dtype).to(device)
+        phi0 = phi0 + iarr_pad[core].cpu() ## Add the computed potential to the original phi0 to get the updated potential with BCs applied, which will be used to compute the source term for the next iteration if needed.
+        phi0_ = torch.tensor(numpy.pad(phi0, 1), requires_grad=False, dtype=_dtype).to(device)
+        # numpy.pad fills the halo with zeros, but stencil(phi0) at the outermost interior
+        # cells will then pull in those zeros as neighbour values, making the computed source
+        # term artificially large at the domain edges.  edge_condition propagates the actual
+        # interior values into the halo (same BCs as iarr_pad), fixing the stencil there.
+        # path_to_padded_phi0 = potential.split('/')[0] + '/padded_phi0'
+        # ctx.obj.put(path_to_padded_phi0, phi0.cpu(), taxon='padded_phi0', **params)
+        # print(f'padded phi0 saved to {path_to_padded_phi0}')
+        edge_condition(phi0_, *periodic)
+        # print(f'---shape of phi0 after edge condition: {phi0.shape}, max value: {torch.max(phi0)}, min value: {torch.min(phi0)}')
+        s = stencil(phi0_).detach()
+        # edge_condition(s, *periodic)
+        # iarr_pad_source[core] = bi_core + mutable_core * s
+        
+        # Multiply by mutable_core to zero out the source at fixed boundary cells (barr=True).
+        # At those cells ss[core]=bi_core, so any mismatch with phi0[core] would produce a
+        # spurious non-zero source — but boundary cells are overwritten by bi_core anyway,
+        # so their source term is physically meaningless and should be suppressed.
+        # source = -(6/spacing**2)*(iarr_pad_source[core] - phi0[core]) * mutable_core
+        source = -(6/spacing**2)*(s - non_padded_phi0)#* mutable_core
+        path_to_source = potential.split('/')[0] + '/nabla_phi'
+        ctx.obj.put(path_to_source, source.cpu(), taxon='nabla_phi', **params)
     return (iarr_pad[core].cpu(), err.cpu())

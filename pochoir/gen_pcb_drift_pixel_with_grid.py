@@ -105,23 +105,19 @@ def form_quarter_boundary(indx,x0,y0):
     return barr
 
 
-def draw_pcb_plane(shape,arr,z,r1,val):
-    draw_plane(arr,z,val)
-    id_circ1=draw_quarter_circle(0,0,r1)
-    id_circ2=draw_quarter_circle(shape[0]-1,shape[1]-1,r1)
-    id_circ2_m=mirror_center(id_circ2,shape[0]-1,shape[1]-1)
-    id_circ3=draw_quarter_circle(shape[0]-1,0,r1)
-    id_circ3_m=mirror_yaxis(id_circ3,shape[0]-1,0,r1)
-    id_circ4=draw_quarter_circle(0,shape[1]-1,r1)
-    id_circ4_m=mirror_xaxis(id_circ4,0,shape[1]-1,r1)
-    barr1=form_quarter_boundary(id_circ1,0,0)
-    barr2=form_quarter_boundary(id_circ2_m,shape[0]-1,shape[1])
-    barr3=form_quarter_boundary(id_circ3_m,shape[0]-1,0)
-    barr4=form_quarter_boundary(id_circ4_m,0,shape[1]-1)
-    fill_area(arr,barr1,0)
-    fill_area(arr,barr2,0)
-    fill_area(arr,barr3,0)
-    fill_area(arr,barr4,0)
+def draw_pcb_plane(shape, arr, barr, z, r1, gridPotential):
+    # Draw grid plane boundary in barr, and set potential in arr
+    Nx, Ny = shape
+    xi, yi = numpy.mgrid[0:Nx, 0:Ny]
+    # Start with the full plane as boundary
+    barr[:, :, z] = 1
+    arr[:, :, z] = gridPotential
+    # Zero out the 4 quarter-holes at the corners
+    for cx, cy in [(0, 0), (Nx-1, 0), (0, Ny-1), (Nx-1, Ny-1)]:
+        mask = (xi - cx)**2 + (yi - cy)**2 <= r1**2
+        barr[:, :, z][mask] = 0
+        arr[:, :, z][mask] = 0
+
 
 def trimCorner(arr,x,y,z1,z2,corner):
     if corner==0:
@@ -144,6 +140,46 @@ def trimCorner(arr,x,y,z1,z2,corner):
         arr[x,y-3:y+1,z1:z2]=0
         arr[x,y,z1:z2]=0
         arr[x+1,y-1,z1:z2]=0
+
+## Draw shield plane with square holes, rounded corners
+def trimCorner_pcb(arr,x,y,z1,z2,corner):
+    if corner==0:
+        arr[x-3:x+1,y,z1:z2]=1
+        arr[x,y-3:y+1,z1:z2]=1
+        arr[x,y,z1:z2]=1
+        arr[x-1,y-1,z1:z2]=1
+    if corner==1:
+        arr[x-3:x+1,y,z1:z2]=1
+        arr[x,y:y+4,z1:z2]=1
+        arr[x,y,z1:z2]=1
+        arr[x-1,y+1,z1:z2]=1
+    if corner==2:
+        arr[x:x+4,y,z1:z2]=1
+        arr[x,y:y+4,z1:z2]=1
+        arr[x,y,z1:z2]=1
+        arr[x+1,y+1,z1:z2]=1
+    if corner==3:
+        arr[x:x+4,y,z1:z2]=1
+        arr[x,y-3:y+1,z1:z2]=1
+        arr[x,y,z1:z2]=1
+        arr[x+1,y-1,z1:z2]=1
+def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential):
+    barr[:, :, pcb_width+pp_loweredge] = 1
+    arr[:, :, pcb_width+pp_loweredge] = gridPotential
+    barr[0:int(p_size/2),0:int(p_size/2),pp_loweredge+pcb_width]=0
+    barr[0:int(p_size/2),int(p_size/2)+p_gap:,pp_loweredge+pcb_width]=0
+    barr[int(p_size/2)+p_gap:,0:int(p_size/2),pp_loweredge+pcb_width]=0
+    barr[int(p_size/2)+p_gap:,int(p_size/2)+p_gap:,pp_loweredge+pcb_width]=0
+    
+    
+    trimCorner_pcb(barr,int(p_size/2)-1,int(p_size/2)-1,pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,0)
+    
+    trimCorner_pcb(barr,int(p_size/2)-1,int(p_size/2)+p_gap,pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,1)
+    
+    trimCorner_pcb(barr,int(p_size/2)+p_gap,int(p_size/2)-1,pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,3)
+    
+    trimCorner_pcb(barr,int(p_size/2)+p_gap,int(p_size/2)+p_gap,pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,2)
+##----
 
 import sys
 def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential):
@@ -179,14 +215,58 @@ def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePo
     # draw pixel plane for drift field
     # print(f'pp_loweredge={pp_loweredge}')
     # print(f'barr shape={barr.shape}')
-    plt.figure(figsize=(10,10))
-    plt.imshow(barr[:, :, pp_loweredge], origin='lower')
-    # plt.plot(barr[22, 22, :], label='barr[22, 22, :]')
-    plt.title('pixel plane')
-    plt.xlabel('x')
-    plt.ylabel('y')
-    plt.savefig('store/domain_drift_bc.png')
-    plt.close()
+    # 3D scatter plot of arr (non-zero voxels colored by potential)
+    mask_arr = arr != 0
+    if mask_arr.any():
+        xi, yi, zi = numpy.where(mask_arr)
+        vals = arr[mask_arr]
+        fig = plt.figure(figsize=(12, 9))
+        ax = fig.add_subplot(111, projection='3d')
+        sc = ax.scatter(xi, yi, zi, c=vals, cmap='RdBu_r', s=2, alpha=0.6)
+        fig.colorbar(sc, ax=ax, label='Potential (V)', shrink=0.6)
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        ax.set_zlabel('z')
+        ax.set_title('arr (drift field boundary conditions)')
+        plt.tight_layout()
+        plt.savefig('store/domain_drift_arr_3d.png', dpi=150)
+        plt.close()
+
+    # 3D scatter plot of barr (boundary mask, non-zero voxels)
+    mask_barr = barr != 0
+    if mask_barr.any():
+        xi, yi, zi = numpy.where(mask_barr)
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        sc = ax.scatter(xi, yi, zi, c=zi, cmap='viridis', s=2, alpha=0.4, marker=',')
+        plt.colorbar(sc, ax=ax, label='z index')
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        ax.set_zlabel('z')
+        ax.set_title('barr (drift field boundary mask)')
+        plt.tight_layout()
+        plt.savefig('store/domain_drift_barr_3d.png', dpi=150)
+        plt.close()
+
+    # Same plot but clipped to first 150 z-planes, with large markers to prove surface-like render
+    barr_clipped = barr[:, :, :150]
+    mask_clip = barr_clipped != 0
+    if mask_clip.any():
+        xi, yi, zi = numpy.where(mask_clip)
+        for marker_size, fname in [(2, 'domain_drift_barr_3d_clipped150_s2.png'),
+                                   (20, 'domain_drift_barr_3d_clipped150_s20.png'),
+                                   (200, 'domain_drift_barr_3d_clipped150_s200.png')]:
+            fig = plt.figure(figsize=(10, 8))
+            ax = fig.add_subplot(111, projection='3d')
+            sc = ax.scatter(xi, yi, zi, c=zi, cmap='viridis', s=marker_size, alpha=0.4, marker=',')
+            plt.colorbar(sc, ax=ax, label='z index')
+            ax.set_xlabel('x')
+            ax.set_ylabel('y')
+            ax.set_zlabel('z')
+            ax.set_title(f'barr drift (first 150 z) - s={marker_size}')
+            plt.tight_layout()
+            plt.savefig(f'store/{fname}', dpi=150)
+            plt.close()
 
     # plt.figure(figsize=(10,10))
     # plt.imshow(arr[:, :, pp_loweredge], origin='lower')
@@ -204,17 +284,19 @@ def generator(dom, cfg, info_msg=None):
     gridPotential = cfg['GridPotential']
     cathodePotential = cfg['CathodePotential']
     pp_loweredge = int(cfg['pixelPlaneLowEdgePosition']/dom.spacing[0])
-
-    arr = numpy.zeros(dom.shape)
-    barr = numpy.ones(dom.shape)
-    # print(f'arr shape = {arr.shape}, barr shape = {barr.shape}')
-    #draw_pcb_plane((len(arr),len(arr[0])),arr,pp_loweredge+pcb_width,r1,-1000)
-    barr[arr==0]=0
     p_size=int(round(cfg["pixelSize"]/dom.spacing[0]))
     p_gap=int(round(cfg["pixelGap"]/dom.spacing[0]))
     n_pix = cfg['Npixels']
     pp_width = int(cfg['pixelPlaneWidth']/dom.spacing[0])
+
+    arr = numpy.zeros(dom.shape)
+    barr = numpy.zeros(dom.shape)
+    # draw_pcb_plane((len(arr),len(arr[0])), arr, barr, pp_loweredge+pcb_width, r1, gridPotential) # Draw the PCB plane with holes circular
+    draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential) # Draw the PCB plane with holes rounded square
+    barr[arr==0]=0
+    
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential)
+    
 
     if info_msg is not None:
         info_msg(f'cathode potential : {cathodePotential} V')

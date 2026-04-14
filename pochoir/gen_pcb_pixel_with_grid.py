@@ -4,6 +4,7 @@ import numpy
 import torch
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 from .gen_pcb_drift_pixel_with_grid import draw_quarter_circle as draw_quarter
 # from pochoir.InverseDistanceWeight_torch import init_idw_pcb_pixel, plot_idw_pcb_pixel
@@ -74,7 +75,7 @@ def mirror_yaxis(id_circ1,x0,y0,r):
     return id_circ2
 
 
-def draw_3Dstrips(arr,barr,Nstrips,z,r1,thickness=1):
+def draw_3Dstrips(arr,barr,Nstrips,z,r1):
 
     shape = (int(len(barr)/Nstrips),int(len(barr[0])/Nstrips))
     
@@ -88,15 +89,51 @@ def draw_3Dstrips(arr,barr,Nstrips,z,r1,thickness=1):
     barr2=form_quarter_boundary(id_circ2,xc,yc)
     barr3=form_quarter_boundary(id_circ3,xc,yc)
     barr4=form_quarter_boundary(id_circ4,xc,yc)
-    for iz in range(z, z+thickness):
-        draw_plane(barr,iz,1)
-        fill_area(barr[:,:,iz],barr1,0)
-        fill_area(barr[:,:,iz],barr2,0)
-        fill_area(barr[:,:,iz],barr3,0)
-        fill_area(barr[:,:,iz],barr4,0)
-        for i in range(Nstrips):
-            for j in range(Nstrips):
-                barr[i*shape[0]:(i+1)*shape[0],j*shape[1]:(j+1)*shape[1],iz]=barr[:shape[0],:shape[1],iz]
+    draw_plane(barr,z,1)
+    fill_area(barr[:,:,z],barr1,0)
+    fill_area(barr[:,:,z],barr2,0)
+    fill_area(barr[:,:,z],barr3,0)
+    fill_area(barr[:,:,z],barr4,0)
+    for i in range(Nstrips):
+        for j in range(Nstrips):
+            barr[i*shape[0]:(i+1)*shape[0],j*shape[1]:(j+1)*shape[1],z]=barr[:shape[0],:shape[1],z]
+
+## square, rounded corner
+def trimCorner_pcb(arr,x,y,z1,z2,corner):
+    if corner==0:
+        arr[x-3:x+1,y,z1:z2]=1
+        arr[x,y-3:y+1,z1:z2]=1
+        arr[x,y,z1:z2]=1
+        arr[x-1,y-1,z1:z2]=1
+    if corner==1:
+        arr[x-3:x+1,y,z1:z2]=1
+        arr[x,y:y+4,z1:z2]=1
+        arr[x,y,z1:z2]=1
+        arr[x-1,y+1,z1:z2]=1
+    if corner==2:
+        arr[x:x+4,y,z1:z2]=1
+        arr[x,y:y+4,z1:z2]=1
+        arr[x,y,z1:z2]=1
+        arr[x+1,y+1,z1:z2]=1
+    if corner==3:
+        arr[x:x+4,y,z1:z2]=1
+        arr[x,y-3:y+1,z1:z2]=1
+        arr[x,y,z1:z2]=1
+        arr[x+1,y-1,z1:z2]=1
+
+def draw_3Dstrips_sq(barr, p_gap, p_size, n_pix, pp_loweredge, pcb_width):
+    barr[:,:,pcb_width+pp_loweredge]=1
+    for i in range(0,n_pix):
+            for j in range(0,n_pix):
+                barr[int(p_gap/2)+i*(p_size+p_gap):int(p_gap/2)+i*(p_size+p_gap)+p_size,int(p_gap/2)+j*(p_size+p_gap):int(p_gap/2)+j*(p_size+p_gap)+p_size,pcb_width+pp_loweredge]=0
+                trimCorner_pcb(barr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,0)
+        
+                trimCorner_pcb(barr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap),pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,1)
+        
+                trimCorner_pcb(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,3)
+        
+                trimCorner_pcb(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,2)
+##----
 
 def trimCorner(arr,x,y,z1,z2,corner):
     if corner==0:
@@ -218,7 +255,8 @@ def generator(dom, cfg):
     #     vmax=1.0,
     #     cmap="RdBu_r",
     # ) 
-    draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1,thickness=pcb_width)
+    # draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1) ## Draw the PCB plane with holes circular
+    draw_3Dstrips_sq(barr, p_gap, p_size, n_pix, pp_loweredge, pcb_width) ## Draw the PCB plane with holes rounded square
     # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
     barr[:,:,0]=1
@@ -231,34 +269,25 @@ def generator(dom, cfg):
     # plt.savefig('store/pixel_plane_bc.png')
     # plt.close()
 
-    # 3D voxel plot of the whole volume
-    z_pcb_start = pp_loweredge + pcb_width
-    z_pcb_end   = z_pcb_start + pcb_width
-
-    # Build a boolean volume restricted to the z-range we care about
-    filled = barr.astype(bool)
-
-    # Colour map: assign RGBA per voxel
-    colors = numpy.empty(filled.shape + (4,), dtype=float)
-    # default transparent
-    colors[..., :] = 0
-    # ground plane: gray
-    colors[:, :, 0:2, :] = [0.5, 0.5, 0.5, 0.9]
-    # pixel plane: orange
-    colors[:, :, pp_loweredge:pp_loweredge + pp_width + 1, :] = [1.0, 0.6, 0.1, 0.9]
-    # PCB strip: steelblue
-    colors[:, :, z_pcb_start:z_pcb_end, :] = [0.27, 0.51, 0.71, 0.9]
-
-    fig3d = plt.figure(figsize=(12, 10))
-    ax3d = fig3d.add_subplot(111, projection='3d')
-    ax3d.voxels(filled, facecolors=colors, edgecolors='none')
-    ax3d.set_xlabel('X')
-    ax3d.set_ylabel('Y')
-    ax3d.set_zlabel('Z')
-    ax3d.set_title('Full geometry: ground plane, pixel plane, PCB strip')
-    plt.tight_layout()
-    # plt.show()
-    plt.savefig('store/full_geometry.png')
-    plt.close()
+    plot_barr_3d(barr, save_path='store/barr_3d.png')
+    plot_barr_3d(arr, save_path='store/arr_3d.png', alpha=0.5, s=2, cmap='viridis')
 
     return arr,barr
+
+
+def plot_barr_3d(barr, save_path='store/barr_3d.png', alpha=0.3, s=1, cmap='viridis'):
+    """3D scatter plot of non-zero voxels in barr."""
+    x, y, z = numpy.where(barr > 0)
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    sc = ax.scatter(x, y, z, c=z, cmap=cmap, s=s, alpha=alpha, marker=',')
+    plt.colorbar(sc, ax=ax, label='z index')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('3D plot of barr (boundary mask)')
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    # plt.show()
+    plt.close()
+    print(f'Saved 3D barr plot to {save_path}')

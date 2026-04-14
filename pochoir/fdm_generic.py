@@ -134,6 +134,7 @@ def stencil_poisson(array, source=None, spacing=1.0, res=None):
     
     # Subtract the source term contribution: h² * f / (2N)
     if source is not None:
-        res += (spacing ** 2) * source*norm
+        res -= (spacing ** 2) * source*norm ## corrected the sign here, since we are solving ∇²φ = -f = source, 
+                        #so the source term contribution should be subtracted from the stencil result to get the updated φ values.
 
     return res
