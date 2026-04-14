@@ -119,70 +119,210 @@ def draw_pcb_plane(shape, arr, barr, z, r1, gridPotential):
         arr[:, :, z][mask] = 0
 
 
-def trimCorner(arr,x,y,z1,z2,corner):
-    if corner==0:
-        arr[x-3:x+1,y,z1:z2]=0
-        arr[x,y-3:y+1,z1:z2]=0
-        arr[x,y,z1:z2]=0
-        arr[x-1,y-1,z1:z2]=0
-    if corner==1:
-        arr[x-3:x+1,y,z1:z2]=0
-        arr[x,y:y+4,z1:z2]=0
-        arr[x,y,z1:z2]=0
-        arr[x-1,y+1,z1:z2]=0
-    if corner==2:
-        arr[x:x+4,y,z1:z2]=0
-        arr[x,y:y+4,z1:z2]=0
-        arr[x,y,z1:z2]=0
-        arr[x+1,y+1,z1:z2]=0
-    if corner==3:
-        arr[x:x+4,y,z1:z2]=0
-        arr[x,y-3:y+1,z1:z2]=0
-        arr[x,y,z1:z2]=0
-        arr[x+1,y-1,z1:z2]=0
+def trimCorner(arr, x, y, z1, z2, corner, val=0):
+    """Trim (or fill) one rounded corner of a square hole or pad.
+
+    Applies a small L-shaped stencil at one inner corner of a square aperture
+    in order to approximate a rounded corner at grid resolution.  The stencil
+    covers a 4-cell arm along each axis plus one diagonal cell, which together
+    remove (or restore) the sharp 90° tip.
+
+    Parameters
+    ----------
+    arr    : ndarray
+        3-D boundary or potential array modified in-place.
+    x, y   : int
+        Grid indices of the inner corner of the square aperture.
+    z1, z2 : int
+        z-slice range ``[z1, z2)`` over which the stencil is applied.
+    corner : int
+        Which of the four inner corners to process, numbered by quadrant:
+          0 – bottom-left  (x arm goes toward -x, y arm toward -y)
+          1 – top-left     (x arm toward -x,     y arm toward +y)
+          2 – top-right    (x arm toward +x,     y arm toward +y)
+          3 – bottom-right (x arm toward +x,     y arm toward -y)
+    val    : int or float, optional
+        Value written into the stencil cells.  Use ``0`` (default) to carve
+        the corner out of a solid region (pixel-plane use case) and ``1`` to
+        fill the corner back into a void (PCB-shield use case).
+
+    Modification history
+    --------------------
+    Originally two separate functions existed: ``trimCorner`` (hardcoded to
+    write 0) and ``trimCorner_pcb`` (hardcoded to write 1).  They were
+    identical except for the fill value.  Both are now replaced by this single
+    function with the ``val`` keyword argument so that the same corner geometry
+    is reused for both the pixel plane (carving rounded holes) and the PCB
+    shield plane (restoring rounded corners into square holes).
+
+    Use cases
+    ---------
+    Pixel plane – carve rounded corners into a solid pad (default ``val=0``)::
+
+        trimCorner(barr, x_corner, y_corner, z1, z2, corner=0)
+
+    PCB shield plane – fill rounded corners back after cutting square holes
+    (``val=1``)::
+
+        trimCorner(barr, x_corner, y_corner, z1, z2, corner=0, val=1)
+    """
+    if corner == 0:
+        arr[x-3:x+1, y,       z1:z2] = val
+        arr[x,        y-3:y+1, z1:z2] = val
+        arr[x-1,      y-1,     z1:z2] = val
+    elif corner == 1:
+        arr[x-3:x+1, y,       z1:z2] = val
+        arr[x,        y:y+4,   z1:z2] = val
+        arr[x-1,      y+1,     z1:z2] = val
+    elif corner == 2:
+        arr[x:x+4,   y,       z1:z2] = val
+        arr[x,        y:y+4,   z1:z2] = val
+        arr[x+1,      y+1,     z1:z2] = val
+    elif corner == 3:
+        arr[x:x+4,   y,       z1:z2] = val
+        arr[x,        y-3:y+1, z1:z2] = val
+        arr[x+1,      y-1,     z1:z2] = val
+
+
+def _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val):
+    """Apply ``trimCorner`` to all four inner corners of a square aperture.
+
+    Encodes the corner positions and their quadrant indices once so that both
+    ``draw_pixel_plane`` and ``draw_pcb_plane_rounded_sq_drift`` call the same
+    geometry without repeating the coordinate arithmetic.
+
+    Parameters
+    ----------
+    barr          : ndarray
+        3-D boundary array modified in-place.
+    p_size, p_gap : int
+        Pixel size and gap in grid-index units.
+    z1, z2        : int
+        z-slice range ``[z1, z2)`` passed through to ``trimCorner``.
+    val           : int or float
+        Fill value forwarded to ``trimCorner`` (0 to carve, 1 to fill).
+    """
+    half = p_size // 2
+    corners = [
+        (half - 1,     half - 1,     0),
+        (half - 1,     half + p_gap, 1),
+        (half + p_gap, half - 1,     3),
+        (half + p_gap, half + p_gap, 2),
+    ]
+    for x, y, corner in corners:
+        trimCorner(barr, x, y, z1, z2, corner, val=val)
+
 
 ## Draw shield plane with square holes, rounded corners
-def trimCorner_pcb(arr,x,y,z1,z2,corner):
-    if corner==0:
-        arr[x-3:x+1,y,z1:z2]=1
-        arr[x,y-3:y+1,z1:z2]=1
-        arr[x,y,z1:z2]=1
-        arr[x-1,y-1,z1:z2]=1
-    if corner==1:
-        arr[x-3:x+1,y,z1:z2]=1
-        arr[x,y:y+4,z1:z2]=1
-        arr[x,y,z1:z2]=1
-        arr[x-1,y+1,z1:z2]=1
-    if corner==2:
-        arr[x:x+4,y,z1:z2]=1
-        arr[x,y:y+4,z1:z2]=1
-        arr[x,y,z1:z2]=1
-        arr[x+1,y+1,z1:z2]=1
-    if corner==3:
-        arr[x:x+4,y,z1:z2]=1
-        arr[x,y-3:y+1,z1:z2]=1
-        arr[x,y,z1:z2]=1
-        arr[x+1,y-1,z1:z2]=1
 def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential):
-    barr[:, :, pcb_width+pp_loweredge] = 1
-    arr[:, :, pcb_width+pp_loweredge] = gridPotential
-    barr[0:int(p_size/2),0:int(p_size/2),pp_loweredge+pcb_width]=0
-    barr[0:int(p_size/2),int(p_size/2)+p_gap:,pp_loweredge+pcb_width]=0
-    barr[int(p_size/2)+p_gap:,0:int(p_size/2),pp_loweredge+pcb_width]=0
-    barr[int(p_size/2)+p_gap:,int(p_size/2)+p_gap:,pp_loweredge+pcb_width]=0
-    
-    
-    trimCorner_pcb(barr,int(p_size/2)-1,int(p_size/2)-1,pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,0)
-    
-    trimCorner_pcb(barr,int(p_size/2)-1,int(p_size/2)+p_gap,pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,1)
-    
-    trimCorner_pcb(barr,int(p_size/2)+p_gap,int(p_size/2)-1,pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,3)
-    
-    trimCorner_pcb(barr,int(p_size/2)+p_gap,int(p_size/2)+p_gap,pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,2)
+    """Draw the PCB shield plane as a solid layer with rounded-square holes.
+
+    The shield is modelled as a single z-plane that is initially set to solid
+    (boundary = 1, potential = ``gridPotential``).  Four rectangular quadrants
+    around the pixel-hole centre are then cleared to open the apertures, and
+    ``_apply_rounded_corners`` restores the corner cells that were
+    over-cleared, producing apertures with approximately rounded corners at
+    grid resolution.
+
+    This function is the complement of ``draw_pixel_plane``: where
+    ``draw_pixel_plane`` starts from void and fills in solid pixel pads (then
+    carves rounded corners out with ``val=0``), this function starts from solid
+    and cuts square holes (then fills rounded corners back in with ``val=1``).
+    Both delegate corner geometry to the unified ``trimCorner`` /
+    ``_apply_rounded_corners`` helpers.
+
+    Parameters
+    ----------
+    arr           : ndarray, shape (Nx, Ny, Nz)
+        Potential array modified in-place.
+    barr          : ndarray, shape (Nx, Ny, Nz)
+        Boundary mask array modified in-place (1 = boundary, 0 = free).
+    p_gap         : int
+        Gap between pixel edges in grid-index units.
+    p_size        : int
+        Pixel side length in grid-index units.
+    pcb_width     : int
+        Thickness of the PCB layer in grid-index units.
+    pp_loweredge  : int
+        z-index of the lower edge of the pixel plane.
+    gridPotential : float
+        Electric potential applied to the PCB shield plane (V).
+
+    Modification history
+    --------------------
+    ``trimCorner_pcb`` (a verbatim copy of ``trimCorner`` with 1 instead of 0)
+    has been removed.  Corner filling is now handled by ``trimCorner(...,
+    val=1)`` via ``_apply_rounded_corners``, eliminating the code duplication.
+
+    Use case
+    --------
+    Called from ``generator`` before ``draw_pixel_plane`` to set the upper
+    boundary of the drift volume::
+
+        draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size,
+                                        pcb_width, pp_loweredge,
+                                        gridPotential)
+    """
+    z = pp_loweredge + pcb_width
+    z1, z2 = z, z + 1
+    barr[:, :, z] = 1
+    arr[:, :, z]  = gridPotential
+    half = p_size // 2
+    barr[0:half,        0:half,        z] = 0
+    barr[0:half,        half+p_gap:,   z] = 0
+    barr[half+p_gap:,   0:half,        z] = 0
+    barr[half+p_gap:,   half+p_gap:,   z] = 0
+    _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val=1)
 ##----
 
 import sys
-def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential):
+def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, cathodePotential, gridPotential):
+    """Draw the pixel collection plane as solid pads with rounded-square corners.
+
+    Initialises the full volume with the cathode potential and a solid boundary
+    mask, then marks the four corner quadrants of the pixel-hole region as
+    boundary over the pixel-plane z-range.  ``_apply_rounded_corners`` then
+    carves the over-filled corner cells back out (``val=0``) so that the inner
+    edges of each pixel pad approximate a rounded square at grid resolution.
+
+    This function is the complement of ``draw_pcb_plane_rounded_sq_drift``:
+    where the PCB function starts from solid and opens holes (filling corners
+    back with ``val=1``), this function starts from void pads and fills them
+    solid (then carves rounded corners out with ``val=0``).  Both share the
+    same corner geometry via the unified ``trimCorner`` /
+    ``_apply_rounded_corners`` helpers, replacing the former duplicated pair
+    ``trimCorner`` / ``trimCorner_pcb``.
+
+    Parameters
+    ----------
+    arr              : ndarray, shape (Nx, Ny, Nz)
+        Potential array modified in-place.
+    barr             : ndarray, shape (Nx, Ny, Nz)
+        Boundary mask array modified in-place (1 = boundary, 0 = free).
+    p_size           : int
+        Pixel side length in grid-index units.
+    p_gap            : int
+        Gap between pixel edges in grid-index units.
+    n_pix            : int
+        Number of pixels along one axis of the detector.
+    pp_loweredge     : int
+        z-index of the lower edge of the pixel plane.
+    pp_width         : int
+        Thickness of the pixel plane in grid-index units.
+    cathodePotential : float
+        Electric potential applied to the cathode (back plane) (V).
+    gridPotential    : float
+        Electric potential applied to the grid / pixel plane (V).
+
+    Use case
+    --------
+    Called from ``generator`` after ``draw_pcb_plane_rounded_sq_drift`` to set
+    the pixel-collection boundary of the drift volume::
+
+        draw_pixel_plane(arr, barr, p_size, p_gap, n_pix,
+                         pp_loweredge, pp_width,
+                         cathodePotential, gridPotential)
+    """
     draw_plane(arr,-1,cathodePotential) # This line sets the initial values
     # ## Set the initial values to be linear along z
     # for i in range(pp_loweredge, arr.shape[2]):
@@ -198,19 +338,13 @@ def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePo
     draw_plane(barr,-1,1) # This line sets the boundary values
 
     dims = p_size*n_pix+p_gap*(n_pix-1)
-    barr[0:int(p_size/2),0:int(p_size/2),pp_loweredge:pp_width+pp_loweredge+1]=1
-    barr[0:int(p_size/2),int(p_size/2)+p_gap:,pp_loweredge:pp_width+pp_loweredge+1]=1
-    barr[int(p_size/2)+p_gap:,0:int(p_size/2),pp_loweredge:pp_width+pp_loweredge+1]=1
-    barr[int(p_size/2)+p_gap:,int(p_size/2)+p_gap:,pp_loweredge:pp_width+pp_loweredge+1]=1
-    
-    
-    trimCorner(barr,int(p_size/2)-1,int(p_size/2)-1,pp_loweredge,pp_width+pp_loweredge+1,0)
-    
-    trimCorner(barr,int(p_size/2)-1,int(p_size/2)+p_gap,pp_loweredge,pp_width+pp_loweredge+1,1)
-    
-    trimCorner(barr,int(p_size/2)+p_gap,int(p_size/2)-1,pp_loweredge,pp_width+pp_loweredge+1,3)
-    
-    trimCorner(barr,int(p_size/2)+p_gap,int(p_size/2)+p_gap,pp_loweredge,pp_width+pp_loweredge+1,2)
+    half = p_size // 2
+    z1, z2 = pp_loweredge, pp_width + pp_loweredge + 1
+    barr[0:half,        0:half,        z1:z2] = 1
+    barr[0:half,        half+p_gap:,   z1:z2] = 1
+    barr[half+p_gap:,   0:half,        z1:z2] = 1
+    barr[half+p_gap:,   half+p_gap:,   z1:z2] = 1
+    _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val=0)
     # arr[(p_size+p_gap):(p_size+p_gap)+p_size,(p_size+p_gap):(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
     # draw pixel plane for drift field
     # print(f'pp_loweredge={pp_loweredge}')
@@ -277,8 +411,8 @@ def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePo
     # plt.savefig('store/domain_drift_initial_cond.png')
     # plt.close()
     
-def generator(dom, cfg, info_msg=None):
-    
+def generator(dom, cfg, info_msg=None, gridHoleShape='rectangular'):
+    ## TO DO: add gridHoleShape in the config file instead of argument of generator
     r1 = int(cfg['HoleRadius']/dom.spacing[0]-1)
     pcb_width = int(cfg['PcbWidth']/dom.spacing[2])
     gridPotential = cfg['GridPotential']
@@ -291,8 +425,10 @@ def generator(dom, cfg, info_msg=None):
 
     arr = numpy.zeros(dom.shape)
     barr = numpy.zeros(dom.shape)
-    # draw_pcb_plane((len(arr),len(arr[0])), arr, barr, pp_loweredge+pcb_width, r1, gridPotential) # Draw the PCB plane with holes circular
-    draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential) # Draw the PCB plane with holes rounded square
+    if gridHoleShape == 'circular':
+        draw_pcb_plane((len(arr),len(arr[0])), arr, barr, pp_loweredge+pcb_width, r1, gridPotential) # Draw the PCB plane with holes circular
+    elif gridHoleShape == 'rectangular':
+        draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential) # Draw the PCB plane with holes rounded square
     barr[arr==0]=0
     
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential)
