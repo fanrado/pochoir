@@ -528,7 +528,47 @@ def grad(ctx, scalar, gradient):
                 domain=domain, scalar=scalar, command="grad")
 
 
-    
+
+
+def make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4, spacing=None):
+    """
+    Generate a regular ngridpoints x ngridpoints grid of drift starting points
+    inside one pixel cell, cell-centred (first point at spacing/2).
+
+    Parameters
+    ----------
+    z_depth : float
+        Starting z position in grid-index units. z=148 corresponds to 14.8 mm
+        from the anode (for a 0.1 mm/cell domain), just above the pixel
+        collection plane. All starting points share this fixed depth.
+    ngridpoints : int
+        Number of grid points per side: 10 for 10x10, 8 for 8x8, 6 for 6x6.
+    pitch : float
+        Physical pixel side length in mm (default 4.4 mm).
+    spacing : float or None
+        Grid pitch in mm. If None, computed as pitch / ngridpoints
+        (e.g. 4.4/10 = 0.44 mm). The first point is placed at spacing/2
+        so the grid is cell-centred, matching the convention in
+        test-full-3d-pixel.sh: dist=(0.22 0.66 1.10 ... 4.18).
+
+    Returns
+    -------
+    points : list of [x, y, z_depth]
+        Exactly ngridpoints**2 points, no duplicates.
+    """
+    if spacing is None:
+        spacing = pitch / ngridpoints  # e.g. 4.4/10 = 0.44 mm
+    half = spacing / 2.0                    # cell-centred offset: 0.22 mm
+
+    points = []
+    for j in range(ngridpoints):
+        x = half + j * spacing
+        for i in range(ngridpoints):
+            y = half + i * spacing
+            points.append([x, y, z_depth])
+    return points
+
+
 @cli.command()
 @click.option("-S","--starts", default=None, type=str,
               help="Output starts points array")
@@ -543,23 +583,7 @@ def starts(ctx, starts, mode, points):
     import numpy
     # fixme: we say we don't allow numpy in main...
     if mode=="yes":
-        points=[]
-        spacing = 0.4 #0.4 for 10x10 ; 0.49 for 8x8 ; 0.63 for 6x6
-        step= 9 # 9 for 10x10, 7 for 8x8 , 5 for 6x6x
-        ### ((4.4)/10)/2 + 4.4/10
-        points.append([spacing,spacing,148.0])
-        for i in range(1,step):
-            points.append([spacing,i*spacing,148.0])
-        points.append([spacing,spacing*(step+1),148.0])
-        for j in range(1,step):
-            points.append([j*spacing,spacing,148.0])
-            for i in range(1,step):
-                points.append([j*spacing,i*spacing,148.0])
-            points.append([j*spacing,spacing*(step+1),148.0])
-        points.append([spacing*(step+1),spacing,148.0])
-        for i in range(1,step):
-            points.append([spacing*(step+1),i*spacing,148.0])
-        points.append([spacing*(step+1),spacing*(step+1),148.0])
+        points = make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4)
     else:
         npoints = len(points)
         if not npoints:
