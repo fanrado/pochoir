@@ -411,10 +411,11 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
     # plt.savefig('store/domain_drift_initial_cond.png')
     # plt.close()
     
-def generator(dom, cfg, info_msg=None, gridHoleShape='rectangular'):
-    ## TO DO: add gridHoleShape in the config file instead of argument of generator
+def generator(dom, cfg, info_msg=None):
     r1 = int(cfg['HoleRadius']/dom.spacing[0]-1)
     pcb_width = int(cfg['PcbWidth']/dom.spacing[2])
+    gridHoleShape = cfg['GridHoleShape']
+
     gridPotential = cfg['GridPotential']
     cathodePotential = cfg['CathodePotential']
     pp_loweredge = int(cfg['pixelPlaneLowEdgePosition']/dom.spacing[0])
@@ -427,7 +428,7 @@ def generator(dom, cfg, info_msg=None, gridHoleShape='rectangular'):
     barr = numpy.zeros(dom.shape)
     if gridHoleShape == 'circular':
         draw_pcb_plane((len(arr),len(arr[0])), arr, barr, pp_loweredge+pcb_width, r1, gridPotential) # Draw the PCB plane with holes circular
-    elif gridHoleShape == 'rectangular':
+    elif gridHoleShape == 'square':
         draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential) # Draw the PCB plane with holes rounded square
     barr[arr==0]=0
     

@@ -201,6 +201,7 @@ def generator(dom, cfg):
     
     r1 = int(round(cfg['HoleRadius']/dom.spacing[0])-1)
     pcb_width = int(cfg['PcbWidth']/dom.spacing[0])
+    gridHoleShape = cfg['GridHoleShape']
 
     arr = numpy.zeros(dom.shape)
     barr = numpy.zeros(dom.shape)
@@ -217,12 +218,12 @@ def generator(dom, cfg):
     print(f'p_size={p_size}, p_gap={p_gap}, n_pix={n_pix}, pp_width={pp_width}, pp_loweredge={pp_loweredge}')
 
     # Target pixel centre coordinates (used for iterative target_voltage seeding)
-    center    = int(n_pix / 2)
-    x0_tgt    = int(p_gap / 2) + center * (p_size + p_gap)
-    x_tgt_mid = x0_tgt + p_size // 2
-    y0_tgt    = x0_tgt
-    y_tgt_mid = x_tgt_mid
-    z_tgt_mid = pp_loweredge + pp_width // 2
+    # center    = int(n_pix / 2)
+    # x0_tgt    = int(p_gap / 2) + center * (p_size + p_gap)
+    # x_tgt_mid = x0_tgt + p_size // 2
+    # y0_tgt    = x0_tgt
+    # y_tgt_mid = x_tgt_mid
+    # z_tgt_mid = pp_loweredge + pp_width // 2
 
     # Iterative IDW initialisation along z-axis in chunks of chunk_size.
     # For the first chunk the target voltage is 1.0 (the electrode voltage).
@@ -255,8 +256,10 @@ def generator(dom, cfg):
     #     vmax=1.0,
     #     cmap="RdBu_r",
     # ) 
-    # draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1) ## Draw the PCB plane with holes circular
-    draw_3Dstrips_sq(barr, p_gap, p_size, n_pix, pp_loweredge, pcb_width) ## Draw the PCB plane with holes rounded square
+    if gridHoleShape == 'circular':
+        draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1) ## Draw the PCB plane with holes circular
+    elif gridHoleShape == 'square':
+        draw_3Dstrips_sq(barr, p_gap, p_size, n_pix, pp_loweredge, pcb_width) ## Draw the PCB plane with holes rounded square
     # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
     barr[:,:,0]=1

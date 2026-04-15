@@ -1,6 +1,7 @@
 {
     "HoleRadius" : 1.9,
     "PcbWidth" : 3.2,
+    "GridHoleShape" : "square",
     "pixelPlaneLowEdgePosition" : 10,
     "pixelPlaneWidth" : 0.1,
     "pixelSize" : 3.8,

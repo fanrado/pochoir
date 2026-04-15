@@ -152,7 +152,8 @@ want starts/drift3d \
 want paths/drift3d_tight \
      pochoir drift --starts starts/drift3d \
      --velocity velocity/drift3d \
-     --paths paths/drift3d_tight '0*us,320*us,0.05*us'
+     --paths paths/drift3d_tight '0*us,100*us,0.05*us'
+     # --paths paths/drift3d_tight '0*us,320*us,0.05*us'
 
 
 ##

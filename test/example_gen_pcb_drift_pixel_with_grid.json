@@ -1,6 +1,7 @@
 {
     "HoleRadius" : 1.9,
     "PcbWidth" : 3.2,
+    "GridHoleShape" : "square",
     "GridPotential" :  -1000,
     "CathodePotential" : -7000,
     "pixelPlaneLowEdgePosition" : 10,
