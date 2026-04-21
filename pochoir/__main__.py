@@ -584,6 +584,7 @@ def starts(ctx, starts, mode, points):
     # fixme: we say we don't allow numpy in main...
     if mode=="yes":
         points = make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4)
+        # points = make_pixel_start_points(z_depth=305, ngridpoints=10, pitch=4.4)
     else:
         npoints = len(points)
         if not npoints:
@@ -919,60 +920,22 @@ def induce(ctx, charge, weighting, paths, average,nstrips, output):
                 domain=domain, paths=paths,average=average,nsteps=nsteps, weighting=weighting)
             
         
-def _shift_paths_pixel_grid(the_paths, n_paths=100, n_pixels=25,
+def _shift_paths_pixel_grid(the_paths, n_paths=100, half_n=1,
                              pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8):
-    """Shift drift paths onto a 3x3 pixel grid centred on the collection pixel.
-
-    The input ``the_paths`` array contains ``n_paths`` prototype paths that
-    were simulated inside a single pixel cell.  This function tiles those paths
-    across the 3x3 neighbourhood of pixels surrounding (and including) the
-    central collection pixel so that induced-current contributions from
-    neighbouring pixels can be evaluated.
-
-    Geometry
-    --------
-    ``pixel_pitch``  – centre-to-centre distance between adjacent pixels.
-    ``pixel_gap``    – gap between pixel edges (= pixel_pitch - pixel_size).
-                       Half of this value (``pixel_gap/2``) is the offset from
-                       a pixel edge to the coordinate origin used in the
-                       simulation.
-    ``pixel_size``   – physical side length of one pixel.
-
-    The origin of the simulated paths sits at the corner of the pixel cell.
-    Each shifted path is translated so that its origin coincides with the
-    centre of the target pixel.  The base offset applied to every path is:
-
-        base_x = pixel_gap/2 + pixel_size/2 + 2 * pixel_pitch
-        base_y = 2 * pixel_pitch + pixel_gap/2 + pixel_size/2
-
-    which places the path set at pixel column 0, row 0 of the 3×3 grid.
-    Subsequent columns and rows are reached by adding multiples of
-    ``pixel_pitch`` in x and y respectively.
-
-    Path sampling
-    -------------
-    ``n_paths``   – number of prototype paths (default 100 = 10×10 grid).
-    ``n_pixels``  – total pixels in the 3×3 neighbourhood (default 25 = 5×5
-                    sub-grid per pixel, but the outer loop dimension is the
-                    square root, ``sp1 = int(n_paths**0.5) = 10`` and
-                    ``sp2 = int(n_pixels**0.5) = 5``).
-
-    The 3×3 pixel columns use ``sp1`` levels for columns 0 and 1, and ``sp2``
-    levels for column 2.  Similarly, each column iterates ``sp1`` paths for
-    pixel rows 0 and 1, and ``sp2`` paths for pixel row 2.  This asymmetry
-    reflects the fact that only a 5×5 sub-sample of the 10×10 path grid is
-    needed for the two outermost pixel positions.
+    """Shift drift paths onto a (2*half_n+1)x(2*half_n+1) pixel grid.
 
     Parameters
     ----------
     the_paths : array-like, shape (n_paths, n_steps, 3)
-        Prototype drift paths.  Each path is a list of [x, y, z] positions.
+        Prototype drift paths simulated inside a single pixel cell.
     n_paths : int
-        Number of prototype paths (must equal sp1**2 where sp1 = sqrt(n_paths)).
-    n_pixels : int
-        Number of neighbouring pixels (must equal sp2**2 where sp2 = sqrt(n_pixels)).
+        Number of prototype paths (default 100 = 10×10 grid).
+    half_n : int
+        Half-width of the pixel neighbourhood.  The output grid is
+        (2*half_n+1) × (2*half_n+1) pixels, e.g. half_n=1 → 3×3,
+        half_n=4 → 9×9.
     pixel_pitch : float
-        Centre-to-centre pixel pitch in the same units as the path coordinates.
+        Centre-to-centre pixel pitch in the same units as path coordinates.
     pixel_gap : float
         Gap between pixel edges (pixel_pitch - pixel_size).
     pixel_size : float
@@ -981,34 +944,30 @@ def _shift_paths_pixel_grid(the_paths, n_paths=100, n_pixels=25,
     Returns
     -------
     shifted_paths : list of list
-        Flattened list of shifted paths, one entry per (pixel column, pixel row,
-        path index) combination.
+        Flattened list of shifted paths, one per (col, row, path) triple.
     """
-    sp1 = int(n_paths ** 0.5)       # 10 — paths per dimension
-    sp2 = int(n_pixels ** 0.5)      # 5  — outer-pixel levels per dimension
+    sp = int(n_paths ** 0.5)   # paths per dimension inside one pixel cell
 
+    # Centre of the collection pixel in domain coordinates.
+    # The prototype paths start at the pixel-cell corner, so the centre is
+    # offset by half_gap + half_size from that corner.
     half_gap = pixel_gap / 2.0
     half_size = pixel_size / 2.0
-    base_x = half_gap + half_size + 2.0 * pixel_pitch
-    base_y = 2.0 * pixel_pitch + half_gap + half_size
-
-    # Row counts per pixel row index (0-based): sp1 paths for rows 0 & 1, sp2 for row 2
-    row_counts = [sp1, sp1, sp2]
-    # Level counts per pixel column index: sp1 levels for cols 0 & 1, sp2 for col 2
-    col_levels = [sp1, sp1, sp2]
+    centre_offset = half_gap + half_size
 
     shifted_paths = []
-    for px_col, n_levels in enumerate(col_levels):
-        dx = px_col * pixel_pitch
-        for lvl in range(n_levels):
-            for px_row, n_rows in enumerate(row_counts):
-                dy = px_row * pixel_pitch
-                for i in range(n_rows):
-                    newpath = [
-                        [base_x + dx + x[0], base_y + dy + x[1], x[2]]
-                        for x in the_paths[i + lvl * sp1]
-                    ]
-                    shifted_paths.append(newpath)
+    for ix in range(-half_n, half_n + 1):
+        for iy in range(-half_n, half_n + 1):
+            dx = ix * pixel_pitch
+            dy = iy * pixel_pitch
+            for i in range(sp * sp):
+                newpath = [
+                    [centre_offset + dx + x[0],
+                     centre_offset + dy + x[1],
+                     x[2]]
+                    for x in the_paths[i]
+                ]
+                shifted_paths.append(newpath)
     return shifted_paths
 
 
@@ -1061,8 +1020,10 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
         #        #newpath = [[0.8+2.2/2+x[0]+i*1.0*(3.8),x[1]+3.8+0.8+2.2/2,x[2]] for x in the_paths[j]]
         #        shifted_paths.append(newpath)
         #100 paths for ND
-        shifted_paths = _shift_paths_pixel_grid(the_paths, n_paths=100, n_pixels=25,
-                             pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
+        # shifted_paths = _shift_paths_pixel_grid(the_paths, n_paths=100, n_pixels=25,
+        #                      pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
+        shifted_paths = _shift_paths_pixel_grid(the_paths, n_paths=100, half_n=int(npixels),
+                                pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
 
     # print(f'Shifted_paths[0,0] : {shifted_paths[0][0]}') 
     # print(f'old_paths[0,0] : {old_paths[0][0]}')
