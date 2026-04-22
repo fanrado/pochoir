@@ -20,7 +20,9 @@ do_domain () {
          pochoir domain --domain domain/$name \
          --shape=$shape --spacing $spacing
 }
-do_domain drift3d  44,44,1500  '0.1*mm'
+do_domain drift3d  44,44,3100  '0.1*mm'
+# do_domain drift3d  44,44,1500  '0.1*mm'
+
 
 # # fixme: these weight* identifiers need to split up for N planes.
 # #do_domain weight2d 1092,2000   '0.1*mm'
@@ -85,7 +87,8 @@ do_domain () {
 }
 
 # do_domain weight3d 396,396,1500 '0.1*mm' #220,220,1500 '0.1*mm'
-do_domain weight3d 220,220,1500 '0.1*mm'
+# do_domain weight3d 220,220,300 '0.1*mm'
+do_domain weight3d 396,396,3100 '0.1*mm'
 
 ## Initial/Boundary Value Arrays ##
 do_gen () {
@@ -120,7 +123,7 @@ do_fdm () {
          --increment increment/$name \
          --multisteps no
 }
-do_fdm weight3d 1      5000000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
+do_fdm weight3d 10      5000000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
 python parse_maxerr.py store/pochoir_weightingfield.log store/maxerr_weightingfield.png store/summary_log_weightingfield.pdf
 #
 echo "=== Velocities ==="
@@ -134,13 +137,25 @@ want velocity/drift3d \
 # # ## Need to be run separately
 echo "=== Paths ==="
 
+# 10x10 grid per pixel (0.44 mm spacing), 100 starting points total
 dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,148*mm")
+         points+=("${d}*mm,${d2}*mm,305*mm")
      done
 done
+
+# 5x5 grid per pixel (0.88 mm spacing), 25 starting points total
+# Matches the 45x45 output layout of reference simulations (9x9 pixels x 5x5 per pixel)
+# Each point is centred in a 0.88 mm sub-cell: first centre at 0.44 mm
+# dist=(0.44 1.32 2.20 3.08 3.96)
+# points=()
+# for d in "${dist[@]}"; do
+#      for d2 in "${dist[@]}"; do
+#          points+=("${d}*mm,${d2}*mm,29.6*mm")
+#      done
+# done
 ## Paths
 want starts/drift3d \
     pochoir starts --starts starts/drift3d \
@@ -152,7 +167,7 @@ want starts/drift3d \
 want paths/drift3d_tight \
      pochoir drift --starts starts/drift3d \
      --velocity velocity/drift3d \
-     --paths paths/drift3d_tight '0*us,100*us,0.05*us'
+     --paths paths/drift3d_tight '0*us,210*us,0.05*us'
      # --paths paths/drift3d_tight '0*us,320*us,0.05*us'
 
 
@@ -163,4 +178,4 @@ want current/induced_current \
      pochoir induce-pixel --weighting potential/weight3d \
      --paths paths/drift3d_tight \
      --output current/induced_current \
-     --npixels 2.0
+     --npixels 4

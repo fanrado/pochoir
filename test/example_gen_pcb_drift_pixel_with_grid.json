@@ -1,12 +1,12 @@
 {
     "HoleRadius" : 1.9,
     "PcbWidth" : 3.2,
-    "GridHoleShape" : "square",
+    "GridHoleShape" : "None",
     "GridPotential" :  -1000,
-    "CathodePotential" : -7000,
+    "CathodePotential" : -15000,
     "pixelPlaneLowEdgePosition" : 10,
     "pixelPlaneWidth" : 0.1,
     "pixelSize" : 3.8,
     "pixelGap" : 0.6,
-    "Npixels" : 5
+    "Npixels" : 9
 }

@@ -23,7 +23,7 @@ def set_core1(dst, src, core):
 def set_core2(dst, src, core):
     dst[core] = src
 
-# @torch.compile
+@torch.compile
 def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, 
                    core, periodic, spacing=1.0, source=None):
     # if source is not None:
@@ -82,11 +82,11 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
     mutable_core = torch.tensor(numpy.invert(barr.astype(numpy.bool)), requires_grad=False, dtype=_dtype).to(device)
     tmp_core = torch.zeros(iarr.shape, requires_grad=False, dtype=_dtype).to(device)
 
-    barr_pad = torch.tensor(numpy.pad(barr, 1), requires_grad=False, dtype=_dtype).to(device)
+    # barr_pad = torch.tensor(numpy.pad(barr, 1), requires_grad=False, dtype=_dtype).to(device)
     iarr_pad = torch.tensor(numpy.pad(iarr, 1), requires_grad=False, dtype=_dtype).to(device)
     core = core_slices1(iarr_pad)
 
-    iarr_pad_source = iarr_pad.clone().detach().requires_grad_(False).to(device)
+    # iarr_pad_source = iarr_pad.clone().detach().requires_grad_(False).to(device)
     source = None ## Variable to hold the source term for poisson equation, if phi0 is provided
     non_padded_phi0 = None ## Variable to hold the original phi0 before padding, for computing the source term without the influence of padding values.
     if phi0 is not None:
@@ -215,31 +215,31 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
     end_time = time.time()
     info_msg(f'FDM solve time: {end_time - start_time:.2f} seconds, Nepochs = {nepochs}, steps per epoch = {epoch}')
 
-    if source is not None:
-        spacing = 1.0 ## Need to include this at the top of the function later.
-        # print(f'device for phi0: {phi0.device}, dtype for phi0: {phi0.dtype}')
-        # iarr_pad = torch.zeros(iarr_pad.shape, requires_grad=False, dtype=_dtype).to(device)
-        phi0 = phi0 + iarr_pad[core].cpu() ## Add the computed potential to the original phi0 to get the updated potential with BCs applied, which will be used to compute the source term for the next iteration if needed.
-        phi0_ = torch.tensor(numpy.pad(phi0, 1), requires_grad=False, dtype=_dtype).to(device)
-        # numpy.pad fills the halo with zeros, but stencil(phi0) at the outermost interior
-        # cells will then pull in those zeros as neighbour values, making the computed source
-        # term artificially large at the domain edges.  edge_condition propagates the actual
-        # interior values into the halo (same BCs as iarr_pad), fixing the stencil there.
-        # path_to_padded_phi0 = potential.split('/')[0] + '/padded_phi0'
-        # ctx.obj.put(path_to_padded_phi0, phi0.cpu(), taxon='padded_phi0', **params)
-        # print(f'padded phi0 saved to {path_to_padded_phi0}')
-        edge_condition(phi0_, *periodic)
-        # print(f'---shape of phi0 after edge condition: {phi0.shape}, max value: {torch.max(phi0)}, min value: {torch.min(phi0)}')
-        s = stencil(phi0_).detach()
-        # edge_condition(s, *periodic)
-        # iarr_pad_source[core] = bi_core + mutable_core * s
+    # if source is not None:
+    #     spacing = 1.0 ## Need to include this at the top of the function later.
+    #     # print(f'device for phi0: {phi0.device}, dtype for phi0: {phi0.dtype}')
+    #     # iarr_pad = torch.zeros(iarr_pad.shape, requires_grad=False, dtype=_dtype).to(device)
+    #     phi0 = phi0 + iarr_pad[core].cpu() ## Add the computed potential to the original phi0 to get the updated potential with BCs applied, which will be used to compute the source term for the next iteration if needed.
+    #     phi0_ = torch.tensor(numpy.pad(phi0, 1), requires_grad=False, dtype=_dtype).to(device)
+    #     # numpy.pad fills the halo with zeros, but stencil(phi0) at the outermost interior
+    #     # cells will then pull in those zeros as neighbour values, making the computed source
+    #     # term artificially large at the domain edges.  edge_condition propagates the actual
+    #     # interior values into the halo (same BCs as iarr_pad), fixing the stencil there.
+    #     # path_to_padded_phi0 = potential.split('/')[0] + '/padded_phi0'
+    #     # ctx.obj.put(path_to_padded_phi0, phi0.cpu(), taxon='padded_phi0', **params)
+    #     # print(f'padded phi0 saved to {path_to_padded_phi0}')
+    #     edge_condition(phi0_, *periodic)
+    #     # print(f'---shape of phi0 after edge condition: {phi0.shape}, max value: {torch.max(phi0)}, min value: {torch.min(phi0)}')
+    #     s = stencil(phi0_).detach()
+    #     # edge_condition(s, *periodic)
+    #     # iarr_pad_source[core] = bi_core + mutable_core * s
         
-        # Multiply by mutable_core to zero out the source at fixed boundary cells (barr=True).
-        # At those cells ss[core]=bi_core, so any mismatch with phi0[core] would produce a
-        # spurious non-zero source — but boundary cells are overwritten by bi_core anyway,
-        # so their source term is physically meaningless and should be suppressed.
-        # source = -(6/spacing**2)*(iarr_pad_source[core] - phi0[core]) * mutable_core
-        source = -(6/spacing**2)*(s - non_padded_phi0)#* mutable_core
-        path_to_source = potential.split('/')[0] + '/nabla_phi'
-        ctx.obj.put(path_to_source, source.cpu(), taxon='nabla_phi', **params)
+    #     # Multiply by mutable_core to zero out the source at fixed boundary cells (barr=True).
+    #     # At those cells ss[core]=bi_core, so any mismatch with phi0[core] would produce a
+    #     # spurious non-zero source — but boundary cells are overwritten by bi_core anyway,
+    #     # so their source term is physically meaningless and should be suppressed.
+    #     # source = -(6/spacing**2)*(iarr_pad_source[core] - phi0[core]) * mutable_core
+    #     source = -(6/spacing**2)*(s - non_padded_phi0)#* mutable_core
+    #     path_to_source = potential.split('/')[0] + '/nabla_phi'
+    #     ctx.obj.put(path_to_source, source.cpu(), taxon='nabla_phi', **params)
     return (iarr_pad[core].cpu(), err.cpu())
