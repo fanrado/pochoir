@@ -20,7 +20,7 @@ do_domain () {
          pochoir domain --domain domain/$name \
          --shape=$shape --spacing $spacing
 }
-do_domain drift3d  44,44,500  '0.1*mm'
+do_domain drift3d  "${POCHOIR_DRIFT_SHAPE:-44,44,500}"  '0.1*mm'
 # do_domain drift3d  44,44,1500  '0.1*mm'
 
 
@@ -88,7 +88,7 @@ do_domain () {
 }
 
 # do_domain weight3d 220,220,1500 '0.1*mm' #220,220,1500 '0.1*mm'
-do_domain weight3d 220,220,500 '0.1*mm'
+do_domain weight3d "${POCHOIR_WEIGHT_SHAPE:-220,220,500}" '0.1*mm'
 # do_domain weight3d 396,396,1500 '0.1*mm'
 
 ## Initial/Boundary Value Arrays ##
