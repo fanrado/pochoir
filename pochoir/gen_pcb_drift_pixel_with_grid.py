@@ -165,6 +165,9 @@ def trimCorner(arr, x, y, z1, z2, corner, val=0):
     (``val=1``)::
 
         trimCorner(barr, x_corner, y_corner, z1, z2, corner=0, val=1)
+
+    TO DO:
+        include Chamfer radius to round the corners and match what Jiangmei has.
     """
     if corner == 0:
         arr[x-3:x+1, y,       z1:z2] = val
@@ -276,7 +279,7 @@ def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_lowe
 ##----
 
 import sys
-def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, cathodePotential, gridPotential):
+def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, cathodePotential, gridPotential, epsilon=None):
     """Draw the pixel collection plane as solid pads with rounded-square corners.
 
     Initialises the full volume with the cathode potential and a solid boundary
@@ -385,14 +388,20 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
     # Same plot but clipped to first 150 z-planes, with large markers to prove surface-like render
     barr_clipped = barr[:, :, :150]
     mask_clip = barr_clipped != 0
+    if epsilon is not None:
+        mask_eps = (epsilon[:,:,:150] != 1.5) & (epsilon[:,:,:150] != 0)
     if mask_clip.any():
         xi, yi, zi = numpy.where(mask_clip)
+        if epsilon is not None:
+            xii, yii, zii = numpy.where(mask_eps)
         for marker_size, fname in [(2, 'domain_drift_barr_3d_clipped150_s2.png'),
                                    (20, 'domain_drift_barr_3d_clipped150_s20.png'),
                                    (200, 'domain_drift_barr_3d_clipped150_s200.png')]:
             fig = plt.figure(figsize=(10, 8))
             ax = fig.add_subplot(111, projection='3d')
-            sc = ax.scatter(xi, yi, zi, c=zi, cmap='viridis', s=marker_size, alpha=0.4, marker=',')
+            if epsilon is not None:
+                scc = ax.scatter(xii, yii, zii, cmap='viridis', s=marker_size, marker=',', edgecolors='k', linewidth=1)
+            sc = ax.scatter(xi, yi, zi, c=zi, cmap='viridis', s=marker_size, marker=',', alpha=0.3)
             plt.colorbar(sc, ax=ax, label='z index')
             ax.set_xlabel('x')
             ax.set_ylabel('y')
@@ -426,13 +435,35 @@ def generator(dom, cfg, info_msg=None):
 
     arr = numpy.zeros(dom.shape)
     barr = numpy.zeros(dom.shape)
+
+    ## epsilon is an array of the dielectric constants
+    epsilon = None
+    LArPermittivity = cfg.get('LArPermittivity', None)
+    FR4Permittivity = cfg.get('FR4Permittivity', None)
+    if gridHoleShape in ['circular', 'square'] and LArPermittivity is not None and FR4Permittivity is not None:
+        epsilon = numpy.zeros(dom.shape)
+        ## This is correct if there was no hole in the FR4
+        # epsilon[:, :, pp_loweredge+pp_width+1:pp_loweredge+pp_width+pcb_width-1] = FR4Permittivity
+        epsilon[:, :, pp_loweredge+pp_width+pcb_width+1:] = LArPermittivity
     if gridHoleShape == 'circular':
         draw_pcb_plane((len(arr),len(arr[0])), arr, barr, pp_loweredge+pcb_width, r1, gridPotential) # Draw the PCB plane with holes circular
+        ## We need to use a mask to define the holes in the FR4 and set the permittivity to LAr in those holes
+        ## round hole
+        Nx, Ny = len(arr),len(arr[0])
+        xi, yi = numpy.mgrid[0:Nx, 0:Ny]
+        # Zero out the 4 quarter-holes at the corners
+        for cx, cy in [(0, 0), (Nx-1, 0), (0, Ny-1), (Nx-1, Ny-1)]:
+            mask = (xi - cx)**2 + (yi - cy)**2 <= r1**2
+            epsilon[:, :, pp_loweredge+pp_width+1:pp_loweredge+pp_width+pcb_width-1][mask] = LArPermittivity
+
     elif gridHoleShape == 'square':
         draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential) # Draw the PCB plane with holes rounded square
+        ## We need to use a mask to define the holes in the FR4 and set the permittivity to LAr in those holes
+        ## square hole
     barr[arr==0]=0
-    
-    draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential)
+
+
+    draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential, epsilon=epsilon)
     
 
     if info_msg is not None:
@@ -452,4 +483,4 @@ def generator(dom, cfg, info_msg=None):
         info_msg(f'barr[:, :, pp_loweredge] = {barr[:, :, pp_loweredge]}')
         
         info_msg(f'p_size = {p_size}, p_gap = {p_gap}, n_pix = {n_pix}, pp_width = {pp_width}')
-    return arr,barr
+    return arr,barr, epsilon

@@ -20,7 +20,7 @@ do_domain () {
          pochoir domain --domain domain/$name \
          --shape=$shape --spacing $spacing
 }
-do_domain drift3d  44,44,3100  '0.1*mm'
+do_domain drift3d  44,44,500  '0.1*mm'
 # do_domain drift3d  44,44,1500  '0.1*mm'
 
 
@@ -54,6 +54,7 @@ do_fdm () {
     local epoch=$1 ; shift
     local prec=$1 ; shift
     local edges=$1 ; shift
+    local epsilon="initial/drift3d_epsilon"
 
     want potential/$name \
          pochoir fdm \
@@ -86,9 +87,9 @@ do_domain () {
          --shape=$shape --spacing $spacing
 }
 
-# do_domain weight3d 396,396,1500 '0.1*mm' #220,220,1500 '0.1*mm'
-# do_domain weight3d 220,220,300 '0.1*mm'
-do_domain weight3d 396,396,3100 '0.1*mm'
+# do_domain weight3d 220,220,1500 '0.1*mm' #220,220,1500 '0.1*mm'
+do_domain weight3d 220,220,500 '0.1*mm'
+# do_domain weight3d 396,396,1500 '0.1*mm'
 
 ## Initial/Boundary Value Arrays ##
 do_gen () {
@@ -123,7 +124,9 @@ do_fdm () {
          --increment increment/$name \
          --multisteps no
 }
-do_fdm weight3d 10      5000000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
+     #     --epsilon initial/weight3d_epsilon
+# do_fdm weight3d 10      5000000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
+do_fdm weight3d 10      5000000      0.00000002   per,per,fix #5000000 ### try 100 epochs, and more steps per epoch
 python parse_maxerr.py store/pochoir_weightingfield.log store/maxerr_weightingfield.png store/summary_log_weightingfield.pdf
 #
 echo "=== Velocities ==="
@@ -131,7 +134,7 @@ echo "=== Velocities ==="
 want velocity/drift3d \
      pochoir velo --temperature '87.0*K' \
      --potential potential/drift3d \
-     --velocity velocity/drift3d
+     --velocity velocity/drift3d \
 #
 
 # # ## Need to be run separately
@@ -139,10 +142,12 @@ echo "=== Paths ==="
 
 # 10x10 grid per pixel (0.44 mm spacing), 100 starting points total
 dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
+# dist=(0.2217 0.6651 1.1085 1.5519 1.9953 2.4387 2.8821 3.3255 3.7689 4.2123)
+# dist=(0.22  0.66  1.1  1.54  1.98  2.42  2.86  3.3   3.74  4.18  4.62  5.06  5.5   5.94  6.38  6.82  7.26  7.7 8.14  8.58  9.02  9.46  9.9  10.34 10.78 11.22 11.66 12.1  12.54 12.98 13.42 13.86 14.3  14.74 15.18 15.62 16.06 16.5  16.94 17.38 17.82 18.26 18.7  19.14 19.58) ## starting points in responsev2b_2mmpad_dict if pitch=4.4mm
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,305*mm")
+         points+=("${d}*mm,${d2}*mm,48*mm")
      done
 done
 
@@ -159,10 +164,10 @@ done
 ## Paths
 want starts/drift3d \
     pochoir starts --starts starts/drift3d \
-    -m no \
+    -m yes \
     ${points[@]}
 
-#rm -r /Users/sergey/Desktop/ICARUS/LArStand/pochoir/test/store/paths
+# #rm -r /Users/sergey/Desktop/ICARUS/LArStand/pochoir/test/store/paths
 
 want paths/drift3d_tight \
      pochoir drift --starts starts/drift3d \
@@ -178,4 +183,4 @@ want current/induced_current \
      pochoir induce-pixel --weighting potential/weight3d \
      --paths paths/drift3d_tight \
      --output current/induced_current \
-     --npixels 4
+     --npixels 4 

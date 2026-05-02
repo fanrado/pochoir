@@ -3,6 +3,8 @@
 Apply FDM solution to solve Laplace boundary value problem with torch.
 '''
 
+import sys
+
 import numpy
 import torch
 from .arrays import core_slices1
@@ -12,7 +14,7 @@ import numpy as np
 
 from torch.profiler import profile, record_function, ProfilerActivity # For profiling the performance of the solver
 
-from .fdm_generic import edge_condition, stencil, stencil_poisson
+from .fdm_generic import edge_condition, stencil, stencil_poisson, stencil_poisson_harmonic
 
 # torch.set_default_dtype(torch.float32)
 # torch.float64 = torch.float32
@@ -25,27 +27,16 @@ def set_core2(dst, src, core):
 
 @torch.compile
 def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, 
-                   core, periodic, spacing=1.0, source=None):
-    # if source is not None:
-    #     # warmup outside of the profiler so one-time CUDA costs don't pollute results
-    #     stencil_poisson(iarr_pad.clone(), source=source.clone(), spacing=spacing, res=tmp_core.clone())
-
-    #     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA], record_shapes=True, profile_memory=True, with_stack=False) as prof:
-    #         # with record_function("compiled_step"):
-    #             stencil_poisson(iarr_pad, source=source, spacing=spacing, res=tmp_core)
-    #             # torch.cuda.synchronize() # Ensure all GPU operations are complete before measuring time
-    #     print(prof.key_averages().table(
-    #         sort_by="cuda_time_total", 
-    #         row_limit=20
-    #     ))
-    #     prof.export_chrome_trace(f"stencil_poisson_runtime_profile.json")
-    #     sys.exit()
-    stencil_poisson(iarr_pad, source=source, spacing=spacing, res=tmp_core)
+                   core, periodic, spacing=1.0, source=None, epsilon=None):
+    if epsilon is None: # The bug was here: the condition was "epsilon is not None" instead of "epsilon is None"
+        stencil_poisson(iarr_pad, source=source, spacing=spacing, res=tmp_core)
+    else:
+        stencil_poisson_harmonic(iarr_pad, eps=epsilon, res=tmp_core)
     iarr_pad[core] = bi_core + mutable_core * tmp_core
     edge_condition(iarr_pad, *periodic, info_msg=None)
 
 
-def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torch.float64, phi0=None, ctx=None, potential=None, increment=None, params=None):
+def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torch.float64, phi0=None, ctx=None, potential=None, increment=None, params=None, epsilon=None):
     '''
     Solve boundary value problem
 
@@ -86,6 +77,7 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
     iarr_pad = torch.tensor(numpy.pad(iarr, 1), requires_grad=False, dtype=_dtype).to(device)
     core = core_slices1(iarr_pad)
 
+    epsilon_pad = torch.tensor(numpy.pad(epsilon, 1), requires_grad=False, dtype=_dtype).to(device) if epsilon is not None else None
     # iarr_pad_source = iarr_pad.clone().detach().requires_grad_(False).to(device)
     source = None ## Variable to hold the source term for poisson equation, if phi0 is provided
     non_padded_phi0 = None ## Variable to hold the original phi0 before padding, for computing the source term without the influence of padding values.
@@ -170,7 +162,7 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
                 prev = iarr_pad.clone().detach().requires_grad_(False)
 
             # _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic)
-            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, spacing=1.0, source=source)
+            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, spacing=1.0, source=source, epsilon=epsilon_pad)
             # stencil(iarr_pad, tmp_core)
             # iarr_pad[core] = bi_core + mutable_core * tmp_core
             # edge_condition(iarr_pad, *periodic, info_msg=None)

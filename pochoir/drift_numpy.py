@@ -155,9 +155,9 @@ def solve_sde(domain, start, velocity, dl, dt, times, verbose=False, rng=None):
     dt = 1000 * dt / units.m / units.us     # transverse diffusion (m^2/us)
 
     # Diagnostics (optional)
-    print("Velocity z-axis =", velocity[2][25,15,3000], " (units m/us)")
-    print("DL =", dl[25,15,3000], " (units m^2/us)")
-    print("DT =", dt[25,15,3000], " (units m^2/us)")
+    # print("Velocity z-axis =", velocity[2][25,15,3000], " (units m/us)")
+    # print("DL =", dl[25,15,3000], " (units m^2/us)")
+    # print("DT =", dt[25,15,3000], " (units m^2/us)")
 
     start = numpy.array(start, dtype=float)
     velocity = [numpy.array(v, dtype=float) for v in velocity]

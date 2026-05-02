@@ -212,6 +212,8 @@ def generator(dom, cfg):
     n_pix = cfg['Npixels']
     pp_width = int(cfg['pixelPlaneWidth']/dom.spacing[0])
     pp_loweredge = int(cfg['pixelPlaneLowEdgePosition']/dom.spacing[0])
+    LArpermittivity = cfg['LArPermittivity']
+    FR4permittivity = cfg['FR4Permittivity']
 
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
@@ -256,8 +258,60 @@ def generator(dom, cfg):
     #     vmax=1.0,
     #     cmap="RdBu_r",
     # ) 
+    epsilon = None
     if gridHoleShape == 'circular':
         draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1) ## Draw the PCB plane with holes circular
+        epsilon = numpy.zeros(dom.shape)
+        shape = (int(len(epsilon)/n_pix), int(len(epsilon[0])/n_pix))
+
+        xc = int(shape[0]/2 - 1)
+        yc = int(shape[1]/2 - 1)
+
+        # Draw circle boundary for one pixel tile
+        id_circ3 = draw_quarter(xc, yc, r1)
+        id_circ2 = mirror_xaxis(id_circ3, xc, yc, r1)
+        id_circ4 = mirror_yaxis(id_circ3, xc, yc, r1)
+        id_circ1 = mirror_center(id_circ3, xc, yc)
+        barr1 = form_quarter_boundary(id_circ1, xc, yc)
+        barr2 = form_quarter_boundary(id_circ2, xc, yc)
+        barr3 = form_quarter_boundary(id_circ3, xc, yc)
+        barr4 = form_quarter_boundary(id_circ4, xc, yc)
+
+        # z-ranges
+        z_lar_above  = pp_loweredge + pp_width + pcb_width + 1  # above shield
+        z_pcb_start  = pp_loweredge + pp_width                  # bottom of FR4+shield volume
+        z_pcb_end    = pp_loweredge + pp_width + pcb_width      # top of FR4+shield volume
+
+        # LAr above the shield grid
+        epsilon[:, :, z_lar_above:] = LArpermittivity
+
+        # Fill the entire FR4+shield volume with FR4 first
+        epsilon[:, :, z_pcb_start:z_pcb_end] = FR4permittivity
+
+        # Carve holes (LAr) in a single pixel tile using the circle boundary
+        tile = epsilon[:shape[0], :shape[1], z_pcb_start:z_pcb_end]
+        fill_area(tile, barr1, LArpermittivity)
+        fill_area(tile, barr2, LArpermittivity)
+        fill_area(tile, barr3, LArpermittivity)
+        fill_area(tile, barr4, LArpermittivity)
+
+        # Tile the single-pixel pattern across the full 5x5 grid
+        for i in range(n_pix):
+            for j in range(n_pix):
+                epsilon[i*shape[0]:(i+1)*shape[0], j*shape[1]:(j+1)*shape[1], z_pcb_start:z_pcb_end]\
+                      = epsilon[:shape[0], :shape[1], z_pcb_start:z_pcb_end]
+        fig = plt.figure(figsize=(10,10))
+        ax = fig.add_subplot(111, projection='3d')
+        x, y, z = numpy.where(epsilon[:,:,pp_loweredge:150] != 1.5)
+        sc = ax.scatter(x, y, z, cmap='viridis', s=1, alpha=0.5, marker=',')
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title('3D plot of epsilon (permittivity)')
+        # ax.view_init(elev=70, azim=50)  # Adjust the elevation and azimuth for better visualization
+        plt.tight_layout()
+        plt.savefig('store/epsilon_3d.png', dpi=150)
+        plt.close()
     elif gridHoleShape == 'square':
         draw_3Dstrips_sq(barr, p_gap, p_size, n_pix, pp_loweredge, pcb_width) ## Draw the PCB plane with holes rounded square
     # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
@@ -275,7 +329,7 @@ def generator(dom, cfg):
     plot_barr_3d(barr, save_path='store/barr_3d.png')
     plot_barr_3d(arr, save_path='store/arr_3d.png', alpha=0.5, s=2, cmap='viridis')
 
-    return arr,barr
+    return arr,barr,epsilon
 
 
 def plot_barr_3d(barr, save_path='store/barr_3d.png', alpha=0.3, s=1, cmap='viridis'):

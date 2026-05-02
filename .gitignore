@@ -13,4 +13,4 @@ notes.*
 *.hdf
 store
 .snakemake
-
+*PLAN*

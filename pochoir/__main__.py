@@ -220,7 +220,7 @@ def gen(ctx, domain, generator, initial, boundary, configs):
     # info_msg("domain={}".format(dom))
     # info_msg("cfg={}".format(cfg))
     
-    iarr, barr = meth(dom, cfg)#, info_msg) # iarr is initial array, barr is boundary array
+    iarr, barr, epsilon = meth(dom, cfg)#, info_msg) # iarr is initial array, barr is boundary array
     
     # info_msg("initial array shape={}, boundary array shape={}".format(iarr.shape, barr.shape))
     # info_msg("initial array dtype={}, boundary array dtype={}".format(iarr.dtype, barr.dtype))
@@ -229,6 +229,8 @@ def gen(ctx, domain, generator, initial, boundary, configs):
                   command="gen", config=','.join(configs))
     ctx.obj.put(initial, iarr, taxon="initial", **params)
     ctx.obj.put(boundary, barr, taxon="boundary", **params)
+    if epsilon is not None:
+        ctx.obj.put(initial+"_epsilon", epsilon, taxon="permittivity", **params)
 
     
 @cli.command()
@@ -300,6 +302,8 @@ def init(ctx, initial, boundary, ambient, domain, filenames):
               help="Input initial value array")
 @click.option("-b","--boundary", type=str,
               help="Input the boundary array")
+@click.option('--epsilon', type=str, default=None,
+              help="Input the permittivity array for Poisson equation")
 @click.option("-e","--edges", type=str,
               help="Comma separated list of 'fixed' or 'periodic' giving domain edge conditions")
 @click.option("--precision", type=float, default=0.0,
@@ -321,7 +325,7 @@ def init(ctx, initial, boundary, ambient, domain, filenames):
 @click.pass_context
 def fdm(ctx, initial, boundary,
         edges, precision, epoch, nepochs, engine,
-        potential, increment, multisteps):
+        potential, increment, multisteps, epsilon):
     '''
     Apply finite-difference method.
 
@@ -340,6 +344,9 @@ def fdm(ctx, initial, boundary,
 
     iarr, imd = ctx.obj.get(initial, True)
     barr, bmd = ctx.obj.get(boundary, True)
+    eps = None
+    if epsilon is not None:
+        eps, bmd = ctx.obj.get(epsilon, True) if epsilon else (None, None)
     if not "domain" in bmd:
         click.echo(f'failed to get domain for {boundary}')
         info_msg(f'failed to get domain for {boundary}')
@@ -388,7 +395,7 @@ def fdm(ctx, initial, boundary,
         ctx.obj.put(increment, err, taxon="increment", **params)
     else:
         phi_0, err_phi0 = solve(iarr, barr, bool_edges,
-                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64, epsilon=eps) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
         ctx.obj.put(potential, phi_0, taxon="potential", **params)
         ctx.obj.put(increment, err_phi0, taxon="increment", **params)
 
@@ -559,7 +566,7 @@ def make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4, spacing=No
     if spacing is None:
         spacing = pitch / ngridpoints  # e.g. 4.4/10 = 0.44 mm
     half = spacing / 2.0                    # cell-centred offset: 0.22 mm
-
+    
     points = []
     for j in range(ngridpoints):
         x = half + j * spacing
@@ -584,7 +591,8 @@ def starts(ctx, starts, mode, points):
     # fixme: we say we don't allow numpy in main...
     if mode=="yes":
         # points = make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4)
-        points = make_pixel_start_points(z_depth=305, ngridpoints=10, pitch=4.4)
+        points = make_pixel_start_points(z_depth=148, ngridpoints=10, pitch=4.4)
+        
     else:
         npoints = len(points)
         if not npoints:
@@ -941,7 +949,8 @@ def _shift_paths_pixel_grid(the_paths, npaths=10, npixels=5, pixel_pitch=4.4, pi
         List of shifted paths covering the full pixel grid, each path being a
         list of [x, y, z] coordinate triplets translated to its pixel position.
     """
-    npix = int(npixels/2) # 4
+    npix = int(npixels/2)
+    nedge = npaths // 2  # scales with npaths; averaging by (npaths//10) gives same output as npaths=10
     center_pos_x = npix*pixel_pitch + pixel_gap/2 + pixel_size/2
     center_pos_y = npix*pixel_pitch + pixel_gap/2 + pixel_size/2
     new_shifted_paths = []
@@ -952,17 +961,17 @@ def _shift_paths_pixel_grid(the_paths, npaths=10, npixels=5, pixel_pitch=4.4, pi
                     newpath = [[center_pos_x+x[0]+ix_pix*pixel_pitch, center_pos_y+x[1]+iy_pix*pixel_pitch, x[2]] for x in the_paths[i+lvl*npaths]]
                     new_shifted_paths.append(newpath)
 
-            for i in range(5):
+            for i in range(nedge):
                 newpath = [[center_pos_x+x[0]+ix_pix*pixel_pitch, center_pos_y+x[1]+npix*pixel_pitch, x[2]] for x in the_paths[i+lvl*npaths]]
                 new_shifted_paths.append(newpath)
 
-    for lvl in range(5):
+    for lvl in range(nedge):
         for iy_pix in range(npix):
             for i in range(npaths):
                 newpath = [[center_pos_x+x[0]+npix*pixel_pitch, center_pos_y+x[1]+iy_pix*pixel_pitch, x[2]] for x in the_paths[i+lvl*npaths]]
                 new_shifted_paths.append(newpath)
 
-        for i in range(5):
+        for i in range(nedge):
             newpath = [[center_pos_x+x[0]+npix*pixel_pitch, center_pos_y+x[1]+npix*pixel_pitch, x[2]] for x in the_paths[i+lvl*npaths]]
             new_shifted_paths.append(newpath)
     return new_shifted_paths
@@ -1000,6 +1009,8 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
     ticks = pochoir.arrays.linspace(pmd['tstart'], pmd['tstop'],
                                     pmd['nsteps'], endpoint=False)
     rgi = pochoir.arrays.rgi(dom.linspaces, wpot)
+    print(f'dom.linspaces : {dom.linspaces}')
+    sys.exit()
     shift_x = dom.shape[0]*dom.spacing[0]/2.0
     shift_y = 0#dom.shape[1]*dom.spacing[1]/2.0
     shifted_paths = []
@@ -1020,10 +1031,9 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
         #                      pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
         # shifted_paths = _shift_paths_pixel_grid(the_paths, n_paths=100, n_pixels=25,
         #                         pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
-        shifted_paths = _shift_paths_pixel_grid(the_paths, npaths=10, npixels=9, pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
-    
-    numpy.save('store/shifted_paths.npy', shifted_paths)
-    numpy.save('store/old_paths.npy', the_paths)
+        shifted_paths = _shift_paths_pixel_grid(the_paths=the_paths, npaths=10, npixels=9, pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
+    # numpy.save('store/shifted_paths.npy', shifted_paths)
+    # numpy.save('store/old_paths.npy', the_paths)
     # print(f'Shifted_paths[0,0] : {shifted_paths[0][0]}') 
     # print(f'old_paths[0,0] : {old_paths[0][0]}')
     # print("TotalPaths after shifting=",len(shifted_paths))
@@ -1035,6 +1045,7 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
             newpath = [[shift_x+x[0],x[1]+shift_y,x[2]] for x in the_paths[i]]
             shifted_paths.append(newpath)
         shifted_paths=numpy.array(shifted_paths)
+
     print("TotalPaths=",len(shifted_paths))
     import numpy as _np
     _sp = _np.array(shifted_paths)

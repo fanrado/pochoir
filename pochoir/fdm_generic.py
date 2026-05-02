@@ -77,6 +77,45 @@ def stencil(array, res = None):
     # s = time.time()
     # info_msg(f'stencil compute = {s - stencil1_time:.4f} seconds')
     res *= norm
+def stencil(array, res = None):
+    '''
+    Return sum of 2N views of N-D array.
+
+    Each view for a dimension is offset by +/- one cell.
+
+    The shape of the returned array is reduced by two indices in each
+    dimension.  If res is given, it must be of reduced size and it
+    will be used to hold the result.
+    '''
+    # stencil0_time = time.time()
+    # whole array slice
+    slices = [slice(1,s-1) for s in array.shape]
+    nd = len(slices)
+    norm = 1/(2*nd)
+
+    if res is None:
+        core_shape = [s-2 for s in array.shape]
+        # core_shape = [s for s in array.shape]
+        amod = arrays.module(array)
+        if arrays.is_torch(array):
+            res = amod.zeros(core_shape, dtype=array.dtype, device=array.device)
+        else:
+            res = amod.zeros(core_shape)
+    else:
+        res[:] = 0
+    # stencil1_time = time.time()
+    # info_msg(f'tmp_core init = {stencil1_time - stencil0_time:.2f} seconds')
+    for dim, n in enumerate(array.shape):
+        pos = list(slices)
+        pos[dim] = slice(2,n)
+        res += array[tuple(pos)]
+
+        neg = list(slices)
+        neg[dim] = slice(0,n-2)
+        res += array[tuple(neg)]
+    # s = time.time()
+    # info_msg(f'stencil compute = {s - stencil1_time:.4f} seconds')
+    res *= norm
     # info_msg(f'stencil norm = {time.time() - s:.4f} seconds')
     return res
 
@@ -137,4 +176,66 @@ def stencil_poisson(array, source=None, spacing=1.0, res=None):
         res -= (spacing ** 2) * source*norm ## corrected the sign here, since we are solving ∇²φ = -f = source, 
                         #so the source term contribution should be subtracted from the stencil result to get the updated φ values.
 
+    return res
+
+def stencil_poisson_harmonic(phi, eps, res=None):
+    '''
+    Return the Poisson-equation update for phi with harmonically averaged
+    interface permittivities, operating on the full interior at once.
+
+    Computes for each interior cell:
+
+        φ[i,j,k] = numerator / denominator
+
+    where:
+        numerator   = Σ_d  ( ε[i+½,…] * φ[i+1,…] + ε[i-½,…] * φ[i-1,…] )
+        denominator = Σ_d  ( ε[i+½,…] + ε[i-½,…] )
+
+    and ε[i±½,…] = 2*ε[i]*ε[i±1] / (ε[i] + ε[i±1])  (harmonic average).
+
+    Parameters
+    ----------
+    phi : N-D array of the current potential field (including boundary halo)
+    eps : N-D array of permittivities (same shape as phi)
+    res : optional pre-allocated output array of reduced (interior) shape
+
+    Returns
+    -------
+    res : array of shape (s0-2, s1-2, …) with the updated interior phi values
+    '''
+    slices = [slice(1, s - 1) for s in phi.shape]
+    nd = len(slices)
+    amod = arrays.module(phi)
+
+    if res is None:
+        core_shape = [s - 2 for s in phi.shape]
+        if arrays.is_torch(phi):
+            res = amod.zeros(core_shape, dtype=phi.dtype, device=phi.device)
+        else:
+            res = amod.zeros(core_shape)
+
+    denom = amod.zeros_like(res)
+
+    eps_core = eps[tuple(slices)]  # ε[i, j, k] for all interior points
+
+    for dim, n in enumerate(phi.shape):
+        # --- positive neighbour: i+1 along this dim ---
+        pos = list(slices)
+        pos[dim] = slice(2, n)
+        eps_pos = eps[tuple(pos)]                              # ε[i+1, …]
+        phi_pos = phi[tuple(pos)]                              # φ[i+1, …]
+        e_pos = (2 * eps_core * eps_pos) / (eps_core + eps_pos)  # ε[i+½, …]
+
+        # --- negative neighbour: i-1 along this dim ---
+        neg = list(slices)
+        neg[dim] = slice(0, n - 2)
+        eps_neg = eps[tuple(neg)]                              # ε[i-1, …]
+        phi_neg = phi[tuple(neg)]                              # φ[i-1, …]
+        e_neg = (2 * eps_core * eps_neg) / (eps_core + eps_neg)  # ε[i-½, …]
+
+        res   += e_pos * phi_pos + e_neg * phi_neg
+        denom += e_pos + e_neg
+    print(f'stencil_poisson_harmonic: max denom = {denom.max()}, min denom = {denom.min()}')
+    sys.exit()
+    res /= denom
     return res
