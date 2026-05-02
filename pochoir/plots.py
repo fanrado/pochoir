@@ -103,7 +103,9 @@ def quiver(varr, fname, domain, step=100, limits=None, scale=1.0):
             
     else:                       # 3D
         fig = plt.figure()
-        ax = fig.gca(projection='3d')
+        # matplotlib >= 3.5 removed kwargs on Figure.gca(); the documented
+        # replacement for `gca(projection='3d')` is `add_subplot(projection='3d')`.
+        ax = fig.add_subplot(projection='3d')
         #ax.set_xlim3d(0,domain.shape[0]*domain.spacing[0])
         #ax.set_ylim3d(0,domain.shape[1]*domain.spacing[1])
         #ax.set_zlim3d(0,domain.shape[2]*domain.spacing[2])
