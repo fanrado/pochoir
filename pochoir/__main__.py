@@ -4,8 +4,6 @@ CLI to pochoir
 
 pochoir [global options] <command> [command options] [arguments]
 
-FIXME: most of this verbiage belongs in the manual.
-
 Most commands here can be thought of nodes in a DAG joined by entries
 in the pochoir data store.
 
@@ -424,7 +422,7 @@ def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
     bc = md['boundary']
     barr = ctx.obj.get(bc)
     pot = pot#*units.V
-    print("TEST=",pot[1,1,-1],"; Spacing=",*dom.spacing)
+    debug_msg(f"TEST={pot[1,1,-1]}; Spacing={dom.spacing}")
     efield = pochoir.arrays.gradient(pot, *dom.spacing)
     flag = barr==1
     efield[0][flag]=0
@@ -464,7 +462,7 @@ def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
     #efield[2][:,:,:]=48.67*units.V
     
     #temp=87.7
-    print("temp=",temp)
+    debug_msg(f"temp={temp}")
     emag = pochoir.arrays.vmag(efield)
     mu = pochoir.lar.mobility(emag, temp)
     if dl_key is not None:
@@ -475,47 +473,20 @@ def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
     varr=numpy.array(varr)
     #varr[2][:,:,:101]=0
     
-    speed= emag
-    speed_unit = units.mm/units.us
-    speed_z = varr[2][:,:,:]/speed_unit
-    import matplotlib.pyplot as plt
-    #Draw for PCB
-    # x = numpy.linspace(0,420,4200)
-    # x = numpy.linspace(0, 200, 2000) ## original
-    # x = numpy.linspace(0, 200, 1500) ## changed this to 1500
-    # for i in range(0,25):
-    #     for j in range(0,17):
-    #         # print(f'len(x) = {len(x)}, len(speed_z[i,j,:]) = {len(speed_z[i,j,:])}')
-    #         plt.plot(x,speed_z[i,j,:])
-    # #         #if i==10 and j==8:
-    # #         #    for l in range(1,len(x)-1):
-    # #         #        print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
-    # # Draw for Pixel
-    # # x = numpy.linspace(0,150,1500)
-    # # for i in range(0,38):
-    # #    for j in range(0,38):
-    # #     plt.plot(x,speed_z[i,j,:])
-    # #     if i==10 and j==8:
-    # #         for l in range(1,len(x)-1):
-    # #             print(x[l]," ",pot[i,j,l]," ",(pot[i,j,l+1]-pot[i,j,l-1]))
-    # # plt.show()
-    # plt.savefig('store/velocity_z.png')
-    # plt.close()
-    # print(f'units.V : {units.V}, units.mm : {units.mm}, units.us : {units.us}')
     params = dict(domain=domain, command="velo",
                   potential=potential, temperature=temp)
     # save velocity
     efield_path = '/'.join([velocity.split('/')[0], 'efield'])
     ctx.obj.put(efield_path, efield, **{**params, "taxon": "efield"})
     ctx.obj.put(velocity, varr, **{**params, "taxon": "velocity"})
-    print("velocity shape=",varr.shape)
+    debug_msg(f"velocity shape={varr.shape}")
     # save dl/dt if keys provided
     if dl_key is not None:
         ctx.obj.put(dl_key, dl, **{**params, "taxon": "diffusion_longitudinal"})
-    print("dl shape=",dl_key)
+    debug_msg(f"dl shape={dl_key}")
     if dt_key is not None:
         ctx.obj.put(dt_key, dt, **{**params, "taxon": "diffusion_transverse"})
-    print("dt shape=",dt_key)
+    debug_msg(f"dt shape={dt_key}")
 
 @cli.command()
 @click.option("-s", "--scalar", type=str,
@@ -581,14 +552,15 @@ def make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4, spacing=No
               help="Output starts points array")
 @click.option("-m","--mode", default="no", type=str,
               help="enable hardcodede array input")
+@click.option("--plot/--no-plot", default=False,
+              help="If set, write a scatter PNG of the starting points to store/starting_points.png")
 @click.argument("points", nargs=-1)
 @click.pass_context
-def starts(ctx, starts, mode, points):
+def starts(ctx, starts, mode, plot, points):
     '''
     Store "starting" points.
     '''
     import numpy
-    # fixme: we say we don't allow numpy in main...
     if mode=="yes":
         # points = make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4)
         points = make_pixel_start_points(z_depth=148, ngridpoints=10, pitch=4.4)
@@ -599,22 +571,22 @@ def starts(ctx, starts, mode, points):
             raise ValueError("require at least one point")
         points = [pochoir.arrays.fromstr1(p) for p in points]
     
-    print(points)
-    print('POINTS')
-    print(len(points))
+    debug_msg(f"POINTS (n={len(points)}): {points}")
     
     # import numpy
     arr = numpy.asarray(points)
-    import matplotlib.pyplot as plt
-    # draw points for PCB
-    plt.figure(figsize=(10,10))
-    plt.scatter(arr[:,0],arr[:,1])
-    plt.title('starting points')
-    plt.xlabel('x')
-    plt.ylabel('y')
-    plt.savefig('store/starting_points.png')
-    plt.close()
-    print("whatether we save: ",arr)
+    if plot:
+        import os
+        import matplotlib.pyplot as plt
+        os.makedirs('store', exist_ok=True)
+        plt.figure(figsize=(10,10))
+        plt.scatter(arr[:,0],arr[:,1])
+        plt.title('starting points')
+        plt.xlabel('x')
+        plt.ylabel('y')
+        plt.savefig('store/starting_points.png')
+        plt.close()
+    debug_msg(f"whatever we save: {arr}")
     ctx.obj.put(starts, arr, taxon="points", command="starts")
 
 
@@ -634,15 +606,17 @@ def starts(ctx, starts, mode, points):
 @click.option("--engine", type=click.Choice(["numpy", "torch","numpyold"]),
               default="numpy",
               help="The IVP engine to use")
+@click.option("--plot/--no-plot", default=False,
+              help="If set, write a 3D plot of the drift paths to store/drift_paths_3d.png")
 @click.argument("steps", nargs=-1)
 @click.pass_context
-def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, steps):
+def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, plot, steps):
     '''
     Calculate drift paths.
     '''
-    print('START DRIFT ')
+    debug_msg('START DRIFT')
     start_points = ctx.obj.get(starts)
-    print("all start_points: ",start_points)
+    debug_msg(f"all start_points: {start_points}")
     if start_points is None:
         click.echo(f'no starts: {starts}')
         return -1
@@ -677,21 +651,20 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, steps):
             path = drift_numpy.solve_sde(dom, point, velo, dl, dt , ticks, verbose=verbose)
         thepaths[ind]=path
 
-    # plot the drift paths
-    import matplotlib.pyplot as plt
-    # plt.figure(figsize=(10,10))
-    # create 3d plot 
-    fig = plt.figure(figsize=(10,10))
-    ax = fig.add_subplot(111, projection='3d')
-    for i in range(0,thepaths.shape[0]):
-        # plt.plot(thepaths[i,:,0],thepaths[i,:,1])
-        ax.plot(thepaths[i,:,0],thepaths[i,:,1],thepaths[i,:,2])
-    plt.title('drift paths')
-    ax.set_xlabel('x')
-    ax.set_ylabel('y')
-    ax.set_zlabel('z')
-    plt.savefig('store/drift_paths_3d.png')
-    plt.close()
+    if plot:
+        import os
+        import matplotlib.pyplot as plt
+        os.makedirs('store', exist_ok=True)
+        fig = plt.figure(figsize=(10,10))
+        ax = fig.add_subplot(111, projection='3d')
+        for i in range(0,thepaths.shape[0]):
+            ax.plot(thepaths[i,:,0],thepaths[i,:,1],thepaths[i,:,2])
+        plt.title('drift paths')
+        ax.set_xlabel('x')
+        ax.set_ylabel('y')
+        ax.set_zlabel('z')
+        plt.savefig('store/drift_paths_3d.png')
+        plt.close()
     params=dict(taxon="paths", command="drift", domain=domain,
                 tstart=start, tstop=stop, nsteps=nsteps)
     ctx.obj.put(paths, thepaths, **params)
@@ -976,6 +949,43 @@ def _shift_paths_pixel_grid(the_paths, npaths=10, npixels=5, pixel_pitch=4.4, pi
             new_shifted_paths.append(newpath)
     return new_shifted_paths
 
+_PIXEL_GEOMETRY_REQUIRED_KEYS = ("pixelSize", "pixelGap", "Npixels")
+
+
+def _load_pixel_geometry(config_paths):
+    """Load pixel geometry from one or more JSON configs.
+
+    Returns a dict with float values for ``pixel_size``, ``pixel_gap``,
+    ``pixel_pitch`` (derived as ``pixelSize + pixelGap``) and int ``npixels``.
+    Raises ``KeyError`` naming the missing key if any required field is absent,
+    and ``ValueError`` if no config path is supplied.
+    """
+    if not config_paths:
+        raise ValueError(
+            "induce-pixel requires --config pointing at the JSON used to "
+            "generate the weighting potential (keys: "
+            f"{', '.join(_PIXEL_GEOMETRY_REQUIRED_KEYS)})"
+        )
+    cfg = {}
+    for path in config_paths:
+        with open(path, "rb") as fh:
+            cfg.update(json.loads(fh.read().decode()))
+    missing = [k for k in _PIXEL_GEOMETRY_REQUIRED_KEYS if k not in cfg]
+    if missing:
+        raise KeyError(
+            f"pixel geometry config missing required key(s) {missing} "
+            f"(loaded from {list(config_paths)})"
+        )
+    pixel_size = float(cfg["pixelSize"])
+    pixel_gap = float(cfg["pixelGap"])
+    return {
+        "pixel_size": pixel_size,
+        "pixel_gap": pixel_gap,
+        "pixel_pitch": pixel_size + pixel_gap,
+        "npixels": int(cfg["Npixels"]),
+    }
+
+
 @cli.command()
 @click.option("-q","--charge", default=1.0,
               help="The amount of drifting charge")
@@ -987,10 +997,14 @@ def _shift_paths_pixel_grid(the_paths, npaths=10, npixels=5, pixel_pitch=4.4, pi
               help="Average N paths along strip")
 @click.option("-n","--npixels", default=1.0,
               help="Calculate current for n pixels from the central as well ")
+@click.option("-c","--config", "configs", type=click.Path(exists=True), multiple=True,
+              help="JSON config(s) holding pixelSize, pixelGap, Npixels (same files passed to `gen`)")
 @click.option("-O", "--output", type=str,
               help="Output array holding induced current waveforms")
+@click.option("--plot/--no-plot", default=False,
+              help="If set, write a charge waveform PNG to store/charge.png")
 @click.pass_context
-def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
+def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, output, plot):
     '''
     Calculate induced current.
 
@@ -1010,28 +1024,20 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
                                     pmd['nsteps'], endpoint=False)
     rgi = pochoir.arrays.rgi(dom.linspaces, wpot)
     print(f'dom.linspaces : {dom.linspaces}')
-    sys.exit()
     shift_x = dom.shape[0]*dom.spacing[0]/2.0
     shift_y = 0#dom.shape[1]*dom.spacing[1]/2.0
     shifted_paths = []
     print("input paths shape : ",the_paths.shape)
     # sys.exit()
     if npixels>1:
-        #dx = dom.shape[0]*dom.spacing[0]/npixels
-        #print("dx=",dx)
-        #for i in range(0,int(npixels)):
-        #    for j in range(0,len(the_paths)):
-        #        #bigger pixle
-        #        newpath = [[0.3+3.8/2+x[0]+i*1.0*(4.4),x[1]+4.4+0.3+3.8/2,x[2]] for x in the_paths[j]]
-        #        #smaller pixle
-        #        #newpath = [[0.8+2.2/2+x[0]+i*1.0*(3.8),x[1]+3.8+0.8+2.2/2,x[2]] for x in the_paths[j]]
-        #        shifted_paths.append(newpath)
-        #100 paths for ND
-        # shifted_paths = _shift_paths_pixel_grid(the_paths, n_paths=100, n_pixels=25,
-        #                      pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
-        # shifted_paths = _shift_paths_pixel_grid(the_paths, n_paths=100, n_pixels=25,
-        #                         pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
-        shifted_paths = _shift_paths_pixel_grid(the_paths=the_paths, npaths=10, npixels=9, pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8)
+        geom = _load_pixel_geometry(configs)
+        shifted_paths = _shift_paths_pixel_grid(
+            the_paths=the_paths, npaths=10,
+            npixels=geom["npixels"],
+            pixel_pitch=geom["pixel_pitch"],
+            pixel_gap=geom["pixel_gap"],
+            pixel_size=geom["pixel_size"],
+        )
     # numpy.save('store/shifted_paths.npy', shifted_paths)
     # numpy.save('store/old_paths.npy', the_paths)
     # print(f'Shifted_paths[0,0] : {shifted_paths[0][0]}') 
@@ -1062,11 +1068,14 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
     numpy.set_printoptions(threshold=sys.maxsize)
 
     dQ = Q[:, 1:] - Q[:, :-1]
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(10,6))
-    plt.plot(ticks[1:], Q[0,1:], label="Charge")
-    plt.savefig('store/charge.png')
-    plt.close()
+    if plot:
+        import os
+        import matplotlib.pyplot as plt
+        os.makedirs('store', exist_ok=True)
+        plt.figure(figsize=(10,6))
+        plt.plot(ticks[1:], Q[0,1:], label="Charge")
+        plt.savefig('store/charge.png')
+        plt.close()
     dT = ticks[1:] - ticks[:-1]
     # print(f'dT [:10] : {dT[:10]}r')
     # print(f'len(dT) : {len(dT)}')

@@ -183,4 +183,5 @@ want current/induced_current \
      pochoir induce-pixel --weighting potential/weight3d \
      --paths paths/drift3d_tight \
      --output current/induced_current \
-     --npixels 4 
+     --npixels 4 \
+     --config example_gen_pixel_with_grid.json 
