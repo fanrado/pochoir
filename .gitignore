@@ -14,3 +14,14 @@ notes.*
 store
 .snakemake
 *PLAN*
+
+# wogrid scratch / per-machine artifacts (test-full-3d-pixel.sh)
+test/OUTPUT/
+test/bkup_store/
+test/plots/
+test/toy/
+test/review/
+test/log.log
+test/pochoir_stencil_vs_stencil_poisson_torch.log
+toy/*.npy
+env/
