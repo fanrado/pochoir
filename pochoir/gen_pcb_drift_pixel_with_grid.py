@@ -165,9 +165,6 @@ def trimCorner(arr, x, y, z1, z2, corner, val=0):
     (``val=1``)::
 
         trimCorner(barr, x_corner, y_corner, z1, z2, corner=0, val=1)
-
-    TO DO:
-        include Chamfer radius to round the corners and match what Jiangmei has.
     """
     if corner == 0:
         arr[x-3:x+1, y,       z1:z2] = val
@@ -333,11 +330,6 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
     # ## Set the initial values to be random between -7000 and 0 for z=101 and z=1498
     # for i in range(pp_loweredge+2, arr.shape[2]-1):
     #     arr[:, :, i] = numpy.random.uniform(-7000, 0, size=(arr.shape[0], arr.shape[1]))
-    # print(f'arr[:, :, 100] = {arr[:, :, 100]}')
-    # print(f'arr[:, :, 101] = {arr[:, :, 101]}')
-    # print(f'arr[:, :, 1498] = {arr[:, :, 1498]}')
-    # print(f'arr[:, :, 1499] = {arr[:, :, 1499]}')
-    # sys.exit()
     draw_plane(barr,-1,1) # This line sets the boundary values
 
     dims = p_size*n_pix+p_gap*(n_pix-1)
@@ -350,8 +342,6 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
     _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val=0)
     # arr[(p_size+p_gap):(p_size+p_gap)+p_size,(p_size+p_gap):(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
     # draw pixel plane for drift field
-    # print(f'pp_loweredge={pp_loweredge}')
-    # print(f'barr shape={barr.shape}')
     # 3D scatter plot of arr (non-zero voxels colored by potential)
     mask_arr = arr != 0
     if mask_arr.any():
@@ -413,7 +403,6 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
 
     # plt.figure(figsize=(10,10))
     # plt.imshow(arr[:, :, pp_loweredge], origin='lower')
-    # print(f'kdlsjfew arr[43, 43, 1499]={arr[:, :, 1499]}')
     # plt.title('pixel plane')
     # plt.xlabel('x')
     # plt.ylabel('y')
