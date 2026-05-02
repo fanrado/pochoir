@@ -97,7 +97,13 @@ def gradient(array, *spacing):
     '''
     Return the finite difference gradient of the array.
     '''
-    print (f'gradient spacing: {spacing}')
+    # Compatibility shim for numpy >= 1.23: numpy.gradient no longer accepts a
+    # single 1-D array as "one scalar per axis"; passing one length-N array is
+    # interpreted as coordinates for axis 0 and must match that axis length.
+    # Callers (e.g. test_dipole, test_velo) pass dom.spacing as a single arg,
+    # so unpack a length-N sequence into N positional scalars before forwarding.
+    if len(spacing) == 1 and hasattr(spacing[0], '__len__'):
+        spacing = tuple(spacing[0])
     if isinstance(array, numpy.ndarray):
         return numpy.array(numpy.gradient(array, *spacing))
 
@@ -106,7 +112,8 @@ def gradient(array, *spacing):
     # arithmetic operations.  At the cost of possible GPU->CPU->GPU
     # transit, for now we do the dirty:
     a = array.to('cpu').numpy()
-    gvec = numpy.gradient(a, spacing)
+    # Same numpy>=1.23 caveat as above: spread spacings as positional scalars.
+    gvec = numpy.gradient(a, *spacing)
     g = numpy.array(gvec)
     return to_torch(g, device=array.device)
     
