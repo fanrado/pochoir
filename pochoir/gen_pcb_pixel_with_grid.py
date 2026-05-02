@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 
+import logging
 import numpy
-import torch
+
+log = logging.getLogger(__name__)
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 from .gen_pcb_drift_pixel_with_grid import draw_quarter_circle as draw_quarter
-# from pochoir.InverseDistanceWeight_torch import init_idw_pcb_pixel, plot_idw_pcb_pixel
 
 def fill_area(arr,barr,val):
     for b in barr:
@@ -217,47 +218,9 @@ def generator(dom, cfg):
 
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
-    print(f'p_size={p_size}, p_gap={p_gap}, n_pix={n_pix}, pp_width={pp_width}, pp_loweredge={pp_loweredge}')
+    log.debug('p_size=%s, p_gap=%s, n_pix=%s, pp_width=%s, pp_loweredge=%s',
+              p_size, p_gap, n_pix, pp_width, pp_loweredge)
 
-    # Target pixel centre coordinates (used for iterative target_voltage seeding)
-    # center    = int(n_pix / 2)
-    # x0_tgt    = int(p_gap / 2) + center * (p_size + p_gap)
-    # x_tgt_mid = x0_tgt + p_size // 2
-    # y0_tgt    = x0_tgt
-    # y_tgt_mid = x_tgt_mid
-    # z_tgt_mid = pp_loweredge + pp_width // 2
-
-    # Iterative IDW initialisation along z-axis in chunks of chunk_size.
-    # For the first chunk the target voltage is 1.0 (the electrode voltage).
-    # For every subsequent chunk the target voltage is taken from the value at
-    # the target pixel's (x, y) position at the last z-plane of the previous chunk.
-    # _device = 'cuda:1'
-    # chunk_size = 110
-    # # nz_total = arr.shape[2]
-    # nz_total = 300
-    # target_voltage = 1.0
-    # out = init_idw_pcb_pixel(
-    #     arr[:, :, pp_loweredge],
-    #     p_size=p_size,
-    #     p_gap=p_gap,
-    #     n_pix=n_pix,
-    #     target_voltage=target_voltage,
-    #     ground_voltage=0.0,
-    #     power=1.0,
-    #     batch_size=1024,
-    #     device=_device,
-    #     dtype=torch.float32
-    # )
-    # arr[:, :, pp_loweredge] = out.cpu().numpy()
-
-    # plot_idw_pcb_pixel(
-    #     phi=arr[:, :, pp_loweredge],
-    #     title="init_idw_pcb_pixel — IDW initial guess",
-    #     save_path='idw_init_pcb_pixel.png',
-    #     vmin=0.0,
-    #     vmax=1.0,
-    #     cmap="RdBu_r",
-    # ) 
     epsilon = None
     if gridHoleShape == 'circular':
         draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1) ## Draw the PCB plane with holes circular
@@ -347,4 +310,4 @@ def plot_barr_3d(barr, save_path='store/barr_3d.png', alpha=0.3, s=1, cmap='viri
     plt.savefig(save_path, dpi=150)
     # plt.show()
     plt.close()
-    print(f'Saved 3D barr plot to {save_path}')
+    log.info('Saved 3D barr plot to %s', save_path)
