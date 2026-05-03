@@ -2,6 +2,10 @@
 set -e
 export POCHOIR_STORE="${1:-store}"
 
+## Domain shapes (Nx,Ny,Nz). Override via env if needed.
+POCHOIR_DRIFT_SHAPE="${POCHOIR_DRIFT_SHAPE:-44,44,300}"
+POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,300}"
+
 source helpers.sh
 
 # date
@@ -20,7 +24,7 @@ do_domain () {
          pochoir domain --domain domain/$name \
          --shape=$shape --spacing $spacing
 }
-do_domain drift3d  "${POCHOIR_DRIFT_SHAPE:-44,44,500}"  '0.1*mm'
+do_domain drift3d  "$POCHOIR_DRIFT_SHAPE"  '0.1*mm'
 # do_domain drift3d  44,44,1500  '0.1*mm'
 
 
@@ -88,7 +92,7 @@ do_domain () {
 }
 
 # do_domain weight3d 220,220,1500 '0.1*mm' #220,220,1500 '0.1*mm'
-do_domain weight3d "${POCHOIR_WEIGHT_SHAPE:-220,220,500}" '0.1*mm'
+do_domain weight3d "$POCHOIR_WEIGHT_SHAPE" '0.1*mm'
 # do_domain weight3d 396,396,1500 '0.1*mm'
 
 ## Initial/Boundary Value Arrays ##
@@ -147,7 +151,7 @@ dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,48*mm")
+         points+=("${d}*mm,${d2}*mm,28*mm")
      done
 done
 
@@ -164,7 +168,7 @@ done
 ## Paths
 want starts/drift3d \
     pochoir starts --starts starts/drift3d \
-    -m yes \
+    -m no \
     ${points[@]}
 
 # #rm -r /Users/sergey/Desktop/ICARUS/LArStand/pochoir/test/store/paths
@@ -172,7 +176,8 @@ want starts/drift3d \
 want paths/drift3d_tight \
      pochoir drift --starts starts/drift3d \
      --velocity velocity/drift3d \
-     --paths paths/drift3d_tight '0*us,210*us,0.05*us'
+     --paths paths/drift3d_tight '0*us,210*us,0.05*us' \
+     --plot
      # --paths paths/drift3d_tight '0*us,320*us,0.05*us'
 
 
@@ -184,4 +189,5 @@ want current/induced_current \
      --paths paths/drift3d_tight \
      --output current/induced_current \
      --npixels 4 \
-     --config example_gen_pixel_with_grid.json 
+     --config example_gen_pixel_with_grid.json \
+     --plot
