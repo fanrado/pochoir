@@ -136,50 +136,60 @@ def draw_3Dstrips_sq(barr, p_gap, p_size, n_pix, pp_loweredge, pcb_width):
                 trimCorner_pcb(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),pp_loweredge+pcb_width,pcb_width+pp_loweredge+1,2)
 ##----
 
-def trimCorner(arr,x,y,z1,z2,corner):
-    if corner==0:
-        arr[x-3:x+1,y,z1:z2]=0
-        arr[x,y-3:y+1,z1:z2]=0
-        arr[x,y,z1:z2]=0
-        arr[x-1,y-1,z1:z2]=0
-    if corner==1:
-        arr[x-3:x+1,y,z1:z2]=0
-        arr[x,y:y+4,z1:z2]=0
-        arr[x,y,z1:z2]=0
-        arr[x-1,y+1,z1:z2]=0
-    if corner==2:
-        arr[x:x+4,y,z1:z2]=0
-        arr[x,y:y+4,z1:z2]=0
-        arr[x,y,z1:z2]=0
-        arr[x+1,y+1,z1:z2]=0
-    if corner==3:
-        arr[x:x+4,y,z1:z2]=0
-        arr[x,y-3:y+1,z1:z2]=0
-        arr[x,y,z1:z2]=0
-        arr[x+1,y-1,z1:z2]=0
+def trimCorner(arr, x, y, z1, z2, corner, val=0, chamfer_r=4):
+    """Carve a quarter-disk-shaped notch of radius ``chamfer_r`` (in
+    grid-index units) at one inner corner of a square aperture, replacing
+    the sharp 90° tip with a rounded corner.
+
+    ``corner`` selects the quadrant the chamfer box extends into:
+      0 – toward -x, -y    1 – toward -x, +y
+      2 – toward +x, +y    3 – toward +x, -y
+
+    ``chamfer_r <= 0`` is a no-op.
+    """
+    r = int(chamfer_r)
+    if r <= 0:
+        return
+    if corner == 0:
+        x0, x1, y0, y1 = x - r + 1, x + 1, y - r + 1, y + 1
+        cx, cy = x - r + 1, y - r + 1
+    elif corner == 1:
+        x0, x1, y0, y1 = x - r + 1, x + 1, y,         y + r
+        cx, cy = x - r + 1, y + r - 1
+    elif corner == 2:
+        x0, x1, y0, y1 = x,         x + r, y,         y + r
+        cx, cy = x + r - 1, y + r - 1
+    elif corner == 3:
+        x0, x1, y0, y1 = x,         x + r, y - r + 1, y + 1
+        cx, cy = x + r - 1, y - r + 1
+    else:
+        return
+    xi, yi = numpy.mgrid[x0:x1, y0:y1]
+    mask = (xi - cx) ** 2 + (yi - cy) ** 2 > r ** 2
+    arr[x0:x1, y0:y1, z1:z2][mask] = val
 
 
-def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width):
+def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width, chamfer_r=7):
     dims = p_size*n_pix+p_gap*(n_pix-1)
     for i in range(0,n_pix):
         for j in range(0,n_pix):
             barr[int(p_gap/2)+i*(p_size+p_gap):int(p_gap/2)+i*(p_size+p_gap)+p_size,int(p_gap/2)+j*(p_size+p_gap):int(p_gap/2)+j*(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
-            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,0)
-    
-            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,1)
-    
-            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,3)
-    
-            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,2)
+            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,0,chamfer_r=chamfer_r)
+
+            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,1,chamfer_r=chamfer_r)
+
+            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,3,chamfer_r=chamfer_r)
+
+            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,2,chamfer_r=chamfer_r)
             if i==int(n_pix/2) and i==j:
                     arr[int(p_gap/2)+i*(p_size+p_gap):int(p_gap/2)+i*(p_size+p_gap)+p_size,int(p_gap/2)+j*(p_size+p_gap):int(p_gap/2)+j*(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
-                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,0)
-    
-                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,1)
-    
-                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,3)
-    
-                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,2)
+                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,0,chamfer_r=chamfer_r)
+
+                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,1,chamfer_r=chamfer_r)
+
+                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,3,chamfer_r=chamfer_r)
+
+                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,2,chamfer_r=chamfer_r)
     # # draw pixel plane
     # plt.figure(figsize=(10,10))
     # plt.imshow(barr[:,:,pp_loweredge],origin='lower')
@@ -210,13 +220,14 @@ def generator(dom, cfg):
     
     p_size=int(round(cfg["pixelSize"]/dom.spacing[0]))
     p_gap=int(round(cfg["pixelGap"]/dom.spacing[0]))
+    chamfer_r=int(cfg['chamfer_r']/dom.spacing[0])
     n_pix = cfg['Npixels']
     pp_width = int(cfg['pixelPlaneWidth']/dom.spacing[0])
     pp_loweredge = int(cfg['pixelPlaneLowEdgePosition']/dom.spacing[0])
     LArpermittivity = cfg['LArPermittivity']
     FR4permittivity = cfg['FR4Permittivity']
 
-    draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
+    draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width, chamfer_r=chamfer_r)
 
     log.debug('p_size=%s, p_gap=%s, n_pix=%s, pp_width=%s, pp_loweredge=%s',
               p_size, p_gap, n_pix, pp_width, pp_loweredge)
