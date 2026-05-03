@@ -119,72 +119,63 @@ def draw_pcb_plane(shape, arr, barr, z, r1, gridPotential):
         arr[:, :, z][mask] = 0
 
 
-def trimCorner(arr, x, y, z1, z2, corner, val=0):
+def trimCorner(arr, x, y, z1, z2, corner, val=0, chamfer_r=4):
     """Trim (or fill) one rounded corner of a square hole or pad.
 
-    Applies a small L-shaped stencil at one inner corner of a square aperture
-    in order to approximate a rounded corner at grid resolution.  The stencil
-    covers a 4-cell arm along each axis plus one diagonal cell, which together
-    remove (or restore) the sharp 90° tip.
+    Carves a quarter-disk-shaped notch at one inner corner of a square
+    aperture so that the 90° tip is replaced by an arc of radius
+    ``chamfer_r`` (in grid-index units).  The chamfer box is an
+    ``r × r`` square anchored at the inner corner ``(x, y)`` and
+    extending into the pad along the directions implied by ``corner``.
+    Cells of that box whose distance from the box's inward corner exceeds
+    ``r`` are written with ``val``.
 
     Parameters
     ----------
-    arr    : ndarray
+    arr       : ndarray
         3-D boundary or potential array modified in-place.
-    x, y   : int
+    x, y      : int
         Grid indices of the inner corner of the square aperture.
-    z1, z2 : int
+    z1, z2    : int
         z-slice range ``[z1, z2)`` over which the stencil is applied.
-    corner : int
+    corner    : int
         Which of the four inner corners to process, numbered by quadrant:
-          0 – bottom-left  (x arm goes toward -x, y arm toward -y)
-          1 – top-left     (x arm toward -x,     y arm toward +y)
-          2 – top-right    (x arm toward +x,     y arm toward +y)
-          3 – bottom-right (x arm toward +x,     y arm toward -y)
-    val    : int or float, optional
-        Value written into the stencil cells.  Use ``0`` (default) to carve
-        the corner out of a solid region (pixel-plane use case) and ``1`` to
-        fill the corner back into a void (PCB-shield use case).
-
-    Modification history
-    --------------------
-    Originally two separate functions existed: ``trimCorner`` (hardcoded to
-    write 0) and ``trimCorner_pcb`` (hardcoded to write 1).  They were
-    identical except for the fill value.  Both are now replaced by this single
-    function with the ``val`` keyword argument so that the same corner geometry
-    is reused for both the pixel plane (carving rounded holes) and the PCB
-    shield plane (restoring rounded corners into square holes).
-
-    Use cases
-    ---------
-    Pixel plane – carve rounded corners into a solid pad (default ``val=0``)::
-
-        trimCorner(barr, x_corner, y_corner, z1, z2, corner=0)
-
-    PCB shield plane – fill rounded corners back after cutting square holes
-    (``val=1``)::
-
-        trimCorner(barr, x_corner, y_corner, z1, z2, corner=0, val=1)
+          0 – bottom-left  (chamfer box toward -x, -y)
+          1 – top-left     (toward -x, +y)
+          2 – top-right    (toward +x, +y)
+          3 – bottom-right (toward +x, -y)
+    val       : int or float, optional
+        Value written into the carved cells.  ``0`` carves the corner out
+        of a solid region (pixel-plane use case); ``1`` fills the corner
+        back into a void (PCB-shield use case).
+    chamfer_r : int, optional
+        Radius of the rounded corner in grid-index units.  Larger values
+        produce more strongly rounded corners; ``0`` or negative is a
+        no-op (sharp 90° corner).
     """
+    r = int(chamfer_r)
+    if r <= 0:
+        return
     if corner == 0:
-        arr[x-3:x+1, y,       z1:z2] = val
-        arr[x,        y-3:y+1, z1:z2] = val
-        arr[x-1,      y-1,     z1:z2] = val
+        x0, x1, y0, y1 = x - r + 1, x + 1, y - r + 1, y + 1
+        cx, cy = x - r + 1, y - r + 1
     elif corner == 1:
-        arr[x-3:x+1, y,       z1:z2] = val
-        arr[x,        y:y+4,   z1:z2] = val
-        arr[x-1,      y+1,     z1:z2] = val
+        x0, x1, y0, y1 = x - r + 1, x + 1, y,         y + r
+        cx, cy = x - r + 1, y + r - 1
     elif corner == 2:
-        arr[x:x+4,   y,       z1:z2] = val
-        arr[x,        y:y+4,   z1:z2] = val
-        arr[x+1,      y+1,     z1:z2] = val
+        x0, x1, y0, y1 = x,         x + r, y,         y + r
+        cx, cy = x + r - 1, y + r - 1
     elif corner == 3:
-        arr[x:x+4,   y,       z1:z2] = val
-        arr[x,        y-3:y+1, z1:z2] = val
-        arr[x+1,      y-1,     z1:z2] = val
+        x0, x1, y0, y1 = x,         x + r, y - r + 1, y + 1
+        cx, cy = x + r - 1, y - r + 1
+    else:
+        return
+    xi, yi = numpy.mgrid[x0:x1, y0:y1]
+    mask = (xi - cx) ** 2 + (yi - cy) ** 2 > r ** 2
+    arr[x0:x1, y0:y1, z1:z2][mask] = val
 
 
-def _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val):
+def _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val, chamfer_r):
     """Apply ``trimCorner`` to all four inner corners of a square aperture.
 
     Encodes the corner positions and their quadrant indices once so that both
@@ -210,11 +201,11 @@ def _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val):
         (half + p_gap, half + p_gap, 2),
     ]
     for x, y, corner in corners:
-        trimCorner(barr, x, y, z1, z2, corner, val=val)
+        trimCorner(barr, x, y, z1, z2, corner, val=val, chamfer_r=chamfer_r)
 
 
 ## Draw shield plane with square holes, rounded corners
-def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential):
+def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential, chamfer_r):
     """Draw the PCB shield plane as a solid layer with rounded-square holes.
 
     The shield is modelled as a single z-plane that is initially set to solid
@@ -272,11 +263,11 @@ def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_lowe
     barr[0:half,        half+p_gap:,   z] = 0
     barr[half+p_gap:,   0:half,        z] = 0
     barr[half+p_gap:,   half+p_gap:,   z] = 0
-    _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val=1)
+    _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val=1, chamfer_r=chamfer_r)
 ##----
 
 import sys
-def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, cathodePotential, gridPotential, epsilon=None):
+def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, cathodePotential, gridPotential, epsilon=None, chamfer_r=0.7):
     """Draw the pixel collection plane as solid pads with rounded-square corners.
 
     Initialises the full volume with the cathode potential and a solid boundary
@@ -339,7 +330,7 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
     barr[0:half,        half+p_gap:,   z1:z2] = 1
     barr[half+p_gap:,   0:half,        z1:z2] = 1
     barr[half+p_gap:,   half+p_gap:,   z1:z2] = 1
-    _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val=0)
+    _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val=0, chamfer_r=chamfer_r)
     # arr[(p_size+p_gap):(p_size+p_gap)+p_size,(p_size+p_gap):(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
     # draw pixel plane for drift field
     # 3D scatter plot of arr (non-zero voxels colored by potential)
@@ -419,6 +410,7 @@ def generator(dom, cfg, info_msg=None):
     pp_loweredge = int(cfg['pixelPlaneLowEdgePosition']/dom.spacing[0])
     p_size=int(round(cfg["pixelSize"]/dom.spacing[0]))
     p_gap=int(round(cfg["pixelGap"]/dom.spacing[0]))
+    chamfer_r=int(cfg["chamfer_r"]/dom.spacing[0])
     n_pix = cfg['Npixels']
     pp_width = int(cfg['pixelPlaneWidth']/dom.spacing[0])
 
@@ -446,13 +438,13 @@ def generator(dom, cfg, info_msg=None):
             epsilon[:, :, pp_loweredge+pp_width+1:pp_loweredge+pp_width+pcb_width-1][mask] = LArPermittivity
 
     elif gridHoleShape == 'square':
-        draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential) # Draw the PCB plane with holes rounded square
+        draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential, chamfer_r=chamfer_r) # Draw the PCB plane with holes rounded square
         ## We need to use a mask to define the holes in the FR4 and set the permittivity to LAr in those holes
         ## square hole
     barr[arr==0]=0
 
 
-    draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential, epsilon=epsilon)
+    draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential, epsilon=epsilon, chamfer_r=chamfer_r)
     
 
     if info_msg is not None:
