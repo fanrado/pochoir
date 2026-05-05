@@ -316,8 +316,9 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
     """
     draw_plane(arr,-1,cathodePotential) # This line sets the initial values
     # ## Set the initial values to be linear along z
-    # for i in range(pp_loweredge, arr.shape[2]):
-    #     arr[:, :, i] = (-7000/1399)*(i-100)
+    for i in range(pp_loweredge, arr.shape[2]):
+        # arr[:, :, i] = (-15500/3099)*(i-20)
+        arr[:, :, i] = (-7500/1579)*(i-20)
     # ## Set the initial values to be random between -7000 and 0 for z=101 and z=1498
     # for i in range(pp_loweredge+2, arr.shape[2]-1):
     #     arr[:, :, i] = numpy.random.uniform(-7000, 0, size=(arr.shape[0], arr.shape[1]))
