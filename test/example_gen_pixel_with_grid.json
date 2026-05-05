@@ -2,11 +2,11 @@
     "HoleRadius" : 1.9,
     "PcbWidth" : 1.6,
     "GridHoleShape" : "None",
-    "pixelPlaneLowEdgePosition" : 10,
+    "pixelPlaneLowEdgePosition" : 2,
     "pixelPlaneWidth" : 0.1,
     "pixelSize" : 3.5,
     "pixelGap" : 0.9,
-    "chamfer_r": 0.7,
+    "chamfer_r": 0.4,
     "Npixels" : 9,
     "LArPermittivity": 1.5,
     "FR4Permittivity": 4.5
