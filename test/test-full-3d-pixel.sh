@@ -3,8 +3,10 @@ set -e
 export POCHOIR_STORE="${1:-store}"
 
 ## Domain shapes (Nx,Ny,Nz). Override via env if needed.
-POCHOIR_DRIFT_SHAPE="${POCHOIR_DRIFT_SHAPE:-44,44,300}"
-POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,300}"
+# POCHOIR_DRIFT_SHAPE="${POCHOIR_DRIFT_SHAPE:-44,44,3120}"
+# POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,3120}"
+POCHOIR_DRIFT_SHAPE="${POCHOIR_DRIFT_SHAPE:-44,44,1500}"
+POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,1500}"
 
 source helpers.sh
 
@@ -70,7 +72,7 @@ do_fdm () {
          --increment increment/$name \
          --multisteps no
 }
-do_fdm drift3d  20      1000000      0.00000002    per,per,fix #130,000,000
+do_fdm drift3d  40      1000000      0.00000002    per,per,fix #130,000,000
 # do_fdm drift3d  10      100000      0.00002     per,per,fix #130,000,000
 # do_fdm weight2d 1      1200      0.00000002   fix,fix #1250000
 
@@ -151,12 +153,12 @@ dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,28*mm")
+         points+=("${d}*mm,${d2}*mm,310*mm")
      done
 done
 
 # 5x5 grid per pixel (0.88 mm spacing), 25 starting points total
-# Matches the 45x45 output layout of reference simulations (9x9 pixels x 5x5 per pixel)
+# Matches the 45x45 output layout of reference simulations (9x9 pixels  per pixel)
 # Each point is centred in a 0.88 mm sub-cell: first centre at 0.44 mm
 # dist=(0.44 1.32 2.20 3.08 3.96)
 # points=()
@@ -168,8 +170,9 @@ done
 ## Paths
 want starts/drift3d \
     pochoir starts --starts starts/drift3d \
-    -m no \
-    ${points[@]}
+    -m yes \
+    ${points[@]} \
+    --plot
 
 # #rm -r /Users/sergey/Desktop/ICARUS/LArStand/pochoir/test/store/paths
 
