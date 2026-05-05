@@ -38,7 +38,6 @@ Convergence is summarised by `parse_maxerr.py`, which produces
 
 ### System
 
-- Linux (the script has been used on Debian-class hosts).
 - Python 3.9+ with a working virtual environment.
 - A CUDA-capable GPU is **strongly** recommended — the `fdm` step uses the
   `torch` engine and the weighting domain in particular is large
