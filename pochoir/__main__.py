@@ -562,8 +562,8 @@ def starts(ctx, starts, mode, plot, points):
     '''
     import numpy
     if mode=="yes":
-        # points = make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4)
-        points = make_pixel_start_points(z_depth=148, ngridpoints=10, pitch=4.4)
+        points = make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4)
+        # points = make_pixel_start_points(z_depth=300, ngridpoints=10, pitch=4.4)
         
     else:
         npoints = len(points)
@@ -654,6 +654,7 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, plot, s
     if plot:
         import os
         import matplotlib.pyplot as plt
+
         os.makedirs('store', exist_ok=True)
         fig = plt.figure(figsize=(10,10))
         ax = fig.add_subplot(111, projection='3d')
@@ -1053,6 +1054,13 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
         shifted_paths=numpy.array(shifted_paths)
 
     print("TotalPaths=",len(shifted_paths))
+    
+    import numpy as np
+    ## Save the shifted paths : paths on the entire quandrant
+    shifted_paths_output = 'paths_onquadrant'
+    np.savez(shifted_paths_output + '.npz', shifted_paths)
+
+
     import numpy as _np
     _sp = _np.array(shifted_paths)
     startpoints=[]
