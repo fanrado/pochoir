@@ -398,6 +398,97 @@ def fdm(ctx, initial, boundary,
         ctx.obj.put(increment, err_phi0, taxon="increment", **params)
 
 
+@cli.command("fdm-multires")
+@click.option("--target-shape", type=str, required=True,
+              help="Shape of the finest domain as 'Nx,Ny,Nz'")
+@click.option("--target-spacing", type=float, required=True,
+              help="Grid spacing of the finest domain (mm)")
+@click.option("--origin", type=str, default="0,0,0",
+              help="Shared origin for all stages (def: 0,0,0)")
+@click.option("--stages", type=int, required=True,
+              help="Number of resolution stages (>= 1)")
+@click.option("--generator", type=str, required=True,
+              help="Generator function name (pochoir.gen.*)")
+@click.option("--gen-config", "gen_config", type=click.Path(exists=True),
+              default=None, help="JSON generator config file")
+@click.option("--coarsest-spacing", "coarsest_spacing", type=float, default=None,
+              help="Explicit coarsest spacing; overrides auto-pick")
+@click.option("--nepochs-per-stage", "nepochs_per_stage", type=str, default=None,
+              help="Comma-separated per-stage epoch caps")
+@click.option("--epoch", type=int, default=1000,
+              help="Iterations per convergence check (def: 1000)")
+@click.option("--precision", type=float, default=0.0,
+              help="Final convergence tolerance (0 = epoch-cap only)")
+@click.option("--engine",
+              type=click.Choice(["numpy", "numba", "torch", "cupy", "cumba"]),
+              default="numpy", help="FDM engine")
+@click.option("--edges", type=str, default=None,
+              help="Comma-separated 'fixed'/'periodic' per axis (def: all fixed)")
+@click.option("--epoch-base", "epoch_base", type=int, default=200,
+              help="Base for adaptive epoch budget (def: 200)")
+@click.option("--prec-scale-alpha", "prec_scale_alpha", type=float, default=1.0,
+              help="Exponent for per-stage precision relaxation (def: 1.0)")
+@click.option("-P", "--potential", type=str, default="potential",
+              help="Output store key for the final potential (def: potential)")
+@click.pass_context
+def fdm_multires(ctx, target_shape, target_spacing, origin, stages,
+                 generator, gen_config, coarsest_spacing, nepochs_per_stage,
+                 epoch, precision, engine, edges, epoch_base, prec_scale_alpha,
+                 potential):
+    '''
+    Multi-resolution (coarse-to-fine) FDM solve.
+
+    Solves the Laplace equation on a sequence of grids from coarse to fine,
+    using each stage's solution as a warm start for the next finer stage.
+    This dramatically accelerates convergence on large domains by first
+    resolving long-wavelength modes on cheap coarse grids.
+    '''
+    import json
+    import pochoir.util
+    from pochoir.multires import solve_multires
+
+    shape = [int(x) for x in target_shape.split(',')]
+    orig = [float(x) for x in origin.split(',')]
+
+    ndim = len(shape)
+    if edges is None:
+        periodic = [False] * ndim
+    else:
+        periodic = [e.strip().startswith('per') for e in edges.split(',')]
+
+    gen_cfg = {}
+    if gen_config is not None:
+        gen_cfg = json.loads(open(gen_config, 'rb').read().decode())
+        gen_cfg = pochoir.util.unitify(gen_cfg)
+
+    nep = None
+    if nepochs_per_stage is not None:
+        nep = [int(x) for x in nepochs_per_stage.split(',')]
+        if len(nep) != stages:
+            click.echo(f'--nepochs-per-stage must have exactly {stages} entries')
+            sys.exit(-1)
+
+    prec_val = precision if precision > 0 else None
+
+    solve_multires(
+        store=ctx.obj,
+        gen_name=generator,
+        gen_cfg=gen_cfg,
+        target_shape=shape,
+        target_spacing=target_spacing,
+        origin=orig,
+        n_stages=stages,
+        engine=engine,
+        prec=prec_val,
+        epoch=epoch,
+        periodic=periodic,
+        nepochs_per_stage=nep,
+        coarsest_spacing=coarsest_spacing,
+        epoch_base=epoch_base,
+        prec_scale_alpha=prec_scale_alpha,
+        output_key=potential,
+    )
+
 
 @cli.command()
 @click.option("-t", "--temperature", type=str, default="89*K",
