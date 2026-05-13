@@ -7,5 +7,7 @@
     "pixelPlaneWidth" : 0,
     "pixelSize" : 2.2,
     "pixelGap" : 1.6,
-    "Npixels" : 5
+    "Npixels" : 5,
+    "driftZDepth": 28.0,
+    "nGridPoints": 10
 }

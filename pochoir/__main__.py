@@ -519,20 +519,33 @@ def make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4, spacing=No
         Starting z position in grid-index units. z=148 corresponds to 14.8 mm
         from the anode (for a 0.1 mm/cell domain), just above the pixel
         collection plane. All starting points share this fixed depth.
+        JSON config key: ``driftZDepth``.
     ngridpoints : int
         Number of grid points per side: 10 for 10x10, 8 for 8x8, 6 for 6x6.
+        JSON config key: ``nGridPoints``.
     pitch : float
-        Physical pixel side length in mm (default 4.4 mm).
+        Center-to-center pixel spacing in mm, equal to pixelSize + pixelGap.
+        Derived automatically from existing JSON keys ``pixelSize`` and
+        ``pixelGap`` — no dedicated config key required.
     spacing : float or None
         Grid pitch in mm. If None, computed as pitch / ngridpoints
         (e.g. 4.4/10 = 0.44 mm). The first point is placed at spacing/2
         so the grid is cell-centred, matching the convention in
         test-full-3d-pixel.sh: dist=(0.22 0.66 1.10 ... 4.18).
+        JSON config key: ``gridSpacing`` (optional).
 
     Returns
     -------
     points : list of [x, y, z_depth]
         Exactly ngridpoints**2 points, no duplicates.
+
+    JSON config keys summary
+    ------------------------
+    driftZDepth  : float  — maps to z_depth
+    nGridPoints  : int    — maps to ngridpoints
+    gridSpacing  : float  — maps to spacing (optional; derived if absent)
+    pixelSize    : float  — existing key, used to derive pitch
+    pixelGap     : float  — existing key, used to derive pitch
     """
     if spacing is None:
         spacing = pitch / ngridpoints  # e.g. 4.4/10 = 0.44 mm
@@ -552,19 +565,27 @@ def make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4, spacing=No
               help="Output starts points array")
 @click.option("-m","--mode", default="no", type=str,
               help="enable hardcodede array input")
+@click.option("-c","--config", "configs", type=click.Path(exists=True), multiple=True,
+              help="JSON config(s) holding driftZDepth, nGridPoints, gridSpacing (optional), "
+                   "pixelSize, pixelGap.  Used when --mode yes to parameterise the pixel "
+                   "start-point grid.  Same files passed to `gen` and `induce-pixel`.")
 @click.option("--plot/--no-plot", default=False,
               help="If set, write a scatter PNG of the starting points to store/starting_points.png")
 @click.argument("points", nargs=-1)
 @click.pass_context
-def starts(ctx, starts, mode, plot, points):
+def starts(ctx, starts, mode, configs, plot, points):
     '''
     Store "starting" points.
     '''
     import numpy
     if mode=="yes":
-        # points = make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4)
-        points = make_pixel_start_points(z_depth=28, ngridpoints=10, pitch=4.4)
-        
+        params = _load_start_point_config(configs)
+        kwargs = {"z_depth": params["z_depth"], "ngridpoints": params["ngridpoints"]}
+        if params["pitch"] is not None:
+            kwargs["pitch"] = params["pitch"]
+        if params["spacing"] is not None:
+            kwargs["spacing"] = params["spacing"]
+        points = make_pixel_start_points(**kwargs)
     else:
         npoints = len(points)
         if not npoints:
@@ -983,6 +1004,58 @@ def _load_pixel_geometry(config_paths):
         "pixel_gap": pixel_gap,
         "pixel_pitch": pixel_size + pixel_gap,
         "npixels": int(cfg["Npixels"]),
+    }
+
+
+_START_POINT_DEFAULTS = {
+    "driftZDepth": 28.0,
+    "nGridPoints": 10,
+}
+
+
+def _load_start_point_config(config_paths):
+    """Load make_pixel_start_points parameters from one or more JSON configs.
+
+    Required JSON keys (with fallback defaults if no config is supplied):
+      driftZDepth  (float) — z starting position in grid-index units
+      nGridPoints  (int)   — grid points per side
+
+    Optional JSON keys:
+      gridSpacing  (float) — grid pitch in mm; derived from
+                             (pixelSize + pixelGap) / nGridPoints if absent
+      pixelSize    (float) — used to derive pitch (center-to-center spacing)
+      pixelGap     (float) — used to derive pitch
+
+    Returns a dict with keys: z_depth, ngridpoints, pitch, spacing.
+    ``pitch`` is None when neither pixelSize/pixelGap nor gridSpacing are
+    present in the config (make_pixel_start_points will then use its own
+    default pitch of 4.4 mm).
+    """
+    cfg = {}
+    for path in config_paths:
+        with open(path, "rb") as fh:
+            cfg.update(json.loads(fh.read().decode()))
+
+    z_depth = float(cfg.get("driftZDepth", _START_POINT_DEFAULTS["driftZDepth"]))
+    ngridpoints = int(cfg.get("nGridPoints", _START_POINT_DEFAULTS["nGridPoints"]))
+
+    if "pixelSize" in cfg and "pixelGap" in cfg:
+        pitch = float(cfg["pixelSize"]) + float(cfg["pixelGap"])
+    else:
+        pitch = None
+
+    if "gridSpacing" in cfg:
+        spacing = float(cfg["gridSpacing"])
+    elif pitch is not None:
+        spacing = pitch / ngridpoints
+    else:
+        spacing = None
+
+    return {
+        "z_depth": z_depth,
+        "ngridpoints": ngridpoints,
+        "pitch": pitch,
+        "spacing": spacing,
     }
 
 

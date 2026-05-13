@@ -9,5 +9,7 @@
     "chamfer_r": 0.7,
     "Npixels" : 9,
     "LArPermittivity": 1.5,
-    "FR4Permittivity": 4.5
+    "FR4Permittivity": 4.5,
+    "driftZDepth": 28.0,
+    "nGridPoints": 10
 }
