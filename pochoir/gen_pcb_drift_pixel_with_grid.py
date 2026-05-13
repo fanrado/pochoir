@@ -191,9 +191,9 @@ def _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val, chamfer_r):
     z1, z2        : int
         z-slice range ``[z1, z2)`` passed through to ``trimCorner``.
     val           : int or float
-        Fill value forwarded to ``trimCorner`` (0 to carve, 1 to fill).
+        Fill value forwarded to ``trimCorner`` (0 to carve, 1 to fill)
     """
-    half = p_size // 2
+    half = (p_size+1) // 2 ## This change here is related to the comment by Brett about a broken symmetry in the quarter pixels corners/rounded
     corners = [
         (half - 1,     half - 1,     0),
         (half - 1,     half + p_gap, 1),
@@ -258,7 +258,7 @@ def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_lowe
     z1, z2 = z, z + 1
     barr[:, :, z] = 1
     arr[:, :, z]  = gridPotential
-    half = p_size // 2
+    half = (p_size + 1) // 2
     barr[0:half,        0:half,        z] = 0
     barr[0:half,        half+p_gap:,   z] = 0
     barr[half+p_gap:,   0:half,        z] = 0
@@ -324,7 +324,7 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
     draw_plane(barr,-1,1) # This line sets the boundary values
 
     dims = p_size*n_pix+p_gap*(n_pix-1)
-    half = p_size // 2
+    half = (p_size + 1) // 2 ## This change here is related to the comment by Brett about a broken symmetry in the quarter pixels corners/rounded
     z1, z2 = pp_loweredge, pp_width + pp_loweredge + 1
     barr[0:half,        0:half,        z1:z2] = 1
     barr[0:half,        half+p_gap:,   z1:z2] = 1

@@ -129,9 +129,9 @@ do_fdm () {
          --multisteps no
 }
      #     --epsilon initial/weight3d_epsilon
-# do_fdm weight3d 10      5000000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
-do_fdm weight3d 10      5000000      0.00000002   per,per,fix #5000000 ### try 100 epochs, and more steps per epoch
-python parse_maxerr.py store/pochoir_weightingfield.log store/maxerr_weightingfield.png store/summary_log_weightingfield.pdf
+do_fdm weight3d 10      5000000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
+# do_fdm weight3d 10      5000000      0.00000002   per,per,fix #5000000 ### try 100 epochs, and more steps per epoch
+# python parse_maxerr.py store/pochoir_weightingfield.log store/maxerr_weightingfield.png store/summary_log_weightingfield.pdf
 #
 echo "=== Velocities ==="
 ## Velocities
@@ -168,8 +168,9 @@ done
 ## Paths
 want starts/drift3d \
     pochoir starts --starts starts/drift3d \
-    -m no \
-    ${points[@]}
+    -m yes \
+    ${points[@]}\
+    --plot
 
 # #rm -r /Users/sergey/Desktop/ICARUS/LArStand/pochoir/test/store/paths
 

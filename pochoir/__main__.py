@@ -563,7 +563,7 @@ def starts(ctx, starts, mode, plot, points):
     import numpy
     if mode=="yes":
         # points = make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4)
-        points = make_pixel_start_points(z_depth=148, ngridpoints=10, pitch=4.4)
+        points = make_pixel_start_points(z_depth=28, ngridpoints=10, pitch=4.4)
         
     else:
         npoints = len(points)
