@@ -166,6 +166,8 @@ def stencil_poisson_harmonic(phi, eps, res=None):
             res = amod.zeros(core_shape, dtype=phi.dtype, device=phi.device)
         else:
             res = amod.zeros(core_shape)
+    else:
+        res[:] = 0
 
     denom = amod.zeros_like(res)
 
@@ -188,7 +190,5 @@ def stencil_poisson_harmonic(phi, eps, res=None):
 
         res   += e_pos * phi_pos + e_neg * phi_neg
         denom += e_pos + e_neg
-    print(f'stencil_poisson_harmonic: max denom = {denom.max()}, min denom = {denom.min()}')
-    sys.exit()
     res /= denom
     return res
