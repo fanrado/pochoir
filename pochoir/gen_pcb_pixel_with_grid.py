@@ -233,9 +233,18 @@ def generator(dom, cfg):
               p_size, p_gap, n_pix, pp_width, pp_loweredge)
 
     epsilon = None
+    if LArpermittivity is not None and FR4permittivity is not None:
+        epsilon = numpy.full(dom.shape, LArpermittivity)
+        z_pcb_start = pp_loweredge + pp_width
+        z_pcb_end   = pp_loweredge + pp_width + pcb_width
+        epsilon[:, :, z_pcb_start:z_pcb_end] = FR4permittivity
     if gridHoleShape == 'circular':
         draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1) ## Draw the PCB plane with holes circular
-        epsilon = numpy.zeros(dom.shape)
+        if epsilon is None:
+            epsilon = numpy.full(dom.shape, LArpermittivity)
+            z_pcb_start = pp_loweredge + pp_width
+            z_pcb_end   = pp_loweredge + pp_width + pcb_width
+            epsilon[:, :, z_pcb_start:z_pcb_end] = FR4permittivity
         shape = (int(len(epsilon)/n_pix), int(len(epsilon[0])/n_pix))
 
         xc = int(shape[0]/2 - 1)
@@ -250,17 +259,6 @@ def generator(dom, cfg):
         barr2 = form_quarter_boundary(id_circ2, xc, yc)
         barr3 = form_quarter_boundary(id_circ3, xc, yc)
         barr4 = form_quarter_boundary(id_circ4, xc, yc)
-
-        # z-ranges
-        z_lar_above  = pp_loweredge + pp_width + pcb_width + 1  # above shield
-        z_pcb_start  = pp_loweredge + pp_width                  # bottom of FR4+shield volume
-        z_pcb_end    = pp_loweredge + pp_width + pcb_width      # top of FR4+shield volume
-
-        # LAr above the shield grid
-        epsilon[:, :, z_lar_above:] = LArpermittivity
-
-        # Fill the entire FR4+shield volume with FR4 first
-        epsilon[:, :, z_pcb_start:z_pcb_end] = FR4permittivity
 
         # Carve holes (LAr) in a single pixel tile using the circle boundary
         tile = epsilon[:shape[0], :shape[1], z_pcb_start:z_pcb_end]

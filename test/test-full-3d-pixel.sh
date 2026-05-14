@@ -68,7 +68,8 @@ do_fdm () {
          --initial initial/$name --boundary boundary/$name \
          --potential potential/$name \
          --increment increment/$name \
-         --multisteps no
+         --multisteps no \
+         --epsilon $epsilon
 }
 do_fdm drift3d  20      1000000      0.00000002    per,per,fix #130,000,000
 # do_fdm drift3d  10      100000      0.00002     per,per,fix #130,000,000
@@ -118,6 +119,8 @@ do_fdm () {
     local prec=$1 ; shift
     local edges=$1 ; shift
 
+    local epsilon="initial/${name}_epsilon"
+
     want potential/$name \
          pochoir fdm \
          --nepochs $nepochs --epoch $epoch --precision $prec \
@@ -126,9 +129,9 @@ do_fdm () {
          --initial initial/$name --boundary boundary/$name \
          --potential potential/$name \
          --increment increment/$name \
-         --multisteps no
+         --multisteps no \
+         --epsilon $epsilon
 }
-     #     --epsilon initial/weight3d_epsilon
 do_fdm weight3d 10      5000000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
 # do_fdm weight3d 10      5000000      0.00000002   per,per,fix #5000000 ### try 100 epochs, and more steps per epoch
 # python parse_maxerr.py store/pochoir_weightingfield.log store/maxerr_weightingfield.png store/summary_log_weightingfield.pdf

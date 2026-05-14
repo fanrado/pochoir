@@ -1,13 +1,17 @@
 {
-    "HoleRadius" : 1.9,
-    "PcbWidth" : 3.2,
-    "GridPotential" : 1000,
-    "CathodePotential" : -7000,
-    "pixelPlaneLowEdgePosition" : 10,
-    "pixelPlaneWidth" : 0,
-    "pixelSize" : 2.2,
-    "pixelGap" : 1.6,
-    "Npixels" : 5,
-    "driftZDepth": 28.0,
-    "nGridPoints": 10
+    "HoleRadius" : 0.5,
+    "PcbWidth" : 0.5,
+    "GridHoleShape" : "None",
+    "GridPotential" :  -1000,
+    "CathodePotential" : -7500,
+    "pixelPlaneLowEdgePosition" : 0.5,
+    "pixelPlaneWidth" : 0.1,
+    "pixelSize" : 1.0,
+    "pixelGap" : 0.5,
+    "chamfer_r": 0.0,
+    "Npixels" : 1,
+    "LArPermittivity": 1.5,
+    "FR4Permittivity": 4.5,
+    "driftZDepth": 20.0,
+    "nGridPoints": 5
 }

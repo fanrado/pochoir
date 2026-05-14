@@ -410,7 +410,7 @@ def generator(dom, cfg, info_msg=None):
     pp_loweredge = int(cfg['pixelPlaneLowEdgePosition']/dom.spacing[0])
     p_size=int(round(cfg["pixelSize"]/dom.spacing[0]))
     p_gap=int(round(cfg["pixelGap"]/dom.spacing[0]))
-    chamfer_r=int(cfg["chamfer_r"]/dom.spacing[0])
+    chamfer_r=int(cfg.get("chamfer_r", 0.7)/dom.spacing[0])
     n_pix = cfg['Npixels']
     pp_width = int(cfg['pixelPlaneWidth']/dom.spacing[0])
 
@@ -421,11 +421,10 @@ def generator(dom, cfg, info_msg=None):
     epsilon = None
     LArPermittivity = cfg.get('LArPermittivity', None)
     FR4Permittivity = cfg.get('FR4Permittivity', None)
-    if gridHoleShape in ['circular', 'square'] and LArPermittivity is not None and FR4Permittivity is not None:
-        epsilon = numpy.zeros(dom.shape)
-        ## This is correct if there was no hole in the FR4
-        # epsilon[:, :, pp_loweredge+pp_width+1:pp_loweredge+pp_width+pcb_width-1] = FR4Permittivity
-        epsilon[:, :, pp_loweredge+pp_width+pcb_width+1:] = LArPermittivity
+    if LArPermittivity is not None and FR4Permittivity is not None:
+        epsilon = numpy.full(dom.shape, LArPermittivity)
+        # PCB (FR4) slab is below the pixel plane: z = [0 : pp_loweredge]
+        epsilon[:, :, :pp_loweredge] = FR4Permittivity
     if gridHoleShape == 'circular':
         draw_pcb_plane((len(arr),len(arr[0])), arr, barr, pp_loweredge+pcb_width, r1, gridPotential) # Draw the PCB plane with holes circular
         ## We need to use a mask to define the holes in the FR4 and set the permittivity to LAr in those holes
@@ -435,7 +434,7 @@ def generator(dom, cfg, info_msg=None):
         # Zero out the 4 quarter-holes at the corners
         for cx, cy in [(0, 0), (Nx-1, 0), (0, Ny-1), (Nx-1, Ny-1)]:
             mask = (xi - cx)**2 + (yi - cy)**2 <= r1**2
-            epsilon[:, :, pp_loweredge+pp_width+1:pp_loweredge+pp_width+pcb_width-1][mask] = LArPermittivity
+            epsilon[:, :, :pp_loweredge][mask] = LArPermittivity
 
     elif gridHoleShape == 'square':
         draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential, chamfer_r=chamfer_r) # Draw the PCB plane with holes rounded square
