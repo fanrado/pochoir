@@ -444,7 +444,14 @@ def generator(dom, cfg, info_msg=None):
 
 
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential, epsilon=epsilon, chamfer_r=chamfer_r)
-    
+
+    # Aperture cells (inside the pixel hole) are physically LAr-filled, not FR4.
+    # Correct any aperture cells that were incorrectly assigned FR4 permittivity above.
+    if epsilon is not None:
+        aperture_xy = (barr[:, :, pp_loweredge] == 0)  # free cells at pixel plane = inside aperture
+        epsilon[aperture_xy, :pp_loweredge] = LArPermittivity
+
+
 
     if info_msg is not None:
         info_msg(f'cathode potential : {cathodePotential} V')
