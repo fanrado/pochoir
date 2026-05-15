@@ -26,13 +26,14 @@ def set_core2(dst, src, core):
     dst[core] = src
 
 @torch.compile
-def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, 
+def _compiled_step(iarr_pad, tmp_core, bi_idx, bi_vals,
                    core, periodic, spacing=1.0, source=None, epsilon=None):
     if epsilon is None: # The bug was here: the condition was "epsilon is not None" instead of "epsilon is None"
         stencil_poisson(iarr_pad, source=source, spacing=spacing, res=tmp_core)
     else:
         stencil_poisson_harmonic(iarr_pad, eps=epsilon, res=tmp_core)
-    iarr_pad[core] = bi_core + mutable_core * tmp_core
+    tmp_core[bi_idx] = bi_vals
+    iarr_pad[core] = tmp_core
     edge_condition(iarr_pad, *periodic, info_msg=None)
 
 
@@ -69,8 +70,10 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
 
     _dtype = _dtype
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    bi_core = torch.tensor(iarr*barr, requires_grad=False, dtype=_dtype).to(device)
-    mutable_core = torch.tensor(numpy.invert(barr.astype(numpy.bool)), requires_grad=False, dtype=_dtype).to(device)
+    _barr_bool = barr.astype(numpy.bool)
+    bi_idx_np = numpy.nonzero(_barr_bool)
+    bi_idx = tuple(torch.from_numpy(a).to(device) for a in bi_idx_np)
+    bi_vals = torch.tensor(iarr[_barr_bool], requires_grad=False, dtype=_dtype).to(device)
     tmp_core = torch.zeros(iarr.shape, requires_grad=False, dtype=_dtype).to(device)
 
     # barr_pad = torch.tensor(numpy.pad(barr, 1), requires_grad=False, dtype=_dtype).to(device)
@@ -106,7 +109,9 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
         # spurious non-zero source — but boundary cells are overwritten by bi_core anyway,
         # so their source term is physically meaningless and should be suppressed.
         # source = -(6/spacing**2)*(iarr_pad_source[core] - phi0[core]) * mutable_core
-        source = -(6/spacing**2)*(s - non_padded_phi0)* mutable_core # * mutable_core to zero out the source at fixed boundary cells (barr=True) ::: This is the correct condition to apply when solving the Poisson equation.
+        _barr_core_full = torch.from_numpy(_barr_bool).to(device)
+        source = -(6/spacing**2)*(s - non_padded_phi0) * (~_barr_core_full)
+        del _barr_core_full
 
         ##
         ## For debugging purposes, let's save the output of stencil and the source term without the changes first
@@ -117,13 +122,18 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
         ctx.obj.put(path_to_source, source.cpu(), taxon='source', **params)
         ctx.obj.put(path_to_withBC, phi0_.cpu(), taxon='phi0_withBC', **params)
         # print(f'stencil saved to {path_to_stencil}, source saved to {path_to_source}, withBC saved to {path_to_withBC}')
-        # print(f'shape of mutable core : {mutable_core.shape}, shape of stencil : {s.shape}')
+        # print(f'shape of barr_core : {barr_core.shape}, shape of stencil : {s.shape}')
 
         ## cast source to _dtype
         source = source.to(_dtype)
         ## save the source term casted to _dtype for debugging
         path_to_source = potential.split('/')[0] + '/source_FP32'
         ctx.obj.put(path_to_source, source.cpu(), taxon='source_FP32', **params)
+
+        # Free phi0 staging buffers now that source is built.
+        del phi0_, s, non_padded_phi0
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # # warmup outside of the profiler so one-time CUDA costs don't pollute results
         # _compiled_step(iarr_pad.clone(), tmp_core.clone(), bi_core.clone(), mutable_core.clone(), core, tuple(periodic), spacing=1.0, source=source.clone())
@@ -140,14 +150,14 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
         # sys.exit()
 
     # Get indices of fixed boundary values and values themselves
-    info_msg(f'bi_core shape = {bi_core.shape}, mutable_core shape = {mutable_core.shape}, tmp_core shape = {tmp_core.shape}, \n\tiarr_pad_shape = {iarr_pad.shape}')
-    info_msg(f'bi_core device = {bi_core.device}, mutable_core device = {mutable_core.device}, tmp_core device = {tmp_core.device}, \n\tiarr_pad_device = {iarr_pad.device}')
-    info_msg(f'bi_core dtype = {bi_core.dtype}, mutable_core dtype = {mutable_core.dtype}, tmp_core dtype = {tmp_core.dtype}, \n\tiarr_pad_dtype = {iarr_pad.dtype}')
+    info_msg(f'bi_vals shape = {bi_vals.shape}, tmp_core shape = {tmp_core.shape}, iarr_pad_shape = {iarr_pad.shape}')
+    info_msg(f'bi_vals device = {bi_vals.device}, tmp_core device = {tmp_core.device}, iarr_pad_device = {iarr_pad.device}')
+    info_msg(f'bi_vals dtype = {bi_vals.dtype}, tmp_core dtype = {tmp_core.dtype}, iarr_pad_dtype = {iarr_pad.dtype}')
 
     # print(f'potential path name = {potential}, increment path name = {increment}')
     # print('params = ', params)
     # sys.exit()
-    prev = None
+    prev = torch.empty_like(iarr_pad)
     for iepoch in range(nepochs):
         torch.cuda.synchronize()
         info_msg(f'====== epoch: {iepoch}/{nepochs} x {epoch} ===============')
@@ -159,10 +169,10 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
         for istep in range(epoch):
             # # info_msg(f'step: {istep}/{epoch}')
             if istep%1000 ==0:
-                prev = iarr_pad.clone().detach().requires_grad_(False)
+                prev.copy_(iarr_pad)
 
-            # _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic)
-            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, spacing=1.0, source=source, epsilon=epsilon_pad)
+            # _compiled_step(iarr_pad, tmp_core, bi_idx, bi_vals, core, _periodic)
+            _compiled_step(iarr_pad, tmp_core, bi_idx, bi_vals, core, _periodic, spacing=1.0, source=source, epsilon=epsilon_pad)
             # stencil(iarr_pad, tmp_core)
             # iarr_pad[core] = bi_core + mutable_core * tmp_core
             # edge_condition(iarr_pad, *periodic, info_msg=None)
@@ -170,8 +180,8 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
             # if epoch-istep == 1: # last in the iteration
             if (istep%1000 ==0) and (istep !=0):
                 # err = iarr_pad[core] - prev[core]
-                err = iarr_pad[core].clone().detach().to(torch.float64) - prev[core].to(torch.float64)
-                maxerr = torch.max(torch.abs(err))
+                err = iarr_pad[core] - prev[core]
+                maxerr = err.abs().max()
                 info_msg(f'iteration : {istep}, maxerr = {maxerr}, prec = {prec}, dtype = {maxerr.dtype}')
                 # # Removed this part for debugging ---- this is part of the original script
                 # # Allowing the solver to run for all epochs to check the precision at the end of all epochs

@@ -10,8 +10,8 @@
     "pixelGap" : 0.9,
     "chamfer_r": 0.7,
     "Npixels" : 9,
-    "LArPermittivity": 1.0,
-    "FR4Permittivity": 1.0,
+    "LArPermittivity": 1.505,
+    "FR4Permittivity": 4.4,
     "driftZDepth": 28.0,
     "nGridPoints": 10
 }

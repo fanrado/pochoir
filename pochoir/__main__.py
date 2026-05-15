@@ -344,7 +344,13 @@ def fdm(ctx, initial, boundary,
     barr, bmd = ctx.obj.get(boundary, True)
     eps = None
     if epsilon is not None:
-        eps, bmd = ctx.obj.get(epsilon, True) if epsilon else (None, None)
+        try:
+            eps, _emd = ctx.obj.get(epsilon, True)
+            if eps is None:
+                info_msg(f'--epsilon {epsilon} not found in store; falling back to stencil_poisson.')
+        except Exception:
+            eps = None
+            info_msg(f'--epsilon {epsilon} could not be loaded; falling back to stencil_poisson.')
     if not "domain" in bmd:
         click.echo(f'failed to get domain for {boundary}')
         info_msg(f'failed to get domain for {boundary}')
