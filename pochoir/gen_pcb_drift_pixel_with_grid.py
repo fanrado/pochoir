@@ -451,6 +451,14 @@ def generator(dom, cfg, info_msg=None):
         aperture_xy = (barr[:, :, pp_loweredge] == 0)  # free cells at pixel plane = inside aperture
         epsilon[aperture_xy, :pp_loweredge] = LArPermittivity
 
+    # Assign permittivity to pixel pad voxels. A high value (e.g. 1e10) approximates
+    # conductor shielding by suppressing the field at the pixel/LAr interface.
+    # Default is LArPermittivity for backward compatibility (no-op).
+    if epsilon is not None:
+        pixel_perm = cfg.get('PixelPermittivity', LArPermittivity)
+        pad_mask = barr[:, :, pp_loweredge] != 0  # solid pixel pad cells in XY
+        epsilon[pad_mask, pp_loweredge : pp_loweredge + pp_width] = pixel_perm
+
 
 
     if info_msg is not None:

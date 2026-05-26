@@ -288,6 +288,14 @@ def generator(dom, cfg):
         draw_3Dstrips_sq(barr, p_gap, p_size, n_pix, pp_loweredge, pcb_width) ## Draw the PCB plane with holes rounded square
     # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
+    # Assign permittivity to pixel pad voxels. A high value (e.g. 1e10) approximates
+    # conductor shielding by suppressing the field at the pixel/LAr interface.
+    # Default is LArPermittivity for backward compatibility (no-op).
+    if epsilon is not None:
+        pixel_perm = cfg.get('PixelPermittivity', LArpermittivity)
+        pad_mask = barr[:, :, pp_loweredge] != 0  # solid pixel pad cells in XY
+        epsilon[pad_mask, pp_loweredge : pp_loweredge + pp_width] = pixel_perm
+
     barr[:,:,0]=1
     # # draw pixel plane
     # plt.figure(figsize=(10,10))
