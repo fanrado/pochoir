@@ -3,7 +3,7 @@
     "PcbWidth" : 1.6,
     "GridHoleShape" : "None",
     "GridPotential" :  -1000,
-    "CathodePotential" : -1300,
+    "CathodePotential" : -7400,
     "pixelPlaneLowEdgePosition" : 2,
     "pixelPlaneWidth" : 0.1,
     "pixelSize" : 3.5,
@@ -12,6 +12,7 @@
     "Npixels" : 9,
     "LArPermittivity": 1.505,
     "FR4Permittivity": 4.4,
-    "driftZDepth": 28.0,
+    "PixelPermittivity": 1e10,
+    "driftZDepth": 148.0,
     "nGridPoints": 10
 }

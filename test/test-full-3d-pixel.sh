@@ -3,8 +3,8 @@ set -e
 export POCHOIR_STORE="${1:-store}"
 
 ## Domain shapes (Nx,Ny,Nz). Override via env if needed.
-POCHOIR_DRIFT_SHAPE="${POCHOIR_DRIFT_SHAPE:-44,44,300}"
-POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,300}"
+POCHOIR_DRIFT_SHAPE="${POCHOIR_DRIFT_SHAPE:-44,44,1500}"
+POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,1500}"
 
 source helpers.sh
 
@@ -149,12 +149,13 @@ echo "=== Paths ==="
 
 # 10x10 grid per pixel (0.44 mm spacing), 100 starting points total
 dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
-# dist=(0.2217 0.6651 1.1085 1.5519 1.9953 2.4387 2.8821 3.3255 3.7689 4.2123)
+#dist=(0.22 0.67 1.12 1.55 2.0 2.44 2.88 3.33 3.77 4.21)
+#dist=(0.2217 0.6651 1.1085 1.5519 1.9953 2.4387 2.8821 3.3255 3.7689 4.2123)
 # dist=(0.22  0.66  1.1  1.54  1.98  2.42  2.86  3.3   3.74  4.18  4.62  5.06  5.5   5.94  6.38  6.82  7.26  7.7 8.14  8.58  9.02  9.46  9.9  10.34 10.78 11.22 11.66 12.1  12.54 12.98 13.42 13.86 14.3  14.74 15.18 15.62 16.06 16.5  16.94 17.38 17.82 18.26 18.7  19.14 19.58) ## starting points in responsev2b_2mmpad_dict if pitch=4.4mm
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,28*mm")
+         points+=("${d}*mm,${d2}*mm,148*mm")
      done
 done
 
@@ -171,7 +172,7 @@ done
 ## Paths
 want starts/drift3d \
     pochoir starts --starts starts/drift3d \
-    -m yes \
+    -m no \
     -c example_gen_pixel_with_grid.json \
     ${points[@]}\
     --plot
