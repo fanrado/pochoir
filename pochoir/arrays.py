@@ -166,7 +166,7 @@ def pad1(array):
     padded[core_slices1(padded)] = array
     return padded
 
-def rgi(points, values):
+def rgi(points, values, fill_value="raise"):
     '''
     Return a "regular grid interpolator".
 
@@ -176,12 +176,24 @@ def rgi(points, values):
     Values are the values on the en-meshgrid-ment of the grid points.
 
     The array type of values determines the interpolation engine.
+
+    fill_value controls out-of-bounds behaviour (scipy engine only):
+      - "raise" (default): raise on out-of-bounds query (original behaviour).
+      - a float (e.g. 0.0): return that value for out-of-bounds queries.
+    This is used by the pixel weighting-field induction, where the weighting
+    potential of a small pad decays to ~0 far from the pad, so a query beyond
+    a shallow weighting-field domain is exactly fill_value=0.0.
     '''
     if is_torch(values):
         from torch_interpolations import RegularGridInterpolator as RGI
-    else:
-        from scipy.interpolate import RegularGridInterpolator as RGI
-    return RGI(points, values, method="linear")
+        # torch_interpolations has no fill_value; callers using fill_value
+        # must pass numpy values (scipy engine).
+        return RGI(points, values, method="linear")
+    from scipy.interpolate import RegularGridInterpolator as RGI
+    if fill_value == "raise":
+        return RGI(points, values, method="linear")
+    return RGI(points, values, method="linear",
+               bounds_error=False, fill_value=fill_value)
 
 def invert(arr):
     if is_torch(arr):

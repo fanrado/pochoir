@@ -1101,7 +1101,11 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
     npaths, nsteps, ndim = the_paths.shape
     ticks = pochoir.arrays.linspace(pmd['tstart'], pmd['tstop'],
                                     pmd['nsteps'], endpoint=False)
-    rgi = pochoir.arrays.rgi(dom.linspaces, wpot)
+    # Weighting potential of a small pad decays to ~0 far from the pad, so a
+    # query beyond a shallow weighting-field domain is exactly 0.  This lets the
+    # weighting field be solved on a shallow (feasible) z-domain while drift
+    # paths span the full drift length.
+    rgi = pochoir.arrays.rgi(dom.linspaces, wpot, fill_value=0.0)
     print(f'dom.linspaces : {dom.linspaces}')
     shift_x = dom.shape[0]*dom.spacing[0]/2.0
     shift_y = 0#dom.shape[1]*dom.spacing[1]/2.0

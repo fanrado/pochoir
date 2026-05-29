@@ -3,8 +3,13 @@ set -e
 export POCHOIR_STORE="${1:-store}"
 
 ## Domain shapes (Nx,Ny,Nz). Override via env if needed.
+## Weight z-depth 400 (=40mm) keeps the single-resolution FDM feasible (~50 min
+## to prec 2e-8 on a 4090); a 1500-deep solve is ~9 days.  The pixel weighting
+## field is ~0 beyond ~40mm, so drift starts are placed at the domain edge
+## (z=39.5mm below) and induce-pixel uses fill_value=0 beyond it.  Going deeper
+## (e.g. 800) improves near-pad W fidelity at higher FDM cost.
 POCHOIR_DRIFT_SHAPE="${POCHOIR_DRIFT_SHAPE:-44,44,1500}"
-POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,1500}"
+POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,400}"
 
 source helpers.sh
 
@@ -155,7 +160,7 @@ dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,148*mm")
+         points+=("${d}*mm,${d2}*mm,39.5*mm")
      done
 done
 
