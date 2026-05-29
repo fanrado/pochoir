@@ -235,8 +235,15 @@ def generator(dom, cfg):
     epsilon = None
     if LArpermittivity is not None and FR4permittivity is not None:
         epsilon = numpy.full(dom.shape, LArpermittivity)
-        z_pcb_start = pp_loweredge + pp_width
-        z_pcb_end   = pp_loweredge + pp_width + pcb_width
+        # The FR4 PCB slab sits BELOW the pixel plane (z < pp_loweredge), exactly
+        # as in gen_pcb_drift_pixel_with_grid ("PCB (FR4) slab is below the pixel
+        # plane").  The pad face is exposed to the LAr drift volume above it, so a
+        # drifting electron (z > pp_loweredge) never crosses an FR4/LAr interface
+        # in the weighting field.  Placing FR4 ABOVE the pad (the previous bug)
+        # put a spurious dielectric interface in the drift path, which produced a
+        # second (artifactual) spike in the induced-current response.
+        z_pcb_start = 0
+        z_pcb_end   = pp_loweredge
         epsilon[:, :, z_pcb_start:z_pcb_end] = FR4permittivity
     if gridHoleShape == 'circular':
         draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1) ## Draw the PCB plane with holes circular
