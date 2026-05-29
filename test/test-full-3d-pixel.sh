@@ -151,7 +151,7 @@ dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,28*mm")
+         points+=("${d}*mm,${d2}*mm,148*mm")
      done
 done
 
