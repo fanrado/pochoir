@@ -1101,10 +1101,15 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
     npaths, nsteps, ndim = the_paths.shape
     ticks = pochoir.arrays.linspace(pmd['tstart'], pmd['tstop'],
                                     pmd['nsteps'], endpoint=False)
-    # Weighting potential of a small pad decays to ~0 far from the pad, so a
-    # query beyond a shallow weighting-field domain is exactly 0.  This lets the
-    # weighting field be solved on a shallow (feasible) z-domain while drift
-    # paths span the full drift length.
+    # The weighting potential of a small pad varies smoothly and ->0 far from the
+    # pad.  To evaluate it for drift paths that extend beyond a (shallow,
+    # feasible) weighting-field domain, we clamp each path coordinate to the
+    # domain bounds before interpolating (constant-edge extrapolation).  This is
+    # continuous (W held at its near-edge value, ~0 far away) and so avoids the
+    # truncation spike that fill_value=0 would create where a path crosses the
+    # domain edge.  It lets a single shallow weighting field serve any drift
+    # length.  fill_value=0 is kept as a harmless backstop (clamp keeps all
+    # queries in-bounds, so it never triggers).
     rgi = pochoir.arrays.rgi(dom.linspaces, wpot, fill_value=0.0)
     print(f'dom.linspaces : {dom.linspaces}')
     shift_x = dom.shape[0]*dom.spacing[0]/2.0
@@ -1138,12 +1143,17 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
     print("TotalPaths=",len(shifted_paths))
     import numpy as _np
     _sp = _np.array(shifted_paths)
+    # Constant-edge extrapolation: clamp every path coordinate to the weighting
+    # domain bounds so out-of-domain points take the nearest in-domain W value.
+    _lo = _np.array([ls[0] for ls in dom.linspaces])
+    _hi = _np.array([ls[-1] for ls in dom.linspaces])
+    _sp = _np.clip(_sp, _lo, _hi)
     startpoints=[]
     endpoints=[]
-    for num,p in enumerate(shifted_paths):
+    for num,p in enumerate(_sp):
         startpoints.append(p[0])
         endpoints.append(p[-1])
-    Q = charge * rgi(shifted_paths) #/ units.V
+    Q = charge * rgi(_sp) #/ units.V
     print(f'Charge Q : {Q}')
     assert len(Q.shape) == 2
     #assert Q.shape[0] == npaths

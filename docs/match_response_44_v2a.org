@@ -296,3 +296,43 @@ branch.)
 - W(z) gradient now smooth (no jump at 3.7mm).  Plot: store/compare_fr_tred_fr4fixed.png.
 - Remaining: pixel-EDGE (4,4) tred Ramo spike (~4.9) vs pochoir broad bump (~0.8)
   -- the structural resolution difference (unchanged; not this bug).
+
+* Iteration 4 — Phase 2: drift-length comparison 3 cm & 9 cm [2026-05-29]
+
+** Method (Option B, user-selected)
+Weighting field solved ONCE on the shared shallow depth-400 domain (FR4-fixed,
+~60 min, prec 2e-8) and reused for both lengths.  induce_pixel now CLAMPS path
+coordinates to the weighting-domain bounds (constant-edge extrapolation) so the
+literal start z (30 mm, 90 mm) drifts in continuously with no truncation spike
+on the shallow domain.  Only starts->drift->induce re-run per length; drift
+window sized to arrival (3 cm: 0-40 us; 9 cm: 0-90 us).  Helper test/phase2_drift_sweep.sh.
+
+** Runtime (per length; weight FDM ~60 min is a one-time SHARED cost)
+| drift | window | nticks | starts | drift   | induce | total  |
+|-------+--------+--------+--------+---------+--------+--------|
+| 3 cm  | 40 us  |  800   | 1.54 s | 118.4 s |  9.4 s | 129.3 s|
+| 9 cm  | 90 us  | 1800   | 1.55 s | 120.9 s | 19.3 s | 141.7 s|
+- drift wall-clock ~flat (per-path integration dominated by setup; both reach
+  the pad within the window); induce scales ~linearly with nticks (9.4->19.3 s).
+- Total grows only modestly (129->142 s) because the expensive weighting field
+  is shared; a faithful per-L weight FDM (Option A) would instead grow steeply
+  (9 cm -> depth-900 ~12 h).
+
+** Accuracy vs tred response_44_v2a_full (peak-aligned, center pixel)
+| drift | integral (eplus) | center cosine | peak ratio p/t |
+|-------+------------------+---------------+----------------|
+| 3 cm  | 0.9939           | 0.9827        | 0.441          |
+| 9 cm  | 0.9949           | 0.9785        | 0.453          |
+- Accuracy is ESSENTIALLY FLAT with drift length, as expected: a no-diffusion
+  field response is drift-length-independent up to a time shift, so the
+  near-pad waveform (the only part compared) is the same.  Integral ~0.994
+  (small W-baseline loss from the shallow domain), center cosine ~0.98,
+  structural near-pad peak ratio ~0.45 (the pixel-edge Ramo-spike difference).
+- Plots: docs/phase2_results/phase2_runtime_accuracy.png ;
+  CSVs: docs/phase2_results/phase2_{runtime,accuracy}.csv.
+
+** Note for longer lengths (user will run independently)
+With Option B the same shared weight field + clamp-extrapolation serve any L;
+only the drift window grows.  For a faithful per-L weighting field (Option A),
+weight-FDM depth = L scales runtime steeply and is single-resolution-infeasible
+beyond ~7 cm (multires recommended).
