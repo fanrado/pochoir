@@ -9,7 +9,7 @@ export POCHOIR_STORE="${1:-store}"
 ## (z=39.5mm below) and induce-pixel uses fill_value=0 beyond it.  Going deeper
 ## (e.g. 800) improves near-pad W fidelity at higher FDM cost.
 POCHOIR_DRIFT_SHAPE="${POCHOIR_DRIFT_SHAPE:-44,44,1500}"
-POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,400}"
+POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,1500}"
 
 source helpers.sh
 
@@ -144,7 +144,7 @@ do_fdm weight3d 10      5000000      0.00000002   fix,fix,fix #5000000 ### try 1
 echo "=== Velocities ==="
 ## Velocities
 want velocity/drift3d \
-     pochoir velo --temperature '87.0*K' \
+     pochoir velo --temperature '87.17*K' \
      --potential potential/drift3d \
      --velocity velocity/drift3d \
 #
@@ -160,7 +160,7 @@ dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,39.5*mm")
+         points+=("${d}*mm,${d2}*mm,148.9*mm")
      done
 done
 
