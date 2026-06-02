@@ -20,7 +20,7 @@ do_domain () {
          pochoir domain --domain domain/$name \
          --shape=$shape --spacing $spacing
 }
-do_domain drift3d  44,44,1500  '0.1*mm'
+do_domain drift3d  44,44,500   '0.1*mm'
 
 # fixme: these weight* identifiers need to split up for N planes.
 #do_domain weight2d 1092,2000   '0.1*mm'

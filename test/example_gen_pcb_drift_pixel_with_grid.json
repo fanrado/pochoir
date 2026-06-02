@@ -4,7 +4,7 @@
     "GridHoleShape" : "None",
     "GridPotential" :  -1000,
     "CathodePotential" : -7400,
-    "pixelPlaneLowEdgePosition" : 2,
+    "pixelPlaneLowEdgePosition" : 0,
     "pixelPlaneWidth" : 0.1,
     "pixelSize" : 3.5,
     "pixelGap" : 0.9,
@@ -13,6 +13,6 @@
     "LArPermittivity": 1.505,
     "FR4Permittivity": 4.4,
     "PixelPermittivity": 1e10,
-    "driftZDepth": 148.0,
+    "driftZDepth": 48.0,
     "nGridPoints": 10
 }
