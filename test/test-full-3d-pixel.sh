@@ -8,8 +8,8 @@ export POCHOIR_STORE="${1:-store}"
 ## field is ~0 beyond ~40mm, so drift starts are placed at the domain edge
 ## (z=39.5mm below) and induce-pixel uses fill_value=0 beyond it.  Going deeper
 ## (e.g. 800) improves near-pad W fidelity at higher FDM cost.
-POCHOIR_DRIFT_SHAPE="${POCHOIR_DRIFT_SHAPE:-44,44,1500}"
-POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,1500}"
+POCHOIR_DRIFT_SHAPE="${POCHOIR_DRIFT_SHAPE:-44,44,500}"
+POCHOIR_WEIGHT_SHAPE="${POCHOIR_WEIGHT_SHAPE:-396,396,500}"
 
 source helpers.sh
 
