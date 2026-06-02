@@ -168,7 +168,7 @@ done
 ## Paths
 want starts/drift3d \
     pochoir starts --starts starts/drift3d \
-    -m yes \
+    -m no \
     -c example_gen_pixel_with_grid.json \
     ${points[@]}\
     --plot
