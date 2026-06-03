@@ -3,7 +3,7 @@
     "PcbWidth" : 1.6,
     "GridHoleShape" : "None",
     "GridPotential" :  -1000,
-    "CathodePotential" : -7500,
+    "CathodePotential" : -7400,
     "pixelPlaneLowEdgePosition" : 2,
     "pixelPlaneWidth" : 0.1,
     "pixelSize" : 3.5,
