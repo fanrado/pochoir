@@ -1787,6 +1787,75 @@ def ls(ctx, things):
         if md is not None:
             print(f'\t{md}')
 
+@cli.command()
+@click.option("-c", "--coarse", type=str, required=True,
+              help="Input coarse potential array to upsample")
+@click.option("-i", "--initial", type=str, required=True,
+              help="Input fine initial value array (holds exact fine boundary values)")
+@click.option("-b", "--boundary", type=str, required=True,
+              help="Input fine boundary (bool) array")
+@click.option("-I", "--output", type=str, required=True,
+              help="Output refined fine initial value array")
+@click.pass_context
+def refine(ctx, coarse, initial, boundary, output):
+    '''
+    Grid-refine a coarse potential onto a fine grid for use as an FDM
+    initial guess.
+
+    The coarse potential is linearly (multi-linearly) interpolated from
+    its own domain coordinates onto the fine domain coordinates.  The
+    exact fine boundary values are then merged in at the boundary cells
+    so the result satisfies the fine boundary conditions exactly.  The
+    output is an "initial" array suitable to pass to `fdm --initial`.
+    '''
+    import numpy
+    from pochoir.arrays import rgi
+
+    carr, cmd = ctx.obj.get(coarse, True)
+    iarr, _   = ctx.obj.get(initial, True)
+    barr, bmd = ctx.obj.get(boundary, True)
+
+    if cmd is None or "domain" not in cmd:
+        click.echo(f'failed to get domain for coarse potential {coarse}')
+        info_msg(f'failed to get domain for coarse potential {coarse}')
+        sys.exit(-1)
+    if bmd is None or "domain" not in bmd:
+        click.echo(f'failed to get domain for fine boundary {boundary}')
+        info_msg(f'failed to get domain for fine boundary {boundary}')
+        sys.exit(-1)
+
+    cdom = ctx.obj.get_domain(cmd["domain"])
+    fdom = ctx.obj.get_domain(bmd["domain"])
+
+    carr = numpy.asarray(carr, dtype=float)
+    fi   = numpy.asarray(iarr, dtype=float)
+    bmask = numpy.asarray(barr).astype(bool)
+
+    info_msg(f'refine: coarse {carr.shape} @ {cdom.spacing} -> '
+             f'fine {fi.shape} @ {fdom.spacing}')
+
+    # Multi-linear interpolation using the actual grid coordinates so the
+    # refinement is correct even when the two domains do not share extent.
+    cpoints = [numpy.asarray(ls, dtype=float) for ls in cdom.linspaces]
+    interp = rgi(cpoints, carr)
+
+    # Evaluate at the fine grid points, clamping to the coarse bounds so
+    # any fine point outside the coarse domain takes the nearest edge value.
+    fmesh = fdom.meshgrid
+    pts = numpy.stack([m.ravel() for m in fmesh], axis=-1)
+    for a in range(pts.shape[1]):
+        pts[:, a] = numpy.clip(pts[:, a], cpoints[a][0], cpoints[a][-1])
+    refined = interp(pts).reshape(fi.shape)
+
+    # Merge exact fine boundary values at boundary (immutable) cells.
+    refined[bmask] = fi[bmask]
+
+    params = dict(operation="refine", domain=bmd["domain"],
+                  coarse=coarse, initial=initial, boundary=boundary,
+                  command="refine")
+    ctx.obj.put(output, refined, taxon="initial", **params)
+
+
 def main():
     cli(obj=None)
 
