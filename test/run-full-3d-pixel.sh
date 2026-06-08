@@ -1,0 +1,226 @@
+#!/bin/bash
+#
+# Full pixel field calculation via near-field-only refinement.
+#
+# Combines two near-field workflows into one driver:
+#   PART A: drift field      (was test-full-3d-drift-pixel-nearfield.sh)
+#   PART B: weighting field  (was test-full-3d-pixel-weight-nearfield.sh)
+#
+# Each part runs: coarse 0.4mm full-depth solve -> fine near-field
+# refine (z=0..20mm, ~7.5x fewer cells) with a Dirichlet interface at
+# z=20mm (`near-bc`) pinned to the coarse bulk, then `stitch-near`
+# combines the fine near-field with the upsampled coarse far-field into
+# the full 0.1mm grid.
+#
+#   drift     -> potential/full
+#   weighting -> potential/weight3d   (consumed by induce-pixel)
+#
+# Store keys are non-overlapping between the two parts (drift uses
+# coarse/near/fine/full; weighting uses weight_*).
+#
+# Usage: ./run-full-3d-pixel.sh [STORE_DIR]
+
+set -e
+
+export POCHOIR_STORE="${1:-store}"
+
+source helpers.sh
+
+date
+
+############################################################################
+## PART A: DRIFT FIELD  (near-field refinement)
+############################################################################
+export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_driftfield.log"
+
+gen="pcb_drift_pixel_with_grid"
+cfg="example_gen_pcb_drift_pixel_with_grid.json"
+
+## ---------------------------------------------------------------------------
+## Step 1: coarse solve (0.4mm, 11x11x375), full drift region
+## ---------------------------------------------------------------------------
+
+want domain/coarse \
+     pochoir domain --domain domain/coarse \
+     --shape=11,11,375 --spacing '0.4*mm'
+
+want initial/coarse \
+     pochoir gen --generator $gen --domain domain/coarse \
+     --initial initial/coarse --boundary boundary/coarse \
+     $cfg
+
+want potential/coarse \
+     pochoir fdm \
+     --nepochs 10 --epoch 130000000 --precision 0.000000002 \
+     --edges per,per,fix \
+     --engine torch \
+     --initial initial/coarse --boundary boundary/coarse \
+     --potential potential/coarse \
+     --increment increment/coarse
+
+date
+
+## ---------------------------------------------------------------------------
+## Step 2: near-field gen + refined coarse seed (0.1mm, 44x44x201, z=0..20mm)
+## ---------------------------------------------------------------------------
+
+want domain/near \
+     pochoir domain --domain domain/near \
+     --shape=44,44,201 --spacing '0.1*mm'
+
+want initial/near \
+     pochoir gen --generator $gen --domain domain/near \
+     --initial initial/near --boundary boundary/near \
+     $cfg
+
+# Seed the near-field interior with the upsampled coarse solution.
+want initial/near_refined \
+     pochoir refine \
+     --coarse potential/coarse \
+     --initial initial/near \
+     --boundary boundary/near \
+     --output initial/near_refined
+
+## ---------------------------------------------------------------------------
+## Step 3: Dirichlet interface plane at z=20mm from the coarse bulk
+## ---------------------------------------------------------------------------
+
+want initial/near_bc \
+     pochoir near-bc \
+     --initial initial/near_refined \
+     --boundary boundary/near \
+     --coarse potential/coarse \
+     --initial-out initial/near_bc \
+     --boundary-out boundary/near_bc
+
+## ---------------------------------------------------------------------------
+## Step 4: near-field fine solve (0.1mm), seeded + pinned interface
+## ---------------------------------------------------------------------------
+
+want potential/near \
+     pochoir fdm \
+     --nepochs 10 --epoch 130000000 --precision 0.0000000002 \
+     --edges per,per,fix \
+     --engine torch \
+     --initial initial/near_bc --boundary boundary/near_bc \
+     --potential potential/near \
+     --increment increment/near
+
+date
+
+## ---------------------------------------------------------------------------
+## Step 5: stitch near fine + coarse far into the full fine grid
+## ---------------------------------------------------------------------------
+
+want domain/fine \
+     pochoir domain --domain domain/fine \
+     --shape=44,44,1500 --spacing '0.1*mm'
+
+want potential/full \
+     pochoir stitch-near \
+     --near potential/near \
+     --coarse potential/coarse \
+     --domain domain/fine \
+     --output potential/full
+
+date
+
+############################################################################
+## PART B: WEIGHTING FIELD  (near-field refinement)
+############################################################################
+export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_weightingfield.log"
+
+gen="pcb_pixel_with_grid"
+cfg="example_gen_pixel_with_grid.json"
+
+## ---------------------------------------------------------------------------
+## Step 1: coarse weighting solve (0.4mm, 99x99x375), full drift depth
+## ---------------------------------------------------------------------------
+
+want domain/weight_coarse \
+     pochoir domain --domain domain/weight_coarse \
+     --shape=99,99,375 --spacing '0.4*mm'
+
+want initial/weight_coarse \
+     pochoir gen --generator $gen --domain domain/weight_coarse \
+     --initial initial/weight_coarse --boundary boundary/weight_coarse \
+     $cfg
+
+want potential/weight_coarse \
+     pochoir fdm \
+     --nepochs 10 --epoch 130000000 --precision 0.000000002 \
+     --edges fix,fix,fix \
+     --engine torch \
+     --initial initial/weight_coarse --boundary boundary/weight_coarse \
+     --potential potential/weight_coarse \
+     --increment increment/weight_coarse \
+     --multisteps no
+
+date
+
+## ---------------------------------------------------------------------------
+## Step 2: near-field gen + refined coarse seed (0.1mm, 396x396x201, z=0..20mm)
+## ---------------------------------------------------------------------------
+
+want domain/weight_near \
+     pochoir domain --domain domain/weight_near \
+     --shape=396,396,201 --spacing '0.1*mm'
+
+want initial/weight_near \
+     pochoir gen --generator $gen --domain domain/weight_near \
+     --initial initial/weight_near --boundary boundary/weight_near \
+     $cfg
+
+# Seed the near-field interior with the upsampled coarse weighting solution.
+want initial/weight_near_refined \
+     pochoir refine \
+     --coarse potential/weight_coarse \
+     --initial initial/weight_near \
+     --boundary boundary/weight_near \
+     --output initial/weight_near_refined
+
+## ---------------------------------------------------------------------------
+## Step 3: Dirichlet interface plane at z=20mm from the coarse bulk
+## ---------------------------------------------------------------------------
+
+want initial/weight_near_bc \
+     pochoir near-bc \
+     --initial initial/weight_near_refined \
+     --boundary boundary/weight_near \
+     --coarse potential/weight_coarse \
+     --initial-out initial/weight_near_bc \
+     --boundary-out boundary/weight_near_bc
+
+## ---------------------------------------------------------------------------
+## Step 4: near-field fine weighting solve (0.1mm), seeded + pinned interface
+## ---------------------------------------------------------------------------
+
+want potential/weight_near \
+     pochoir fdm \
+     --nepochs 10 --epoch 130000000 --precision 0.0000000002 \
+     --edges fix,fix,fix \
+     --engine torch \
+     --initial initial/weight_near_bc --boundary boundary/weight_near_bc \
+     --potential potential/weight_near \
+     --increment increment/weight_near \
+     --multisteps no
+
+date
+
+## ---------------------------------------------------------------------------
+## Step 5: stitch near fine + coarse far into the full fine grid.
+##         Stored as potential/weight3d for downstream induce-pixel.
+## ---------------------------------------------------------------------------
+
+want domain/weight_full \
+     pochoir domain --domain domain/weight_full \
+     --shape=396,396,1500 --spacing '0.1*mm'
+
+want potential/weight3d \
+     pochoir stitch-near \
+     --near potential/weight_near \
+     --coarse potential/weight_coarse \
+     --domain domain/weight_full \
+     --output potential/weight3d
+
+date
