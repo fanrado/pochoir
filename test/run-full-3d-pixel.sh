@@ -26,6 +26,38 @@ export POCHOIR_STORE="${1:-store}"
 
 source helpers.sh
 
+# ---------------------------------------------------------------------------
+# want: run a step only when its output(s) are missing.
+#
+# Overrides the single-key `want` from helpers.sh.  The first argument is a
+# space-separated list of store keys (no .npz suffix).  The step is SKIPPED
+# only when EVERY listed output already exists under $POCHOIR_STORE; if any
+# is missing the command is run and all outputs are verified afterwards.
+# This lets a re-run reuse existing results and resume an interrupted step
+# (e.g. an fdm that wrote potential/ but not increment/).
+# Backward compatible with a single key (the loop just runs once).
+# ---------------------------------------------------------------------------
+want () {
+    local targets="$1" ; shift
+    local t miss=0
+    for t in $targets ; do
+        [ -f "$POCHOIR_STORE/${t}.npz" ] || miss=1
+    done
+    if [ "$miss" -eq 0 ] ; then
+        echo "have $targets"
+        return
+    fi
+    echo "$@"
+    "$@"
+    for t in $targets ; do
+        if [ ! -f "$POCHOIR_STORE/${t}.npz" ] ; then
+            echo "ERROR: step did not produce expected output $t" >&2
+            exit 1
+        fi
+    done
+    echo "made $targets"
+}
+
 date
 
 ############################################################################
@@ -42,16 +74,16 @@ cfg="example_gen_pcb_drift_pixel_with_grid.json"
 
 want domain/coarse \
      pochoir domain --domain domain/coarse \
-     --shape=11,11,375 --spacing '0.4*mm'
+     --shape=11,11,775 --spacing '0.4*mm'
 
-want initial/coarse \
+want "initial/coarse boundary/coarse" \
      pochoir gen --generator $gen --domain domain/coarse \
      --initial initial/coarse --boundary boundary/coarse \
      $cfg
 
-want potential/coarse \
+want "potential/coarse increment/coarse" \
      pochoir fdm \
-     --nepochs 10 --epoch 130000000 --precision 0.000000002 \
+     --nepochs 10 --epoch 130000000 --precision 0.0000002 \
      --edges per,per,fix \
      --engine torch \
      --initial initial/coarse --boundary boundary/coarse \
@@ -68,7 +100,7 @@ want domain/near \
      pochoir domain --domain domain/near \
      --shape=44,44,201 --spacing '0.1*mm'
 
-want initial/near \
+want "initial/near boundary/near" \
      pochoir gen --generator $gen --domain domain/near \
      --initial initial/near --boundary boundary/near \
      $cfg
@@ -85,7 +117,7 @@ want initial/near_refined \
 ## Step 3: Dirichlet interface plane at z=20mm from the coarse bulk
 ## ---------------------------------------------------------------------------
 
-want initial/near_bc \
+want "initial/near_bc boundary/near_bc" \
      pochoir near-bc \
      --initial initial/near_refined \
      --boundary boundary/near \
@@ -97,7 +129,7 @@ want initial/near_bc \
 ## Step 4: near-field fine solve (0.1mm), seeded + pinned interface
 ## ---------------------------------------------------------------------------
 
-want potential/near \
+want "potential/near increment/near" \
      pochoir fdm \
      --nepochs 10 --epoch 130000000 --precision 0.0000000002 \
      --edges per,per,fix \
@@ -114,13 +146,13 @@ date
 
 want domain/fine \
      pochoir domain --domain domain/fine \
-     --shape=44,44,1500 --spacing '0.1*mm'
+     --shape=44,44,3100 --spacing '0.1*mm'
 
 # Generate the full-fine electrode geometry (boundary mask) for the
 # stitched domain.  The FDM solve is NOT run here (that is the whole
 # point of the near-field workflow); this only builds the boundary array
 # so PART C's velo can zero the E-field at electrode cells.
-want boundary/fine \
+want "boundary/fine initial/fine" \
      pochoir gen --generator $gen --domain domain/fine \
      --initial initial/fine --boundary boundary/fine \
      $cfg
@@ -148,16 +180,16 @@ cfg="example_gen_pixel_with_grid.json"
 
 want domain/weight_coarse \
      pochoir domain --domain domain/weight_coarse \
-     --shape=99,99,375 --spacing '0.4*mm'
+     --shape=99,99,775 --spacing '0.4*mm'
 
-want initial/weight_coarse \
+want "initial/weight_coarse boundary/weight_coarse" \
      pochoir gen --generator $gen --domain domain/weight_coarse \
      --initial initial/weight_coarse --boundary boundary/weight_coarse \
      $cfg
 
-want potential/weight_coarse \
+want "potential/weight_coarse increment/weight_coarse" \
      pochoir fdm \
-     --nepochs 10 --epoch 130000000 --precision 0.000000002 \
+     --nepochs 10 --epoch 130000000 --precision 0.00000002 \
      --edges fix,fix,fix \
      --engine torch \
      --initial initial/weight_coarse --boundary boundary/weight_coarse \
@@ -175,7 +207,7 @@ want domain/weight_near \
      pochoir domain --domain domain/weight_near \
      --shape=396,396,201 --spacing '0.1*mm'
 
-want initial/weight_near \
+want "initial/weight_near boundary/weight_near" \
      pochoir gen --generator $gen --domain domain/weight_near \
      --initial initial/weight_near --boundary boundary/weight_near \
      $cfg
@@ -192,7 +224,7 @@ want initial/weight_near_refined \
 ## Step 3: Dirichlet interface plane at z=20mm from the coarse bulk
 ## ---------------------------------------------------------------------------
 
-want initial/weight_near_bc \
+want "initial/weight_near_bc boundary/weight_near_bc" \
      pochoir near-bc \
      --initial initial/weight_near_refined \
      --boundary boundary/weight_near \
@@ -204,7 +236,7 @@ want initial/weight_near_bc \
 ## Step 4: near-field fine weighting solve (0.1mm), seeded + pinned interface
 ## ---------------------------------------------------------------------------
 
-want potential/weight_near \
+want "potential/weight_near increment/weight_near" \
      pochoir fdm \
      --nepochs 10 --epoch 130000000 --precision 0.0000000002 \
      --edges fix,fix,fix \
@@ -223,7 +255,7 @@ date
 
 want domain/weight_full \
      pochoir domain --domain domain/weight_full \
-     --shape=396,396,1500 --spacing '0.1*mm'
+     --shape=396,396,3100 --spacing '0.1*mm'
 
 want potential/weight3d \
      pochoir stitch-near \
@@ -255,7 +287,7 @@ dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,148*mm")
+         points+=("${d}*mm,${d2}*mm,308*mm")
      done
 done
 
@@ -263,7 +295,7 @@ want starts/drift3d \
      pochoir starts --starts starts/drift3d \
      -m no \
      -c example_gen_pixel_with_grid.json \
-     ${points[@]} \
+     "${points[@]}" \
      --plot
 
 want paths/drift3d_tight \
