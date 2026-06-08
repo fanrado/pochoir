@@ -1787,6 +1787,35 @@ def ls(ctx, things):
         if md is not None:
             print(f'\t{md}')
 
+def _coarse_interpolator(carr, cdom):
+    '''
+    Build a multi-linear interpolator for a coarse field over its own
+    domain coordinates, plus the list of per-axis coarse grid points
+    (used to clamp query points to the coarse bounds).
+
+    Returns (interp, cpoints).  Query with `_interp_clamped`.
+    '''
+    import numpy
+    from pochoir.arrays import rgi
+    cpoints = [numpy.asarray(ls, dtype=float) for ls in cdom.linspaces]
+    interp = rgi(cpoints, numpy.asarray(carr, dtype=float))
+    return interp, cpoints
+
+
+def _interp_clamped(interp, cpoints, mesh, out_shape):
+    '''
+    Evaluate `interp` at the grid points given by `mesh` (list of
+    meshgrid arrays), clamping each axis to the coarse bounds so points
+    outside the coarse domain take the nearest edge value (no
+    extrapolation).  Returns an array of shape `out_shape`.
+    '''
+    import numpy
+    pts = numpy.stack([m.ravel() for m in mesh], axis=-1)
+    for a in range(pts.shape[1]):
+        pts[:, a] = numpy.clip(pts[:, a], cpoints[a][0], cpoints[a][-1])
+    return interp(pts).reshape(out_shape)
+
+
 @cli.command()
 @click.option("-c", "--coarse", type=str, required=True,
               help="Input coarse potential array to upsample")
@@ -1809,7 +1838,6 @@ def refine(ctx, coarse, initial, boundary, output):
     output is an "initial" array suitable to pass to `fdm --initial`.
     '''
     import numpy
-    from pochoir.arrays import rgi
 
     carr, cmd = ctx.obj.get(coarse, True)
     iarr, _   = ctx.obj.get(initial, True)
@@ -1827,25 +1855,16 @@ def refine(ctx, coarse, initial, boundary, output):
     cdom = ctx.obj.get_domain(cmd["domain"])
     fdom = ctx.obj.get_domain(bmd["domain"])
 
-    carr = numpy.asarray(carr, dtype=float)
     fi   = numpy.asarray(iarr, dtype=float)
     bmask = numpy.asarray(barr).astype(bool)
 
-    info_msg(f'refine: coarse {carr.shape} @ {cdom.spacing} -> '
+    info_msg(f'refine: coarse {numpy.asarray(carr).shape} @ {cdom.spacing} -> '
              f'fine {fi.shape} @ {fdom.spacing}')
 
     # Multi-linear interpolation using the actual grid coordinates so the
     # refinement is correct even when the two domains do not share extent.
-    cpoints = [numpy.asarray(ls, dtype=float) for ls in cdom.linspaces]
-    interp = rgi(cpoints, carr)
-
-    # Evaluate at the fine grid points, clamping to the coarse bounds so
-    # any fine point outside the coarse domain takes the nearest edge value.
-    fmesh = fdom.meshgrid
-    pts = numpy.stack([m.ravel() for m in fmesh], axis=-1)
-    for a in range(pts.shape[1]):
-        pts[:, a] = numpy.clip(pts[:, a], cpoints[a][0], cpoints[a][-1])
-    refined = interp(pts).reshape(fi.shape)
+    interp, cpoints = _coarse_interpolator(carr, cdom)
+    refined = _interp_clamped(interp, cpoints, fdom.meshgrid, fi.shape)
 
     # Merge exact fine boundary values at boundary (immutable) cells.
     refined[bmask] = fi[bmask]
@@ -1854,6 +1873,159 @@ def refine(ctx, coarse, initial, boundary, output):
                   coarse=coarse, initial=initial, boundary=boundary,
                   command="refine")
     ctx.obj.put(output, refined, taxon="initial", **params)
+
+
+@cli.command("near-bc")
+@click.option("-i", "--initial", type=str, required=True,
+              help="Input near-field initial value array (e.g. refined coarse)")
+@click.option("-b", "--boundary", type=str, required=True,
+              help="Input near-field boundary (bool) array")
+@click.option("-c", "--coarse", type=str, required=True,
+              help="Input coarse potential supplying the interface values")
+@click.option("-I", "--initial-out", type=str, required=True,
+              help="Output near-field initial array with pinned interface plane")
+@click.option("-B", "--boundary-out", type=str, required=True,
+              help="Output near-field boundary array with the interface plane fixed")
+@click.option("--axis", type=int, default=2,
+              help="Axis normal to the interface plane (def: 2, i.e. z)")
+@click.pass_context
+def near_bc(ctx, initial, boundary, coarse, initial_out, boundary_out, axis):
+    '''
+    Add a Dirichlet interface plane to a near-field problem.
+
+    For a near-field domain that covers only the first part of the drift
+    region (e.g. z=0..20mm), the far interface plane (the last index
+    along `--axis`) is pinned to the coarse bulk potential interpolated
+    there.  This enforces continuity with the coarse far-field solve as
+    a fixed-potential (Dirichlet) condition, matching the LArPix v2b
+    .sif fixed-potential interface.
+
+    Produces a new boundary array (with the interface plane marked
+    immutable) and a new initial array (with the interface plane set to
+    the coarse potential there).
+    '''
+    import numpy
+
+    iarr, imd = ctx.obj.get(initial, True)
+    barr, bmd = ctx.obj.get(boundary, True)
+    carr, cmd = ctx.obj.get(coarse, True)
+
+    if cmd is None or "domain" not in cmd:
+        click.echo(f'failed to get domain for coarse potential {coarse}')
+        info_msg(f'failed to get domain for coarse potential {coarse}')
+        sys.exit(-1)
+    if bmd is None or "domain" not in bmd:
+        click.echo(f'failed to get domain for near-field boundary {boundary}')
+        info_msg(f'failed to get domain for near-field boundary {boundary}')
+        sys.exit(-1)
+
+    cdom = ctx.obj.get_domain(cmd["domain"])
+    ndom = ctx.obj.get_domain(bmd["domain"])
+
+    fi    = numpy.asarray(iarr, dtype=float).copy()
+    bmask = numpy.asarray(barr).astype(bool).copy()
+
+    # The interface plane is the last grid index along `axis`.
+    top = ndom.shape[axis] - 1
+    plane = [slice(None)] * fi.ndim
+    plane[axis] = top
+    plane = tuple(plane)
+
+    # Interpolate the coarse potential onto the interface plane points.
+    interp, cpoints = _coarse_interpolator(carr, cdom)
+    plane_mesh = [m[plane] for m in ndom.meshgrid]
+    out_shape = numpy.asarray(ndom.shape)[
+        [a for a in range(fi.ndim) if a != axis]]
+    iface = _interp_clamped(interp, cpoints, plane_mesh, tuple(out_shape))
+
+    z_iface = ndom.point([0] * fi.ndim)[axis] + top * ndom.spacing[axis]
+    info_msg(f'near-bc: pinning interface plane axis={axis} index={top} '
+             f'(coord={z_iface}) to coarse potential')
+
+    fi[plane] = iface
+    bmask[plane] = True
+
+    iparams = dict(operation="near-bc", domain=bmd["domain"],
+                   initial=initial, boundary=boundary, coarse=coarse,
+                   interface_axis=axis, interface_index=int(top),
+                   command="near-bc")
+    bparams = dict(iparams)
+    ctx.obj.put(initial_out, fi, taxon="initial", **iparams)
+    ctx.obj.put(boundary_out, bmask, taxon="boundary", **bparams)
+
+
+@cli.command("stitch-near")
+@click.option("-n", "--near", type=str, required=True,
+              help="Input near-field fine potential (covers z=0..interface)")
+@click.option("-c", "--coarse", type=str, required=True,
+              help="Input coarse potential supplying the far-field bulk")
+@click.option("-d", "--domain", type=str, required=True,
+              help="Full fine target domain to stitch onto")
+@click.option("-I", "--output", type=str, required=True,
+              help="Output stitched full fine potential")
+@click.option("--axis", type=int, default=2,
+              help="Stitch axis (def: 2, i.e. z)")
+@click.pass_context
+def stitch_near(ctx, near, coarse, domain, output, axis):
+    '''
+    Stitch a near-field fine solve onto an upsampled coarse far field.
+
+    The coarse potential is multi-linearly upsampled onto the full fine
+    target domain, then the near-field fine solution overwrites the near
+    region (the first `near.shape[axis]` planes along `--axis`).  Because
+    `near-bc` pinned the near-field interface plane to the coarse value
+    there, the result is continuous across the interface.
+    '''
+    import numpy
+
+    narr, nmd = ctx.obj.get(near, True)
+    carr, cmd = ctx.obj.get(coarse, True)
+
+    if cmd is None or "domain" not in cmd:
+        click.echo(f'failed to get domain for coarse potential {coarse}')
+        info_msg(f'failed to get domain for coarse potential {coarse}')
+        sys.exit(-1)
+
+    if narr is None:
+        click.echo(f'failed to load near-field potential {near}')
+        info_msg(f'failed to load near-field potential {near}')
+        sys.exit(-1)
+
+    cdom = ctx.obj.get_domain(cmd["domain"])
+    fdom = ctx.obj.get_domain(domain)
+
+    near_pot = numpy.asarray(narr, dtype=float)
+    fshape = tuple(int(s) for s in fdom.shape)
+
+    # Upsample coarse onto the full fine grid.
+    interp, cpoints = _coarse_interpolator(carr, cdom)
+    full = _interp_clamped(interp, cpoints, fdom.meshgrid, fshape)
+
+    # The near region occupies the first n planes along `axis`; the other
+    # axes must share shape with the fine domain.
+    for a in range(near_pot.ndim):
+        if a == axis:
+            if near_pot.shape[a] > fshape[a]:
+                click.echo('near-field extent exceeds fine domain along '
+                           f'stitch axis {axis}')
+                sys.exit(-1)
+        elif near_pot.shape[a] != fshape[a]:
+            click.echo(f'near-field shape {near_pot.shape} incompatible with '
+                       f'fine domain {fshape} on axis {a}')
+            sys.exit(-1)
+
+    nnear = near_pot.shape[axis]
+    sel = [slice(None)] * full.ndim
+    sel[axis] = slice(0, nnear)
+    full[tuple(sel)] = near_pot
+
+    info_msg(f'stitch-near: near {near_pot.shape} over first {nnear} planes '
+             f'of fine {fshape} along axis {axis}')
+
+    params = dict(operation="stitch-near", domain=domain,
+                  near=near, coarse=coarse, stitch_axis=axis,
+                  command="stitch-near")
+    ctx.obj.put(output, full, taxon="potential", **params)
 
 
 def main():
