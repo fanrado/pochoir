@@ -224,3 +224,52 @@ want potential/weight3d \
      --output potential/weight3d
 
 date
+
+############################################################################
+## PART C: VELOCITY, PATHS, INDUCED CURRENT
+############################################################################
+## Uses the drift potential (potential/full) and the weighting field
+## (potential/weight3d) produced above.
+
+echo "=== Velocities ==="
+## Drift velocity field from the stitched drift potential.
+want velocity/drift3d \
+     pochoir velo --temperature '87.0*K' \
+     --potential potential/full \
+     --velocity velocity/drift3d
+
+echo "=== Paths ==="
+## 10x10 grid per pixel (0.44 mm spacing), 100 starting points total,
+## launched from the cathode plane (z=148 mm).
+dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
+points=()
+for d in "${dist[@]}"; do
+     for d2 in "${dist[@]}"; do
+         points+=("${d}*mm,${d2}*mm,148*mm")
+     done
+done
+
+want starts/drift3d \
+     pochoir starts --starts starts/drift3d \
+     -m no \
+     -c example_gen_pixel_with_grid.json \
+     ${points[@]} \
+     --plot
+
+want paths/drift3d_tight \
+     pochoir drift --starts starts/drift3d \
+     --velocity velocity/drift3d \
+     --paths paths/drift3d_tight '0*us,210*us,0.05*us' \
+     --plot
+
+echo "=== Induced currents ==="
+## Induced current on the pixel via Ramo (weighting field x drift paths).
+want current/induced_current \
+     pochoir induce-pixel --weighting potential/weight3d \
+     --paths paths/drift3d_tight \
+     --output current/induced_current \
+     --npixels 4 \
+     --config example_gen_pixel_with_grid.json \
+     --plot
+
+date
