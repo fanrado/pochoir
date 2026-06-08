@@ -291,6 +291,24 @@ def generator(dom, cfg):
     # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
     barr[:,:,0]=1
+
+    # Ground the cathode plane for the weighting potential.  Ramo's theorem
+    # requires every non-collecting electrode (including the cathode) held at
+    # weighting potential 0.  The fdm "fix" edge is zero-gradient (Neumann),
+    # so without an explicit Dirichlet plane the injected flux has nowhere to
+    # terminate and the bulk potential floats to ~the pixel area fraction
+    # instead of decaying to 0.  Place the cathode at z=driftZDepth so the
+    # weighting and drift (pcb_drift_pixel_with_grid) generators share the
+    # same physical cathode plane.  The guard skips near-field domains whose
+    # far face is the interface plane (z_cat >= shape[2]).
+    if 'driftZDepth' in cfg:
+        z_cat = int(round(cfg['driftZDepth']/dom.spacing[2]))
+        if 0 <= z_cat < dom.shape[2]:
+            draw_plane(barr, z_cat, 1)   # mark whole cathode plane immutable
+            arr[:, :, z_cat] = 0.0       # weighting potential 0 at cathode
+            log.debug('grounded cathode plane at z index %s (driftZDepth=%s)',
+                      z_cat, cfg['driftZDepth'])
+
     # # draw pixel plane
     # plt.figure(figsize=(10,10))
     # plt.imshow(barr[:,:,pp_loweredge],origin='lower')
