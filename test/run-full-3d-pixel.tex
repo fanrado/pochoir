@@ -1,0 +1,416 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+
+\lstdefinestyle{sh}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  frame=single,
+  backgroundcolor=\color{black!4},
+  numbers=none,
+}
+\lstset{style=sh}
+
+\newcommand{\key}[1]{\texttt{#1}}
+\newcommand{\cmd}[1]{\texttt{#1}}
+
+\title{Pixel field calculation pipeline:\\
+       a detailed walkthrough of \texttt{run-full-3d-pixel.sh}}
+\author{pochoir / LArPix field simulation}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document describes, step by step, the driver script
+\texttt{test/run-full-3d-pixel.sh}.  The script computes, for a pixelated
+liquid-argon (LAr) charge readout, (i) the \emph{drift potential} and its
+electric field, (ii) the \emph{weighting potential} of a collecting pixel,
+(iii) electron drift trajectories, and (iv) the induced current on the
+pixel.  The expensive field solves use a \emph{near-field refinement}
+strategy: a cheap coarse solve over the full drift depth provides the
+slowly--varying bulk, and only the electrically complex region near the
+pixel plane ($0\le z\le 20$~mm) is re-solved at full resolution.  The two
+sub-domains are joined with a Dirichlet continuity condition at
+$z=20$~mm.  Every step is wrapped in a \texttt{want} guard so a re-run
+reuses any results already present in the store.
+\end{abstract}
+
+\tableofcontents
+
+%======================================================================
+\section{Background and method}
+
+\subsection{The boundary-value problems}
+
+In the charge-free LAr bulk the electrostatic potential $\varphi$ obeys
+Laplace's equation,
+\begin{equation}
+  \nabla^2 \varphi(\mathbf{x}) = 0 ,
+  \label{eq:laplace}
+\end{equation}
+subject to Dirichlet conditions on the conductors (pixel pads, focusing
+grid, PCB, cathode).  Two distinct problems are solved:
+
+\begin{description}
+\item[Drift potential.] Electrodes are held at their physical bias
+  (pixels/grid near ground, cathode at a large negative potential set by
+  the drift length).  The resulting field $\mathbf{E}=-\nabla\varphi$
+  drives the ionization electrons.
+\item[Weighting potential $\varphi_w$.] The \emph{collecting} pixel is
+  held at $1$ and \emph{all} other conductors (including the cathode) at
+  $0$.  By Ramo's theorem the instantaneous current induced on the pixel
+  by a charge $q$ moving with velocity $\mathbf{v}$ is
+  \begin{equation}
+    I(t) = -\,q\,\mathbf{v}(t)\cdot\nabla\varphi_w\big(\mathbf{x}(t)\big)
+         = -\,q\,\mathbf{v}(t)\cdot\mathbf{E}_w\big(\mathbf{x}(t)\big).
+    \label{eq:ramo}
+  \end{equation}
+\end{description}
+
+\subsection{Finite-difference solution}
+
+Both problems are discretised on a uniform Cartesian grid and solved with
+the finite-difference method (FDM).  On an isotropic grid the discrete
+Laplacian gives the Jacobi update
+\begin{equation}
+  \varphi^{(k+1)}_{ijl}
+   = \tfrac{1}{6}\!\!\sum_{\text{6 neighbours}}\!\!\varphi^{(k)} ,
+  \label{eq:jacobi}
+\end{equation}
+applied only at \emph{mutable} cells; cells flagged as boundary keep their
+fixed value at every iteration.  Iteration stops when the largest cell
+update falls below a target \emph{precision}.  Edge (halo) treatment is
+per axis: \texttt{periodic} wraps the domain, \texttt{fixed} uses a
+zero-gradient (Neumann) ghost cell.
+
+\subsection{Near-field refinement}
+
+A full-resolution solve over the entire $310$~mm drift depth is very
+expensive ($44\times44\times3100$ for the drift field,
+$396\times396\times3100$ for the weighting field).  However, the field is
+only structurally complex within a few millimetres of the pixel plane;
+beyond that it relaxes to a smooth, near-linear bulk that a coarse grid
+already captures well.  The pipeline therefore:
+\begin{enumerate}
+  \item solves the \textbf{coarse} problem (spacing $0.4$~mm) over the
+        \emph{full} depth;
+  \item refines only the \textbf{near field} $0\le z\le 20$~mm at
+        $0.1$~mm by seeding it with the up-sampled coarse solution and
+        pinning the $z=20$~mm face to the coarse bulk
+        (\emph{Dirichlet continuity});
+  \item \textbf{stitches} the fine near-field and the up-sampled coarse
+        far-field into a single full-resolution array.
+\end{enumerate}
+The fine near-field is $\sim 7.5\times$ smaller than a full fine solve and
+converges far faster because it starts from a good initial guess.
+
+\subsection{Domains used by the script}
+
+The transverse extent differs between the two problems: the drift field
+is solved on a single pixel pitch with periodic walls, while the weighting
+field needs a $9\times9$-pitch box so $\varphi_w$ can decay to $0$ at the
+transverse edges.  Table~\ref{tab:domains} lists every grid.
+
+\begin{table}[h]
+\centering
+\caption{Grids created in the script. Spacing in mm; physical size is
+$(\text{shape}-1)\times\text{spacing}$ only loosely (grid is
+\textit{shape}$\times$\textit{spacing} cells). The drift depth is
+$\sim310$~mm and the near-field interface is at $z=20$~mm
+(coarse index $50$, fine index $200$).}
+\label{tab:domains}
+\begin{tabular}{@{}llll@{}}
+\toprule
+store key & shape & spacing (mm) & role \\
+\midrule
+\key{domain/coarse}        & $11\times11\times775$    & 0.4 & drift coarse, full depth \\
+\key{domain/near}          & $44\times44\times201$    & 0.1 & drift near field, $z\le20$\,mm \\
+\key{domain/fine}          & $44\times44\times3100$   & 0.1 & drift stitched full grid \\
+\key{domain/weight\_coarse}& $99\times99\times775$    & 0.4 & weighting coarse, full depth \\
+\key{domain/weight\_near}  & $396\times396\times201$  & 0.1 & weighting near field \\
+\key{domain/weight\_full}  & $396\times396\times3100$ & 0.1 & weighting stitched full grid \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%======================================================================
+\section{The data model and the \texttt{want} guard}
+
+\subsection{Store, domains, and arrays}
+
+\cmd{pochoir} reads and writes named \emph{datasets} under a store
+directory (\texttt{\$POCHOIR\_STORE}, default \texttt{store}).  Each key
+such as \key{potential/drift3d} maps to
+\texttt{\$POCHOIR\_STORE/potential/drift3d.npz} (plus a \texttt{.json}
+sidecar holding metadata such as the domain shape/spacing).  Three array
+kinds recur:
+\begin{description}
+  \item[domain] grid description (shape, spacing, origin);
+  \item[initial] the value array --- holds the fixed potentials at
+        electrode cells and the initial guess elsewhere;
+  \item[boundary] a boolean mask --- \texttt{True} where the cell is an
+        immutable electrode.
+\end{description}
+The FDM update~\eqref{eq:jacobi} uses \texttt{initial}$\times$\texttt{boundary}
+as the frozen Dirichlet values and updates only the complementary cells.
+
+\subsection{The resume guard}
+
+Every calculation is wrapped in \cmd{want}, redefined at the top of the
+script:
+
+\begin{lstlisting}
+want () {
+    local targets="$1" ; shift
+    local t miss=0
+    for t in $targets ; do
+        [ -f "$POCHOIR_STORE/${t}.npz" ] || miss=1
+    done
+    if [ "$miss" -eq 0 ] ; then echo "have $targets"; return ; fi
+    echo "$@"
+    "$@"
+    for t in $targets ; do
+        [ -f "$POCHOIR_STORE/${t}.npz" ] || { echo "ERROR: missing $t" >&2; exit 1; }
+    done
+    echo "made $targets"
+}
+\end{lstlisting}
+
+The first argument is a space-separated list of output keys.  The wrapped
+command runs \emph{only if at least one} listed output is missing; if all
+are present the step is skipped (printing \texttt{have~\ldots}).  After a
+run it verifies that every listed output was produced.  Listing all of a
+step's outputs (e.g.\ \key{potential/coarse} \emph{and}
+\key{increment/coarse}) means a step interrupted between its two writes
+is correctly re-run.  This makes the whole script idempotent: re-running
+reuses whatever is already in the store.
+
+%======================================================================
+\section{PART A --- Drift field}
+
+Generator \cmd{pcb\_drift\_pixel\_with\_grid} with configuration
+\cmd{example\_gen\_pcb\_drift\_pixel\_with\_grid.json}; transverse edges
+\texttt{periodic} (single pixel pitch), longitudinal edge \texttt{fixed}.
+The log goes to \texttt{pochoir\_driftfield.log}.
+
+\subsection*{Step A.1 --- Coarse full-depth solve ($0.4$~mm)}
+\begin{lstlisting}
+want domain/coarse  pochoir domain --domain domain/coarse \
+     --shape=11,11,775 --spacing 0.4*mm
+want "initial/coarse boundary/coarse"  pochoir gen --generator $gen \
+     --domain domain/coarse --initial initial/coarse --boundary boundary/coarse $cfg
+want "potential/coarse increment/coarse"  pochoir fdm \
+     --nepochs 10 --epoch 130000000 --precision 0.0000002 \
+     --edges per,per,fix --engine torch \
+     --initial initial/coarse --boundary boundary/coarse \
+     --potential potential/coarse --increment increment/coarse
+\end{lstlisting}
+\begin{itemize}
+  \item \cmd{domain} builds the $11\times11\times775$ grid at $0.4$~mm
+        (a single $4.4\times4.4$~mm pixel pitch, $\sim310$~mm deep).
+  \item \cmd{gen} rasterises the electrode geometry: it converts the
+        physical configuration (hole radius, pixel size, PCB width,
+        cathode at \texttt{driftZDepth}, \ldots) into grid cells, writing
+        the fixed electrode potentials into \key{initial/coarse} and the
+        electrode mask into \key{boundary/coarse}.
+  \item \cmd{fdm} solves Laplace~\eqref{eq:laplace} with the Jacobi
+        update~\eqref{eq:jacobi} on the GPU (\texttt{--engine torch}) until
+        the per-cell update drops below $2\times10^{-7}$
+        (\texttt{--epoch} iterations per convergence check,
+        \texttt{--nepochs} checks).  Output: the coarse potential and the
+        final increment (error) field.
+\end{itemize}
+
+\subsection*{Step A.2 --- Near-field grid, geometry, and seed ($0.1$~mm)}
+\begin{lstlisting}
+want domain/near  pochoir domain --domain domain/near \
+     --shape=44,44,201 --spacing 0.1*mm
+want "initial/near boundary/near"  pochoir gen --generator $gen \
+     --domain domain/near --initial initial/near --boundary boundary/near $cfg
+want initial/near_refined  pochoir refine \
+     --coarse potential/coarse --initial initial/near \
+     --boundary boundary/near --output initial/near_refined
+\end{lstlisting}
+\begin{itemize}
+  \item A fine $44\times44\times201$ grid covering exactly $z\in[0,20]$~mm.
+  \item \cmd{gen} re-rasterises the same electrode geometry at $0.1$~mm so
+        the near field carries the true high-resolution pixel/grid shape.
+  \item \cmd{refine} up-samples the coarse potential by $4\times$ (linear
+        interpolation) onto the fine grid and merges it with the fine
+        electrode values, producing \key{initial/near\_refined}: an
+        excellent initial guess that already has the correct bulk shape.
+\end{itemize}
+
+\subsection*{Step A.3 --- Dirichlet interface at $z=20$~mm}
+\begin{lstlisting}
+want "initial/near_bc boundary/near_bc"  pochoir near-bc \
+     --initial initial/near_refined --boundary boundary/near \
+     --coarse potential/coarse \
+     --initial-out initial/near_bc --boundary-out boundary/near_bc
+\end{lstlisting}
+\cmd{near-bc} pins the top face of the near domain ($z=20$~mm) to the
+coarse bulk potential there (transversely up-sampled) by marking that
+plane as a boundary in \key{boundary/near\_bc} and writing the coarse
+values into \key{initial/near\_bc}.  This is the discrete \emph{continuity}
+condition: the near solve is forced to agree with the coarse bulk at the
+interface, so the two regions match after stitching.
+
+\subsection*{Step A.4 --- Near-field fine solve ($0.1$~mm)}
+\begin{lstlisting}
+want "potential/near increment/near"  pochoir fdm \
+     --nepochs 10 --epoch 130000000 --precision 0.0000000002 \
+     --edges per,per,fix --engine torch \
+     --initial initial/near_bc --boundary boundary/near_bc \
+     --potential potential/near --increment increment/near
+\end{lstlisting}
+The same FDM solver, now on the small fine grid, seeded with
+\key{initial/near\_bc} and pinned at both ends ($z=0$ electrodes, $z=20$~mm
+interface).  Because it starts from the up-sampled coarse field it reaches
+the tighter precision $2\times10^{-10}$ quickly.
+
+\subsection*{Step A.5 --- Full-grid geometry and stitch}
+\begin{lstlisting}
+want domain/fine  pochoir domain --domain domain/fine \
+     --shape=44,44,3100 --spacing 0.1*mm
+want "boundary/fine initial/fine"  pochoir gen --generator $gen \
+     --domain domain/fine --initial initial/fine --boundary boundary/fine $cfg
+want potential/drift3d  pochoir stitch-near \
+     --near potential/near --coarse potential/coarse \
+     --domain domain/fine --output potential/drift3d
+\end{lstlisting}
+\begin{itemize}
+  \item \cmd{domain}/\cmd{gen} build the full $44\times44\times3100$ grid
+        and its electrode mask.  Note the \emph{FDM is not run} on this
+        large grid; \cmd{gen} only produces \key{boundary/fine}, used later
+        by \cmd{velo} to zero the field inside conductors.
+  \item \cmd{stitch-near} assembles the final
+        \key{potential/drift3d}: the fine near-field solution for
+        $z<20$~mm and the $4\times$ up-sampled coarse solution for
+        $z\ge20$~mm, continuous across the interface by construction.
+\end{itemize}
+
+%======================================================================
+\section{PART B --- Weighting field}
+
+Generator \cmd{pcb\_pixel\_with\_grid} with
+\cmd{example\_gen\_pixel\_with\_grid.json}; \emph{all} edges
+\texttt{fixed} so $\varphi_w\to0$ at the transverse walls of the
+$39.6\times39.6$~mm box; \texttt{--multisteps no}.  The structure mirrors
+PART~A exactly, with keys prefixed \key{weight\_} and a larger transverse
+grid ($99\to396$ cells).  Log: \texttt{pochoir\_weightingfield.log}.
+
+\begin{description}
+  \item[B.1] coarse solve, \key{domain/weight\_coarse}
+    $99\times99\times775$ @ $0.4$~mm, \cmd{gen}, \cmd{fdm}
+    (\texttt{fix,fix,fix}, precision $2\times10^{-8}$) $\to$
+    \key{potential/weight\_coarse}.
+  \item[B.2] near grid \key{domain/weight\_near} $396\times396\times201$ @
+    $0.1$~mm, \cmd{gen}, \cmd{refine} $\to$
+    \key{initial/weight\_near\_refined}.
+  \item[B.3] \cmd{near-bc} pins the $z=20$~mm interface to the coarse
+    weighting bulk $\to$ \key{initial/weight\_near\_bc},
+    \key{boundary/weight\_near\_bc}.
+  \item[B.4] near fine \cmd{fdm} (precision $2\times10^{-10}$) $\to$
+    \key{potential/weight\_near}.
+  \item[B.5] \key{domain/weight\_full} $396\times396\times3100$ and
+    \cmd{stitch-near} $\to$ \key{potential/weight3d}, the full weighting
+    potential consumed by \cmd{induce-pixel}.
+\end{description}
+
+\paragraph{Cathode grounding.} Ramo's theorem requires \emph{every}
+non-collecting electrode --- including the cathode --- to be held at
+$\varphi_w=0$.  The weighting generator must therefore ground a cathode
+plane at \texttt{driftZDepth}; otherwise $\varphi_w$ does not decay to $0$
+at large $z$ but plateaus at the pixel area-fraction (a previously
+diagnosed bug).  With the cathode grounded, \key{potential/weight3d}
+decays from $1$ at the pixel to $0$ at the cathode.
+
+%======================================================================
+\section{PART C --- Velocity, paths, and induced current}
+
+\subsection*{C.1 --- Drift velocity field}
+\begin{lstlisting}
+want velocity/drift3d  pochoir velo --temperature 87.0*K \
+     --potential potential/drift3d --boundary boundary/fine \
+     --velocity velocity/drift3d
+\end{lstlisting}
+\cmd{velo} forms $\mathbf{E}=-\nabla\varphi$ from \key{potential/drift3d}
+and maps it to an electron drift velocity using the LAr mobility model at
+$T=87$~K.  \key{boundary/fine} is supplied so the velocity is zeroed
+inside the electrodes.  Output: a vector field \key{velocity/drift3d}.
+
+\subsection*{C.2 --- Starting points and trajectories}
+\begin{lstlisting}
+dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)   # 10 positions
+points = { (d*mm, d2*mm, 308*mm) for d,d2 in dist x dist }  # 100 points
+
+want starts/drift3d  pochoir starts --starts starts/drift3d \
+     -m no -c example_gen_pixel_with_grid.json "${points[@]}" --plot
+
+want paths/drift3d_tight  pochoir drift --starts starts/drift3d \
+     --velocity velocity/drift3d \
+     --paths paths/drift3d_tight 0*us,210*us,0.05*us --plot
+\end{lstlisting}
+\begin{itemize}
+  \item \cmd{starts} builds a $10\times10$ grid of $100$ launch points
+        (0.44~mm pitch over one pixel) at $z=308$~mm, i.e.\ just in front
+        of the cathode at the far end of the $\sim310$~mm domain.
+  \item \cmd{drift} integrates each electron through
+        \key{velocity/drift3d} over $0\to210~\mu$s in $0.05~\mu$s steps,
+        producing trajectories \key{paths/drift3d\_tight}.
+\end{itemize}
+
+\subsection*{C.3 --- Induced current}
+\begin{lstlisting}
+want current/induced_current  pochoir induce-pixel \
+     --weighting potential/weight3d --paths paths/drift3d_tight \
+     --output current/induced_current --npixels 4 \
+     --config example_gen_pixel_with_grid.json --plot
+\end{lstlisting}
+\cmd{induce-pixel} evaluates the weighting field along each drift path and
+applies Ramo's theorem~\eqref{eq:ramo} to obtain the time-dependent
+current induced on the pixel(s) (\texttt{--npixels 4}), writing
+\key{current/induced\_current}.  This is the physical observable that the
+whole pipeline targets.
+
+%======================================================================
+\section{Summary of the pipeline}
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+command & reads & writes \\
+\midrule
+\endhead
+\cmd{domain}      & --- & \key{domain/*} \\
+\cmd{gen}         & \key{domain/*} & \key{initial/*}, \key{boundary/*} \\
+\cmd{fdm}         & \key{initial/*}, \key{boundary/*} & \key{potential/*}, \key{increment/*} \\
+\cmd{refine}      & \key{potential/coarse}, \key{initial/near}, \key{boundary/near} & \key{initial/*\_refined} \\
+\cmd{near-bc}     & \key{initial/*\_refined}, \key{boundary/near}, \key{potential/coarse} & \key{initial/*\_bc}, \key{boundary/*\_bc} \\
+\cmd{stitch-near} & \key{potential/near}, \key{potential/coarse}, \key{domain/fine} & \key{potential/drift3d} or \key{potential/weight3d} \\
+\cmd{velo}        & \key{potential/drift3d}, \key{boundary/fine} & \key{velocity/drift3d} \\
+\cmd{starts}      & --- & \key{starts/drift3d} \\
+\cmd{drift}       & \key{starts/drift3d}, \key{velocity/drift3d} & \key{paths/drift3d\_tight} \\
+\cmd{induce-pixel}& \key{potential/weight3d}, \key{paths/drift3d\_tight} & \key{current/induced\_current} \\
+\bottomrule
+\end{longtable}
+
+\paragraph{Convergence targets.} coarse drift $2\times10^{-7}$; near drift
+$2\times10^{-10}$; coarse weighting $2\times10^{-8}$; near weighting
+$2\times10^{-10}$.
+
+\paragraph{Note on inline comments.} A few comments inside the script
+still quote the original $150$~mm geometry (e.g. ``$11\times11\times375$'',
+``$z=148$~mm''); the live parameters are the $\sim310$~mm grids of
+Table~\ref{tab:domains} ($775$/$3100$ cells in $z$, launch at $z=308$~mm).
+
+\end{document}
