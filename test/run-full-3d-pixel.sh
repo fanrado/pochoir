@@ -12,7 +12,7 @@
 # combines the fine near-field with the upsampled coarse far-field into
 # the full 0.1mm grid.
 #
-#   drift     -> potential/full
+#   drift     -> potential/drift3d
 #   weighting -> potential/weight3d   (consumed by induce-pixel)
 #
 # Store keys are non-overlapping between the two parts (drift uses
@@ -116,12 +116,12 @@ want domain/fine \
      pochoir domain --domain domain/fine \
      --shape=44,44,1500 --spacing '0.1*mm'
 
-want potential/full \
+want potential/drift3d \
      pochoir stitch-near \
      --near potential/near \
      --coarse potential/coarse \
      --domain domain/fine \
-     --output potential/full
+     --output potential/drift3d
 
 date
 
@@ -228,14 +228,14 @@ date
 ############################################################################
 ## PART C: VELOCITY, PATHS, INDUCED CURRENT
 ############################################################################
-## Uses the drift potential (potential/full) and the weighting field
+## Uses the drift potential (potential/drift3d) and the weighting field
 ## (potential/weight3d) produced above.
 
 echo "=== Velocities ==="
 ## Drift velocity field from the stitched drift potential.
 want velocity/drift3d \
      pochoir velo --temperature '87.0*K' \
-     --potential potential/full \
+     --potential potential/drift3d \
      --velocity velocity/drift3d
 
 echo "=== Paths ==="
