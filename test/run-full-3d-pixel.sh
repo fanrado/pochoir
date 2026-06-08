@@ -116,6 +116,15 @@ want domain/fine \
      pochoir domain --domain domain/fine \
      --shape=44,44,1500 --spacing '0.1*mm'
 
+# Generate the full-fine electrode geometry (boundary mask) for the
+# stitched domain.  The FDM solve is NOT run here (that is the whole
+# point of the near-field workflow); this only builds the boundary array
+# so PART C's velo can zero the E-field at electrode cells.
+want boundary/fine \
+     pochoir gen --generator $gen --domain domain/fine \
+     --initial initial/fine --boundary boundary/fine \
+     $cfg
+
 want potential/drift3d \
      pochoir stitch-near \
      --near potential/near \
@@ -236,6 +245,7 @@ echo "=== Velocities ==="
 want velocity/drift3d \
      pochoir velo --temperature '87.0*K' \
      --potential potential/drift3d \
+     --boundary boundary/fine \
      --velocity velocity/drift3d
 
 echo "=== Paths ==="

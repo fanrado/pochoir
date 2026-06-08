@@ -404,6 +404,8 @@ def fdm(ctx, initial, boundary,
               help="LAr temperature")
 @click.option("-p", "--potential", type=str,
               help="Input potential array")
+@click.option("-b", "--boundary", type=str, default=None,
+              help="Input boundary array (def: resolve via potential metadata)")
 @click.option("-V", "--velocity", type=str,
               help="Output velocity array")
 @click.option("-L", "--diff-longitudinal", "dl_key", type=str, default=None,
@@ -411,7 +413,7 @@ def fdm(ctx, initial, boundary,
 @click.option("-T", "--diff-transverse", "dt_key", type=str, default=None,
               help="Output key for transverse diffusion (dt)")
 @click.pass_context
-def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
+def velo(ctx, temperature, potential, boundary, velocity,dl_key,dt_key):
     '''
     Calculate a velocity field from a potential field
     '''
@@ -419,15 +421,26 @@ def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
     pot, md = ctx.obj.get(potential, True)
     domain = md['domain']
     dom = ctx.obj.get_domain(domain)
-    bc = md['boundary']
-    barr = ctx.obj.get(bc)
+    # The boundary mask zeros the E-field at electrode cells.  Prefer an
+    # explicitly named boundary (needed when the potential was produced by
+    # an operation whose metadata carries no 'boundary' key, e.g.
+    # stitch-near); otherwise resolve it from the potential's metadata as
+    # the fdm-produced reference workflow does.  If neither is available
+    # the electrode zeroing is skipped (the field is still valid away from
+    # electrodes) -- pass --boundary for the full electrode treatment.
+    bc = boundary if boundary else md.get('boundary')
+    barr = ctx.obj.get(bc) if bc else None
     pot = pot#*units.V
     debug_msg(f"TEST={pot[1,1,-1]}; Spacing={dom.spacing}")
     efield = pochoir.arrays.gradient(pot, *dom.spacing)
-    flag = barr==1
-    efield[0][flag]=0
-    efield[1][flag]=0
-    efield[2][flag]=0
+    if barr is not None:
+        flag = barr==1
+        efield[0][flag]=0
+        efield[1][flag]=0
+        efield[2][flag]=0
+    else:
+        info_msg('velo: no boundary array; skipping electrode E-field zeroing '
+                 '(pass --boundary for the full treatment)')
     #efield[0][:,0,:]=0
     #efield[0][:,-1,:]=0
     efield[1][:,0,:]=0
