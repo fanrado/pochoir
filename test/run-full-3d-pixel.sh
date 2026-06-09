@@ -131,7 +131,7 @@ want "initial/near_bc boundary/near_bc" \
 
 want "potential/near increment/near" \
      pochoir fdm \
-     --nepochs 10 --epoch 130000000 --precision 0.0000000002 \
+     --nepochs 10 --epoch 130000000 --precision 0.00000000002 \
      --edges per,per,fix \
      --engine torch \
      --initial initial/near_bc --boundary boundary/near_bc \
@@ -180,7 +180,8 @@ cfg="example_gen_pixel_with_grid.json"
 
 want domain/weight_coarse \
      pochoir domain --domain domain/weight_coarse \
-     --shape=99,99,775 --spacing '0.4*mm'
+     --shape=55,55,775 --spacing '0.4*mm'
+    # --shape=99,99,775 --spacing '0.4*mm'
 
 want "initial/weight_coarse boundary/weight_coarse" \
      pochoir gen --generator $gen --domain domain/weight_coarse \
@@ -189,7 +190,7 @@ want "initial/weight_coarse boundary/weight_coarse" \
 
 want "potential/weight_coarse increment/weight_coarse" \
      pochoir fdm \
-     --nepochs 10 --epoch 130000000 --precision 0.00000002 \
+     --nepochs 10 --epoch 130000000 --precision 0.0000002 \
      --edges fix,fix,fix \
      --engine torch \
      --initial initial/weight_coarse --boundary boundary/weight_coarse \
@@ -205,7 +206,8 @@ date
 
 want domain/weight_near \
      pochoir domain --domain domain/weight_near \
-     --shape=396,396,201 --spacing '0.1*mm'
+     --shape=220,220,201 --spacing '0.1*mm'
+     #--shape=396,396,201 --spacing '0.1*mm'
 
 want "initial/weight_near boundary/weight_near" \
      pochoir gen --generator $gen --domain domain/weight_near \
@@ -255,7 +257,8 @@ date
 
 want domain/weight_full \
      pochoir domain --domain domain/weight_full \
-     --shape=396,396,3100 --spacing '0.1*mm'
+     --shape=220,220,3100 --spacing '0.1*mm'
+     #--shape=396,396,3100 --spacing '0.1*mm'
 
 want potential/weight3d \
      pochoir stitch-near \
@@ -310,7 +313,7 @@ want current/induced_current \
      pochoir induce-pixel --weighting potential/weight3d \
      --paths paths/drift3d_tight \
      --output current/induced_current \
-     --npixels 4 \
+     --npixels 2 \
      --config example_gen_pixel_with_grid.json \
      --plot
 
