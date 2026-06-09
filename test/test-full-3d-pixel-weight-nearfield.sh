@@ -53,7 +53,7 @@ want initial/weight_coarse \
 
 want potential/weight_coarse \
      pochoir fdm \
-     --nepochs 1 --epoch 130000000 --precision 0.000002 \
+     --nepochs 10 --epoch 130000000 --precision 0.000000002 \
      --edges fix,fix,fix \
      --engine torch \
      --initial initial/weight_coarse --boundary boundary/weight_coarse \
@@ -102,7 +102,7 @@ want initial/weight_near_bc \
 
 want potential/weight_near \
      pochoir fdm \
-     --nepochs 1 --epoch 130000000 --precision 0.00000002 \
+     --nepochs 10 --epoch 130000000 --precision 0.0000000002 \
      --edges fix,fix,fix \
      --engine torch \
      --initial initial/weight_near_bc --boundary boundary/weight_near_bc \

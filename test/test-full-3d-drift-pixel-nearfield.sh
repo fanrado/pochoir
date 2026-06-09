@@ -48,7 +48,7 @@ want initial/coarse \
 
 want potential/coarse \
      pochoir fdm \
-     --nepochs 1 --epoch 130000000 --precision 0.000002 \
+     --nepochs 10 --epoch 130000000 --precision 0.000000002 \
      --edges per,per,fix \
      --engine torch \
      --initial initial/coarse --boundary boundary/coarse \
@@ -96,7 +96,7 @@ want initial/near_bc \
 
 want potential/near \
      pochoir fdm \
-     --nepochs 1 --epoch 130000000 --precision 0.00000002 \
+     --nepochs 10 --epoch 130000000 --precision 0.0000000002 \
      --edges per,per,fix \
      --engine torch \
      --initial initial/near_bc --boundary boundary/near_bc \
