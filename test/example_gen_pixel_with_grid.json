@@ -4,12 +4,12 @@
     "GridHoleShape" : "None",
     "pixelPlaneLowEdgePosition" : 2,
     "pixelPlaneWidth" : 0.1,
-    "pixelSize" : 3.5,
-    "pixelGap" : 0.9,
+    "pixelSize" : 3.9,
+    "pixelGap" : 0.5,
     "chamfer_r": 0.7,
-    "Npixels" : 9,
+    "Npixels" : 5,
     "LArPermittivity": 1.5,
     "FR4Permittivity": 4.5,
-    "driftZDepth": 148.0,
+    "driftZDepth": 308,
     "nGridPoints": 10
 }
