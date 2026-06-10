@@ -1967,6 +1967,76 @@ def near_bc(ctx, initial, boundary, coarse, initial_out, boundary_out, axis):
     ctx.obj.put(boundary_out, bmask, taxon="boundary", **bparams)
 
 
+@cli.command("coarsen")
+@click.option("-i", "--input", "input_", type=str, required=True,
+              help="Input fine potential array to downsample")
+@click.option("-d", "--domain", type=str, required=True,
+              help="Target coarser domain key (already in store)")
+@click.option("-o", "--output", type=str, required=True,
+              help="Output coarsened potential")
+@click.pass_context
+def coarsen(ctx, input_, domain, output):
+    '''
+    Stride-downsample a fine potential onto a coarser domain.
+
+    Pixel sizes that are odd multiples of the coarse spacing (e.g. 3.9mm
+    at 0.1mm) produce asymmetric FDM pixel tiles.  The near-field FDM
+    solve is therefore run at half spacing (e.g. 0.05mm, where the tile
+    is symmetric), then this command strides the result back to the
+    coarse spacing before stitching.
+
+    The per-axis stride is inferred from the spacing ratio
+    `stride[i] = round(coarse.spacing[i] / fine.spacing[i])` and applied
+    as `arr[::sx, ::sy, ::sz]`.  Because the interface plane that
+    `near-bc` pinned sits on the sampled axis (an even index of the fine
+    grid), striding preserves the exact electrode-surface and interface
+    values.  The resulting shape must match the target domain.
+    '''
+    import numpy
+
+    iarr, imd = ctx.obj.get(input_, True)
+
+    if iarr is None:
+        click.echo(f'failed to load input potential {input_}')
+        info_msg(f'failed to load input potential {input_}')
+        sys.exit(-1)
+    if imd is None or "domain" not in imd:
+        click.echo(f'failed to get domain for input potential {input_}')
+        info_msg(f'failed to get domain for input potential {input_}')
+        sys.exit(-1)
+
+    fdom = ctx.obj.get_domain(imd["domain"])
+    cdom = ctx.obj.get_domain(domain)
+
+    arr = numpy.asarray(iarr, dtype=float)
+
+    # Infer the per-axis stride from the spacing ratio.
+    stride = [int(round(cdom.spacing[a] / fdom.spacing[a]))
+              for a in range(arr.ndim)]
+    if any(s < 1 for s in stride):
+        click.echo(f'coarsen: target spacing {tuple(cdom.spacing)} is finer '
+                   f'than input {tuple(fdom.spacing)} on some axis')
+        sys.exit(-1)
+
+    sel = tuple(slice(None, None, s) for s in stride)
+    out = arr[sel]
+
+    cshape = tuple(int(s) for s in cdom.shape)
+    if out.shape != cshape:
+        click.echo(f'coarsen: strided shape {out.shape} (stride {tuple(stride)}) '
+                   f'does not match target domain shape {cshape}')
+        info_msg(f'coarsen: strided shape {out.shape} != domain {cshape}')
+        sys.exit(-1)
+
+    info_msg(f'coarsen: {arr.shape} @ {tuple(fdom.spacing)} -> '
+             f'{out.shape} @ {tuple(cdom.spacing)} (stride {tuple(stride)})')
+
+    params = dict(operation="coarsen", domain=domain,
+                  input=input_, stride=[int(s) for s in stride],
+                  command="coarsen")
+    ctx.obj.put(output, out, taxon="potential", **params)
+
+
 @cli.command("stitch-near")
 @click.option("-n", "--near", type=str, required=True,
               help="Input near-field fine potential (covers z=0..interface)")

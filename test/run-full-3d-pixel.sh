@@ -98,7 +98,8 @@ date
 
 want domain/near \
      pochoir domain --domain domain/near \
-     --shape=44,44,201 --spacing '0.1*mm'
+     --shape=88,88,401 --spacing '0.05*mm'
+     #--shape=44,44,201 --spacing '0.05*mm'
 
 want "initial/near boundary/near" \
      pochoir gen --generator $gen --domain domain/near \
@@ -141,8 +142,22 @@ want "potential/near increment/near" \
 date
 
 ## ---------------------------------------------------------------------------
-## Step 5: stitch near fine + coarse far into the full fine grid
+## Step 5: coarsen the 0.05mm near solve back to 0.1mm, then stitch onto far
 ## ---------------------------------------------------------------------------
+
+# The near solve ran at 0.05mm (88x88x401) so the odd-multiple pixel tile
+# (pixelSize=3.9mm -> p_size=78, even) stays symmetric.  Stride-downsample
+# it by 2 back to 0.1mm (44x44x201) for stitching onto the coarse far field.
+# This also avoids building the 88x88x6200 full-fine domain (OOM).
+want domain/near_01 \
+     pochoir domain --domain domain/near_01 \
+     --shape=44,44,201 --spacing '0.1*mm'
+
+want potential/near_01 \
+     pochoir coarsen \
+     --input potential/near \
+     --domain domain/near_01 \
+     --output potential/near_01
 
 want domain/fine \
      pochoir domain --domain domain/fine \
@@ -159,7 +174,7 @@ want "boundary/fine initial/fine" \
 
 want potential/drift3d \
      pochoir stitch-near \
-     --near potential/near \
+     --near potential/near_01 \
      --coarse potential/coarse \
      --domain domain/fine \
      --output potential/drift3d
@@ -206,7 +221,8 @@ date
 
 want domain/weight_near \
      pochoir domain --domain domain/weight_near \
-     --shape=220,220,201 --spacing '0.1*mm'
+     --shape=440,440,401 --spacing '0.05*mm'
+     #--shape=220,220,201 --spacing '0.05*mm'
      #--shape=396,396,201 --spacing '0.1*mm'
 
 want "initial/weight_near boundary/weight_near" \
@@ -251,18 +267,30 @@ want "potential/weight_near increment/weight_near" \
 date
 
 ## ---------------------------------------------------------------------------
-## Step 5: stitch near fine + coarse far into the full fine grid.
+## Step 5: coarsen the 0.05mm near weighting solve back to 0.1mm, then stitch.
 ##         Stored as potential/weight3d for downstream induce-pixel.
 ## ---------------------------------------------------------------------------
+
+# As in PART A, the near weighting solve ran at 0.05mm (440x440x401) for a
+# symmetric pixel tile.  Stride-downsample by 2 to 0.1mm (220x220x201) before
+# stitching, avoiding the 440x440x6200 full-fine domain (OOM).
+want domain/weight_near_01 \
+     pochoir domain --domain domain/weight_near_01 \
+     --shape=220,220,201 --spacing '0.1*mm'
+
+want potential/weight_near_01 \
+     pochoir coarsen \
+     --input potential/weight_near \
+     --domain domain/weight_near_01 \
+     --output potential/weight_near_01
 
 want domain/weight_full \
      pochoir domain --domain domain/weight_full \
      --shape=220,220,3100 --spacing '0.1*mm'
-     #--shape=396,396,3100 --spacing '0.1*mm'
 
 want potential/weight3d \
      pochoir stitch-near \
-     --near potential/weight_near \
+     --near potential/weight_near_01 \
      --coarse potential/weight_coarse \
      --domain domain/weight_full \
      --output potential/weight3d
