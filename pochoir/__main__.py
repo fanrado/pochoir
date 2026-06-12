@@ -1974,10 +1974,12 @@ def near_bc(ctx, initial, boundary, coarse, initial_out, boundary_out, axis):
               help="Target coarser domain key (already in store)")
 @click.option("-o", "--output", type=str, required=True,
               help="Output coarsened potential")
+@click.option("--average", is_flag=True, default=False,
+              help="Block-average stride-sized blocks instead of stride-sampling")
 @click.pass_context
-def coarsen(ctx, input_, domain, output):
+def coarsen(ctx, input_, domain, output, average):
     '''
-    Stride-downsample a fine potential onto a coarser domain.
+    Downsample a fine potential onto a coarser domain.
 
     Pixel sizes that are odd multiples of the coarse spacing (e.g. 3.9mm
     at 0.1mm) produce asymmetric FDM pixel tiles.  The near-field FDM
@@ -1986,11 +1988,13 @@ def coarsen(ctx, input_, domain, output):
     coarse spacing before stitching.
 
     The per-axis stride is inferred from the spacing ratio
-    `stride[i] = round(coarse.spacing[i] / fine.spacing[i])` and applied
-    as `arr[::sx, ::sy, ::sz]`.  Because the interface plane that
-    `near-bc` pinned sits on the sampled axis (an even index of the fine
-    grid), striding preserves the exact electrode-surface and interface
-    values.  The resulting shape must match the target domain.
+    `stride[i] = round(coarse.spacing[i] / fine.spacing[i])`.
+
+    Without --average (default): stride-sample as `arr[::sx, ::sy, ::sz]`.
+    With --average: block-average each stride-sized block.  Axes whose
+    length is not an exact multiple of the stride are edge-padded so that
+    the last partial block averages to the boundary value exactly.
+    The resulting shape must match the target domain.
     '''
     import numpy
 
@@ -2018,22 +2022,43 @@ def coarsen(ctx, input_, domain, output):
                    f'than input {tuple(fdom.spacing)} on some axis')
         sys.exit(-1)
 
-    sel = tuple(slice(None, None, s) for s in stride)
-    out = arr[sel]
+    if average:
+        # Pad each axis to the nearest multiple of its stride using edge
+        # replication, then reshape and mean.  Edge padding means a partial
+        # last block (odd-length axis) averages to the exact boundary value.
+        padded = arr
+        for a in range(arr.ndim):
+            s = stride[a]
+            rem = padded.shape[a] % s
+            if rem != 0:
+                pad_width = [(0, 0)] * arr.ndim
+                pad_width[a] = (0, s - rem)
+                padded = numpy.pad(padded, pad_width, mode='edge')
+        # Reshape to (..., n0, s0, n1, s1, ...) then mean over stride axes.
+        new_shape = []
+        for a in range(arr.ndim):
+            new_shape += [padded.shape[a] // stride[a], stride[a]]
+        mean_axes = tuple(range(1, 2 * arr.ndim, 2))
+        out = padded.reshape(new_shape).mean(axis=mean_axes)
+    else:
+        sel = tuple(slice(None, None, s) for s in stride)
+        out = arr[sel]
 
     cshape = tuple(int(s) for s in cdom.shape)
     if out.shape != cshape:
-        click.echo(f'coarsen: strided shape {out.shape} (stride {tuple(stride)}) '
+        mode = "averaged" if average else "strided"
+        click.echo(f'coarsen: {mode} shape {out.shape} (stride {tuple(stride)}) '
                    f'does not match target domain shape {cshape}')
-        info_msg(f'coarsen: strided shape {out.shape} != domain {cshape}')
+        info_msg(f'coarsen: {mode} shape {out.shape} != domain {cshape}')
         sys.exit(-1)
 
-    info_msg(f'coarsen: {arr.shape} @ {tuple(fdom.spacing)} -> '
+    mode = "average" if average else "stride"
+    info_msg(f'coarsen ({mode}): {arr.shape} @ {tuple(fdom.spacing)} -> '
              f'{out.shape} @ {tuple(cdom.spacing)} (stride {tuple(stride)})')
 
     params = dict(operation="coarsen", domain=domain,
                   input=input_, stride=[int(s) for s in stride],
-                  command="coarsen")
+                  average=average, command="coarsen")
     ctx.obj.put(output, out, taxon="potential", **params)
 
 

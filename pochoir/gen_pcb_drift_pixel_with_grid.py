@@ -410,7 +410,8 @@ def generator(dom, cfg, info_msg=None):
     pp_loweredge = int(cfg['pixelPlaneLowEdgePosition']/dom.spacing[0])
     p_size=int(round(cfg["pixelSize"]/dom.spacing[0]))
     p_gap=int(round(cfg["pixelGap"]/dom.spacing[0]))
-    chamfer_r=int(cfg["chamfer_r"]/dom.spacing[0])
+    #chamfer_r=int(cfg["chamfer_r"]/dom.spacing[0])
+    chamfer_r=int(round(cfg["chamfer_r"]/dom.spacing[0]))
     n_pix = cfg['Npixels']
     pp_width = int(cfg['pixelPlaneWidth']/dom.spacing[0])
 
