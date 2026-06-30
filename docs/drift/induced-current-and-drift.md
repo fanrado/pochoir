@@ -300,6 +300,45 @@ Key points about stepping:
   (`drift_numpy.py:41`), so a particle that leaves the domain simply stops
   moving.
 
+### How the RK solver relates to the velocity interpolation
+
+The integrator and the field are **decoupled**, and this is the key to
+understanding where interpolation lives. `solve_ivp` knows *nothing* about the
+grid. All it sees is a right-hand-side function `func(t, pos)` answering one
+question — *given a position, what is the velocity vector there?* — i.e. the ODE
+`dr/dt = v(r)`. Everything grid-related is hidden inside that function.
+
+- **What RK receives as input** (`drift_numpy.py:106-111`): the RHS function
+  `func`, the initial condition `start`, the time span `[times[0], times[-1]]`
+  with sample points `t_eval=times`, and the tolerances/method. It is **not**
+  handed the grid, spacing, or origin — those are captured inside `func`.
+- **Where interpolation happens:** entirely inside the RHS, the `Simple`
+  callable (`drift_numpy.py:11-83`), **not** inside RK. `Simple.__init__` builds
+  one `RegularGridInterpolator` per velocity component over the precomputed grid
+  velocity field (`:39-41`); `Simple.__call__` (`:65`) trilinearly interpolates
+  that field at the arbitrary continuous point `pos` (`:49-60`) and returns the
+  velocity. RK never touches the grid itself.
+- **What RK does internally:** Radau is *implicit* and *adaptive*. It chooses
+  its own sub-step sizes to meet the tolerances, evaluates `func` at many
+  arbitrary continuous positions — its internal RK stage points, generally
+  **not** grid nodes — each triggering a trilinear interpolation, and (being
+  implicit) also probes `func` at perturbed positions to estimate a Jacobian.
+  The call count is tracked in `func.calls` (`:69`) and far exceeds
+  `len(times)`.
+- **The output:** `solve` returns `res['y'].T` (`:115`) — the trajectory `r(t)`
+  sampled at exactly the requested `times`, an `(n_times, 3)` array. So yes, RK
+  yields the final drift path, which downstream steps
+  (velocity-along-path, Φ_w lookup, induced current) consume.
+
+Two distinct interpolations serve different axes and should not be conflated:
+**`Simple` interpolates the velocity field in *space*** (linear/trilinear), while
+the solver interpolates *its own solution in time* (`t_eval`) to land on the
+requested ticks. The grid only ever enters through the spatial one.
+
+In short: RK needs only the interpolated velocities (via `func`); it does no
+interpolation of its own and needs no direct knowledge of the grid; and its
+product is the drift path `r(t)`.
+
 ### Stochastic (diffusion) path — Euler–Maruyama
 
 When both diffusion keys are supplied (`--diff-longitudinal` and
