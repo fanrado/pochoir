@@ -370,6 +370,109 @@ solver.
 
 ---
 
+## 8. Why does the induced-current integral come out ≈ 0.96 instead of 1?
+
+A natural sanity check is that the time-integral of the induced current for a
+fully collected unit charge equals 1 (one electron). In practice, integrating
+the `induce-pixel` waveforms for the central pixel
+(`test/Paths_at_centralpixBorder.ipynb`,
+`simpson(fr, dx=0.05µs, axis=2)`) gives **≈ 0.96**, not 1. This section explains
+why — and it is **not** a bug in the induce/dQ-dt code, a stalled path, or an
+interpolation artifact.
+
+### The integral telescopes to a difference in weighting potential
+
+Method A computes `I = dQ/dt` with `Q = q·Φ_w(r(t))`
+(`__main__.py:839-852`). Integrating over the full waveform therefore
+telescopes:
+
+```
+∫ I dt  =  ∫ (dQ/dt) dt  =  q·[ Φ_w(r_end) − Φ_w(r_start) ]
+```
+
+So the integral is exactly the **change in weighting potential between the
+charge's birthplace and its collection point** (times q). It equals 1 only if
+Φ_w sweeps the full 0 → 1.
+
+### What the data shows (dataset `store_0.1mmSpacing_0.05usTimeStep_0.1mmPixPlaneWidth`)
+
+Reading the stored intermediate `tmp/interpolated_phiW.npy` (the weighting
+potential sampled along each of the 625 paths):
+
+| Quantity | Value |
+|---|---|
+| Φ_w at collection (collected paths) | **1.0000** (paths do reach the pixel) |
+| Φ_w at the **start** of every path | **≈ 0.039** (range 0.0370–0.0391) |
+| ⇒ integral per collected path | `1 − 0.039 ≈ 0.961` |
+| max per-path integral over all 625 paths | **≈ 0.96** (none ≥ 0.99) |
+| hard ceiling `Φ_w(max) − Φ_w(start)` | **0.9611** |
+
+So **no single-pixel path integrates to 1** — the best any path can do is
+≈ 0.96, and the ≈0.039 offset is uniform across all paths (they all start on the
+same plane). Paths collected by a *neighbor* integrate to ≈ `0 − 0.039 = −0.039`
+(a small negative baseline). If a cell ever looked like "1" in a plot, that is
+the colorbar scale/rounding, not a true unit integral.
+
+### Root cause: the weighting-potential cathode boundary is not grounded
+
+The deficit is entirely `Φ_w(start) ≈ 0.039 ≠ 0`. The drift charges start at
+**z = 29.8 mm** (the top of the domain; the pixel is at z = 10 mm). The
+weighting potential there is ≈ 0.039 because the solve never forces Φ_w → 0 on
+the drift-entrance (cathode) side. The Φ_w profile along z at the pixel center:
+
+```
+ z = 0 mm  (backplane)  : Φ_w = 0.000   ← grounded
+ z = 8 mm               : Φ_w = 0.358
+ z = 10 mm (pixel)      : Φ_w = 1.000   ← readout pixel
+ z = 12 mm              : Φ_w = 0.385
+ z = 20 mm              : Φ_w = 0.051
+ z = 28 mm              : Φ_w = 0.039
+ z = 30 mm (top)        : Φ_w = 0.039   ← plateau, NOT 0
+```
+
+Below the pixel Φ_w decays to 0 (grounded backplane), but above it Φ_w decays
+only to a **flat ≈ 0.039 plateau** and never reaches 0. The boundary mask
+confirms why: in `boundary/weight3d.npz`, the bottom plane `z=0` has all 48400
+cells fixed and the pixel plane `z=100` has 35300 fixed, but the **top plane
+`z=299` has 0 fixed cells** — it is a free (Neumann) boundary. The generator
+grounds only the bottom (`pochoir/gen_pcb_pixel_with_grid.py:223`,
+`barr[:,:,0]=1`); there is no `barr[:,:,-1]=1`. With an insulating top, the
+Laplace solution flattens (∂Φ_w/∂z → 0) into a nonzero constant rather than
+decaying to 0.
+
+By Ramo's theorem, the missing ≈ 0.039 was *already* induced earlier — during
+the (un-simulated) drift from the true Φ_w = 0 cathode down to the z = 29.8 mm
+start plane. The simulation only captures the portion of the signal from the
+start plane onward, hence `1 − 0.039`.
+
+This is the same class of issue as the earlier fix "weighting potential floating
+in bulk: ground cathode plane" (commit `de786c1`), which was not applied to this
+generator path / dataset.
+
+### Note: finer grid does not fix it
+
+This deficit is a **boundary-condition / domain-height effect, not a
+discretization error**. Refining the grid (e.g. 0.1 mm → 0.05 mm) leaves the
+≈ 0.039 plateau essentially unchanged. (Contrast with the §3 nonlinear-velocity
+interpolation caveat, which *does* shrink with finer spacing.)
+
+### Recommended fix (follow-up, not done here)
+
+To make the response integrate to ≈ 1:
+
+1. **Ground the cathode/top plane in the weighting-potential geometry** — add
+   `barr[:,:,-1]=1` (with value 0) alongside the existing `barr[:,:,0]=1` in
+   `pochoir/gen_pcb_pixel_with_grid.py:223`, then **regenerate** the `weight3d`
+   weighting potential. Φ_w then decays to ≈ 0 at the start plane and every
+   collected path's integral rises from ≈ 0.96 to ≈ 1.0 — a uniform ~4 %
+   rescaling, not a per-path correction. (Equivalently/additionally, start the
+   drift exactly at the grounded cathode where Φ_w ≈ 0.)
+2. **Band-aid only:** if just the normalized waveform *shape* is needed,
+   baseline-subtract `Φ_w(start)` (or renormalize the integral to 1). This does
+   not correct the small shape error near the start of the drift.
+
+---
+
 ### TL;DR
 
 1. **Drift field:** gradient on the grid first (2nd-order finite differences),
@@ -382,3 +485,8 @@ solver.
 3. **Integration:** adaptive **implicit Runge–Kutta (Radau)** via `solve_ivp` by
    default (torchdiffeq / LSODA alternatives); explicit Euler–Maruyama only for
    the optional diffusion (SDE) path.
+4. **Integral ≈ 0.96, not 1:** `∫I dt = q·[Φ_w(end) − Φ_w(start)]`, and
+   Φ_w(start) ≈ 0.039 (not 0) because the weighting solve leaves the top/cathode
+   plane ungrounded (`gen_pcb_pixel_with_grid.py:223` grounds only `barr[:,:,0]`).
+   No path reaches 1; the ceiling is `1 − Φ_w(start) ≈ 0.96`. Fix: ground the
+   cathode plane and regenerate `weight3d`. See §8.
