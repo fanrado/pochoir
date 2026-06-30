@@ -146,6 +146,37 @@ Optionally, the same command produces **longitudinal and transverse diffusion
 coefficient fields** (`lar.diff_longit`, `lar.diff_tran`,
 `__main__.py:434-437`) that feed the stochastic drift path (see §5).
 
+### What is interpolated: the velocity, not E (and the nonlinearity caveat)
+
+It is worth being explicit about *which* quantity is interpolated to off-grid
+path points, because there are two conceivable orderings:
+
+- **Option 1 — compute velocity on the grid, then interpolate the velocity.**
+  ← *this is what `pochoir` does.*
+- **Option 2 — interpolate E to the path point, then evaluate `v = μ(|E|,T)·E`
+  there.** ← *not done.*
+
+The `velo` command evaluates the entire chain `E → |E| → μ(|E|,T) → v = μ·E`
+**once, on the grid** (`__main__.py:432-438`), and stores the finished
+**velocity vector field** `varr`. The drifter then builds one
+`RegularGridInterpolator` per **velocity** component (`drift_numpy.py:39-41`)
+and evaluates them at each path position. The mobility μ is never re-evaluated
+at off-grid points; E is interpolated directly only in the `srdot`/Ramo path
+(§4, Method B), where the *weighting* field components are interpolated.
+
+This distinction matters because μ(|E|) is **nonlinear** in E. Linearly
+interpolating the nonlinear velocity field (option 1) is therefore *not*
+identical to interpolating E and recomputing v (option 2):
+
+```
+interp( μ(|E|)·E )   ≠   μ(|interp(E)|)·interp(E)
+```
+
+The difference is a discretization error that vanishes as the grid spacing
+shrinks (and where μ varies slowly with |E|). For the drift field, then: the
+grid-sampled quantity that is interpolated to arbitrary points is the
+**velocity**, with the field physics already folded in.
+
 ---
 
 ## 4. Q2 — Induced current: two methods (the pixel driver uses dQ/dt)
