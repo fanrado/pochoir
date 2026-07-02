@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from .gen_pcb_drift_pixel_with_grid import draw_quarter_circle as draw_quarter
-from pochoir.InverseDistanceWeight_torch import init_idw_pcb_pixel, plot_idw_pcb_pixel
+#from pochoir.InverseDistanceWeight_torch import init_idw_pcb_pixel, plot_idw_pcb_pixel
 
 def fill_area(arr,barr,val):
     for b in barr:
@@ -219,8 +219,8 @@ def generator(dom, cfg):
     # ) 
     #draw_3Dstrips(arr,barr,n_pix,pp_loweredge+pcb_width,r1)
     # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
-
-    barr[:,:,0]=1
+    barr[:,:,-1] = 1
+    barr[:,:,0] = 1
     # draw pixel plane
     # plt.figure(figsize=(10,10))
     # plt.imshow(barr[:,:,pp_loweredge],origin='lower')
