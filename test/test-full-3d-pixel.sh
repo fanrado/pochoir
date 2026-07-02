@@ -18,7 +18,9 @@ do_domain () {
          pochoir domain --domain domain/$name \
          --shape=$shape --spacing $spacing
 }
-do_domain drift3d  44,44,1500  '0.1*mm'
+#do_domain drift3d  44,44,1500  '0.1*mm'
+#do_domain drift3d 88,88,600 '0.05*mm'
+do_domain drift3d 44,44,300 '0.1*mm'
 
 # fixme: these weight* identifiers need to split up for N planes.
 #do_domain weight2d 1092,2000   '0.1*mm'
@@ -60,7 +62,7 @@ do_fdm () {
          --potential potential/$name \
          --increment increment/$name
 }
-do_fdm drift3d  10      13000000      0.00000002     per,per,fix #130,000,000
+do_fdm drift3d  20      13000000      0.00000002     per,per,fix #130,000,000
 # do_fdm weight2d 1      1200      0.00000002   fix,fix #1250000
 
 ##
@@ -78,7 +80,9 @@ do_domain () {
 }
 
 # do_domain weight3d 396,396,1500 '0.1*mm' #220,220,1500 '0.1*mm'
-do_domain weight3d 220,220,1500 '0.1*mm'
+#do_domain weight3d 220,220,1500 '0.1*mm'
+#do_domain weight3d 440,440,600 '0.05*mm'
+do_domain weight3d 220,220,300 '0.1*mm'
 
 ## Initial/Boundary Value Arrays ##
 do_gen () {
@@ -112,7 +116,7 @@ do_fdm () {
          --potential potential/$name \
          --increment increment/$name
 }
-do_fdm weight3d 1      500000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
+do_fdm weight3d 10      5000000      0.00000002   fix,fix,fix #5000000 ### try 100 epochs, and more steps per epoch
 
 #
 echo "=== Velocities ==="
@@ -130,7 +134,7 @@ dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,148*mm")
+         points+=("${d}*mm,${d2}*mm,29.8*mm")
      done
 done
 ## Paths
