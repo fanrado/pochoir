@@ -166,8 +166,7 @@ def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePo
     barr[0:int(p_size/2),int(p_size/2)+p_gap:,pp_loweredge:pp_width+pp_loweredge+1]=1
     barr[int(p_size/2)+p_gap:,0:int(p_size/2),pp_loweredge:pp_width+pp_loweredge+1]=1
     barr[int(p_size/2)+p_gap:,int(p_size/2)+p_gap:,pp_loweredge:pp_width+pp_loweredge+1]=1
-    
-    
+
     trimCorner(barr,int(p_size/2)-1,int(p_size/2)-1,pp_loweredge,pp_width+pp_loweredge+1,0)
     
     trimCorner(barr,int(p_size/2)-1,int(p_size/2)+p_gap,pp_loweredge,pp_width+pp_loweredge+1,1)
@@ -176,11 +175,12 @@ def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePo
     
     trimCorner(barr,int(p_size/2)+p_gap,int(p_size/2)+p_gap,pp_loweredge,pp_width+pp_loweredge+1,2)
     # arr[(p_size+p_gap):(p_size+p_gap)+p_size,(p_size+p_gap):(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
+
     # draw pixel plane for drift field
     # print(f'pp_loweredge={pp_loweredge}')
     # print(f'barr shape={barr.shape}')
     plt.figure(figsize=(10,10))
-    plt.imshow(barr[:, :, pp_loweredge], origin='lower')
+    plt.imshow(barr[:, :, pp_loweredge], origin='lower', extent=[0,44,0,44])
     # plt.plot(barr[22, 22, :], label='barr[22, 22, :]')
     plt.title('pixel plane')
     plt.xlabel('x')
@@ -215,7 +215,7 @@ def generator(dom, cfg, info_msg=None):
     n_pix = cfg['Npixels']
     pp_width = int(cfg['pixelPlaneWidth']/dom.spacing[0])
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential)
-
+    
     if info_msg is not None:
         info_msg(f'cathode potential : {cathodePotential} V')
         info_msg(f'arr[:, :, 0] = {arr[:, :, 0]}')
