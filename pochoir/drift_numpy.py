@@ -7,6 +7,7 @@ import numpy
 from scipy.integrate import solve_ivp
 from scipy.interpolate import RegularGridInterpolator as RGI
 from pochoir import units
+from pochoir import lar
 
 class Simple:
     '''
@@ -114,6 +115,115 @@ def solve(domain, start, velocity, times, verbose=False):
     #print(f"function called {func.calls} times")
     return res['y'].T
 
+
+
+class PotentialField:
+    '''
+    ODE callable that computes drift velocity from the *scalar* drift
+    potential rather than from a precomputed velocity/E-field vector.
+
+    The scalar potential is interpolated once (a genuine scalar function),
+    and the electric field at an arbitrary position is obtained by
+    differentiating the interpolant: E(x,y,z) = grad(phi_interp).  Because
+    E is the gradient of a scalar, it is curl-free by construction and thus
+    satisfies the static Maxwell equation, unlike a component-wise
+    interpolation of the vector E-field.  The drift velocity is then
+    v = mu(|E|,T) * E, using the same arithmetic as the `velo` command.
+    '''
+
+    def __init__(self, domain, potential, temperature,
+                 method='linear', verbose=False):
+        '''
+        domain      : pochoir Domain (shape/spacing/origin).
+        potential   : scalar potential array on the domain grid.
+        temperature : LAr temperature in system-of-units.
+        method      : RGI interpolation order ('linear' or 'cubic').
+        '''
+        self.bb = domain.bb
+        self.spacing = numpy.array(domain.spacing, dtype=float)
+        self.temp = temperature
+        self.verbose = verbose
+        self.calls = 0
+
+        # Use the exact grid coordinate axes (shape-length) so the axes
+        # match the potential array shape exactly.
+        points = domain.linspaces
+
+        potential = numpy.asarray(potential)
+        # fill_value=None + bounds_error=False -> extrapolate/clamp instead
+        # of injecting a spurious 0 that would create a huge false gradient
+        # at the (periodic) transverse edges.
+        self.interp = RGI(points, potential, method=method,
+                          bounds_error=False, fill_value=None)
+
+    def inside(self, point):
+        for i, p in enumerate(point):
+            if p < self.bb[0][i] or p > self.bb[1][i]:
+                return False
+        return True
+
+    def potential_at(self, pos):
+        return float(self.interp([pos])[0])
+
+    def efield(self, pos):
+        '''
+        E = grad(phi_interp) via central finite differences, using the same
+        (+grad phi) sign convention and units.V scaling as the `velo` command.
+        Sample points are clamped inside the bounding box; a one-sided
+        difference is used when a neighbour would fall outside.
+        '''
+        pos = numpy.asarray(pos, dtype=float)
+        lo = numpy.array(self.bb[0], dtype=float)
+        hi = numpy.array(self.bb[1], dtype=float)
+        efield = numpy.zeros_like(pos)
+        for dim in range(len(pos)):
+            h = 0.5 * self.spacing[dim]
+            pp = pos.copy()
+            pm = pos.copy()
+            # clamp the +/- sample points inside the domain
+            phigh = min(pos[dim] + h, hi[dim])
+            plow = max(pos[dim] - h, lo[dim])
+            pp[dim] = phigh
+            pm[dim] = plow
+            denom = phigh - plow
+            if denom <= 0.0:
+                efield[dim] = 0.0
+                continue
+            efield[dim] = (self.potential_at(pp) - self.potential_at(pm)) / denom
+        return efield * units.V
+
+    def __call__(self, time, pos):
+        '''
+        Return the drift velocity vector at location (time independent).
+        '''
+        self.calls += 1
+        if not self.inside(pos):
+            return numpy.zeros_like(numpy.asarray(pos, dtype=float))
+        efield = self.efield(pos)
+        emag = math.sqrt(sum([e*e for e in efield]))
+        mu = lar.mobility(emag, self.temp)
+        return numpy.array([e*mu/units.mm**2 for e in efield])
+
+
+def solve_potential(domain, start, potential, temperature, times,
+                    method='linear', verbose=False):
+    '''
+    Return the path of points at times from start, drifting through the
+    velocity field derived on-the-fly from the interpolated scalar potential.
+    '''
+    start = numpy.array(start, dtype=float)
+    potential = numpy.asarray(potential)
+    times = numpy.array(times)
+
+    print(f'start @{start}')
+    func = PotentialField(domain, potential, temperature,
+                          method=method, verbose=verbose)
+    res = solve_ivp(func, [times[0], times[-1]], start, t_eval=times,
+                    rtol=0.0000000001, atol=0.0000000001,
+                    method='Radau',
+                    )
+    print("Last Point=", res['y'].T[-1]/units.mm)
+    return res['y'].T
 
 
 class ScalarField:
