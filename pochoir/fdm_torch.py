@@ -22,7 +22,7 @@ def set_core2(dst, src, core):
 def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, periodic):
     stencil(iarr_pad, tmp_core)
     iarr_pad[core] = bi_core + mutable_core * tmp_core
-    edge_condition(iarr_pad, *periodic, info_msg=None)
+    edge_condition(iarr_pad, *periodic)
 
 import sys
 def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, ctx=None, potential=None, increment=None, params=None):
