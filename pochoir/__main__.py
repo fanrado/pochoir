@@ -437,6 +437,7 @@ def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
         dt = pochoir.lar.diff_tran(emag,temp)
     varr = [e*mu/units.mm**2 for e in efield]
     varr=numpy.array(varr)
+    
     #varr[2][:,:,:101]=0
     
     speed= emag
@@ -446,7 +447,8 @@ def velo(ctx, temperature, potential, velocity,dl_key,dt_key):
     #Draw for PCB
     # x = numpy.linspace(0,420,4200)
     # x = numpy.linspace(0, 200, 2000) ## original
-    x = numpy.linspace(0, 200, 1500) ## changed this to 1500
+    x = numpy.linspace(0, 200, 300) ## changed this to 1500
+    #x = numpy.linspace(0, 200, 600) ## changed this to 600 for a z=3 cm with 0.05 mm spacing
     for i in range(0,25):
         for j in range(0,17):
             # print(f'len(x) = {len(x)}, len(speed_z[i,j,:]) = {len(speed_z[i,j,:])}')
@@ -892,18 +894,25 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
     except KeyError:
         click.echo(f'no domain for {weighting}.  metadata:\n{wmd}')
         return -1
-    import numpy
+    import numpy as np
     dom = ctx.obj.get_domain(domain)
     the_paths, pmd = ctx.obj.get(paths, True)
     npaths, nsteps, ndim = the_paths.shape
     ticks = pochoir.arrays.linspace(pmd['tstart'], pmd['tstop'],
                                     pmd['nsteps'], endpoint=False)
+    ## save dom.linspaces which is used in the linear interpolation of the weighting potential
+    import os
+    import numpy
+    os.mkdir('store/tmp')
+    #print(dom)
+    #np.save('store/tmp/dom_linspaces.npy', np.array(dom.linspaces))
     rgi = pochoir.arrays.rgi(dom.linspaces, wpot)
     shift_x = dom.shape[0]*dom.spacing[0]/2.0
     shift_y = 0#dom.shape[1]*dom.spacing[1]/2.0
     shifted_paths = []
     print("input paths shape : ",the_paths.shape)
-    # sys.exit()
+    #the_paths[:, 246:251, :] = numpy.round(the_paths[:, 246:251, :], 3)
+    #sys.exit()
     if npixels>1:
         #dx = dom.shape[0]*dom.spacing[0]/npixels
         #print("dx=",dx)
@@ -965,7 +974,9 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
     # print("TotalPaths after shifting=",len(shifted_paths))
     # for i in range(0,len(shifted_paths)):
     #     print(f'shifted_paths[0,{i}] : {shifted_paths[i][0]} \t old_paths[0,{i}] : {old_paths[i][0]}') 
-    # sys.exit()   
+    # sys.exit()
+    ## save the shifted paths
+    np.save('store/tmp/shifted_paths.npy', shifted_paths)
     if npixels<=1:
         for i in range(0,len(the_paths)):
             newpath = [[shift_x+x[0],x[1]+shift_y,x[2]] for x in the_paths[i]]
@@ -980,6 +991,9 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
         startpoints.append(p[0])
         endpoints.append(p[-1])
     Q = charge * rgi(shifted_paths) #/ units.V
+    ## The charge used in here is charge=1e ==> the result of the above line should be rgi(shifted_paths) which is the weighting potential at the points where the shifted paths are.
+    np.save('store/tmp/total_chargeQ.npy', np.array(Q))
+    np.save('store/tmp/interpolated_phiW.npy', np.array(rgi(shifted_paths)))
     print(f'Charge Q : {Q}')
     assert len(Q.shape) == 2
     #assert Q.shape[0] == npaths
@@ -987,17 +1001,24 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
     numpy.set_printoptions(threshold=sys.maxsize)
 
     dQ = Q[:, 1:] - Q[:, :-1]
+    # save dQ
+    np.save('store/tmp/dQ.npy', dQ)
+
     import matplotlib.pyplot as plt
     plt.figure(figsize=(10,6))
     plt.plot(ticks[1:], Q[0,1:], label="Charge")
     plt.savefig('store/charge.png')
     plt.close()
     dT = ticks[1:] - ticks[:-1]
+    # save dT
+    np.save('store/tmp/dT.npy', dT)
     # print(f'dT [:10] : {dT[:10]}r')
     # print(f'len(dT) : {len(dT)}')
     # sys.exit()
     I = []
     I_tot = dQ/dT
+    # save I_tot
+    np.save('store/tmp/I_tot.npy', I_tot)
     print(f'Induced current I_tot : {I_tot}')
     if average>0:
         print("Average ", average," paths along the stip")
@@ -1013,7 +1034,7 @@ def induce_pixel(ctx, charge, weighting, paths, average,npixels, output):
         I=I_tot
         # print("I shape=",I.shape)
         # print("I=",I)
-    import numpy as np
+    #import numpy as np
     #np.save('fr_4p4pitch_3.8pix_circgrid_1p9.npy', I)
     np.save('store/fr_4p4pitch_3.8pix_nogrid_10pathsperpixel.npy', I)
     np.save('store/startpoints.npy', startpoints)
@@ -1636,3 +1657,5 @@ def main():
 
 if '__main__' == __name__:
     main()
+
+    
