@@ -145,9 +145,15 @@ want starts/drift3d \
 
 #rm -r /Users/sergey/Desktop/ICARUS/LArStand/pochoir/test/store/paths
 
+# Use LINEAR interpolation of the scalar potential. In the bulk both orders
+# agree, but cubic OVERSHOOTS/rings near the pixel plane (strong geometry),
+# producing a spurious E spike that over-focuses the paths onto the pads
+# (median landing shift ~345 um vs linear). See docs/drift/drift-path-ode-
+# integration.md (sec 6/8) and test/interp_overshoot_test.py for the proof.
 want paths/drift3d_tight \
      pochoir drift --starts starts/drift3d \
      --velocity velocity/drift3d \
+     --interp-order linear \
      --paths paths/drift3d_tight '0*us,320*us,0.05*us'
 
 
