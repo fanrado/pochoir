@@ -646,6 +646,19 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, interp_
             path = drifter(dom, point, velo, ticks, verbose=verbose)
         thepaths[ind]=path
 
+    # DEBUG (investigation only): dump the interpolated drift potential
+    # sampled along every drift path, then abort -- no further ops needed.
+    # if use_potential:
+    #     interp_pot = pochoir.arrays.zeros((len(start_points), len(ticks)))
+    #     func = drift_numpy.PotentialField(dom, pot, temp, method=interp_order)
+    #     for i in range(len(start_points)):
+    #         for j in range(len(ticks)):
+    #             interp_pot[i, j] = func.potential_at(thepaths[i, j])
+    #     import numpy, os, sys
+    #     os.makedirs('store', exist_ok=True)
+    #     numpy.save(f'store/interp_potential_along_paths_{interp_order}.npy', interp_pot)
+    #     print(f'DEBUG saved interpolated potential along paths: {interp_pot.shape}')
+
     # plot the drift paths
     import matplotlib.pyplot as plt
     # plt.figure(figsize=(10,10))
@@ -664,6 +677,7 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, interp_
     params=dict(taxon="paths", command="drift", domain=domain,
                 tstart=start, tstop=stop, nsteps=nsteps)
     ctx.obj.put(paths, thepaths, **params)
+    # sys.exit(0)
 
 
 @cli.command("bc-interp")
