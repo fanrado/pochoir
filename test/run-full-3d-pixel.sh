@@ -332,8 +332,12 @@ want starts/drift3d \
 want paths/drift3d_tight \
      pochoir drift --starts starts/drift3d \
      --velocity velocity/drift3d \
+     --interp-order linear \
      --paths paths/drift3d_tight '0*us,210*us,0.05*us' \
      --plot
+# --interp-order linear: cubic rings/overshoots near the pixel plane (strong
+# geometry) and over-focuses paths onto the pads; linear is monotone-safe.
+# Evidence: test/interp_overshoot_test.py, docs/drift/drift-path-ode-integration.md.
 
 echo "=== Induced currents ==="
 ## Induced current on the pixel via Ramo (weighting field x drift paths).

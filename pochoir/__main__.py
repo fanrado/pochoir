@@ -642,11 +642,21 @@ def starts(ctx, starts, mode, configs, plot, points):
               help="The IVP engine to use")
 @click.option("--plot/--no-plot", default=False,
               help="If set, write a 3D plot of the drift paths to store/drift_paths_3d.png")
+@click.option("--interp-order", type=click.Choice(["linear", "cubic"]),
+              default="linear",
+              help="Interpolation order for the scalar potential (potential-based drift)")
 @click.argument("steps", nargs=-1)
 @click.pass_context
-def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, plot, steps):
+def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, plot, interp_order, steps):
     '''
     Calculate drift paths.
+
+    The (non-SDE, numpy) drift velocity is derived by interpolating the
+    scalar drift potential and differentiating the interpolant, so that
+    E = grad(phi) stays curl-free (satisfies the static Maxwell equation).
+    The potential array and temperature are resolved from the velocity
+    array's metadata.  Stores that lack this metadata fall back to the
+    legacy component-wise velocity interpolation.
     '''
     debug_msg('START DRIFT')
     start_points = ctx.obj.get(starts)
@@ -673,16 +683,35 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, plot, s
         dl, md_dl = ctx.obj.get(dl_key, True)
         dt, md_dt = ctx.obj.get(dt_key, True)
 
+    # Prefer deriving the velocity from the interpolated scalar potential
+    # (curl-free E = grad(phi)).  Resolve the potential array + temperature
+    # from the velocity metadata written by the `velo` command.  Older
+    # stores lacking this metadata fall back to velocity interpolation.
+    from pochoir import drift_numpy
+    use_potential = (engine == "numpy" and not use_sde
+                     and 'potential' in md and 'temperature' in md)
+    pot = temp = None
+    if use_potential:
+        pot = ctx.obj.get(md['potential'])
+        temp = md['temperature']
+        print(f'drift: potential-based (key={md["potential"]}, '
+              f'T={temp}, interp={interp_order})')
+    elif not use_sde:
+        print('drift: legacy velocity-interpolation '
+              '(no potential/temperature metadata found)')
+
     # shape: (nstarts, nticks, ndims)
     thepaths = pochoir.arrays.zeros((len(start_points), len(ticks),
                                      len(dom.shape)))
-    from pochoir import drift_numpy
     for ind, point in enumerate(start_points):
         #print("input point: ",point)
-        if not use_sde:
-            path = drifter(dom, point, velo, ticks, verbose=verbose)
-        else:
+        if use_sde:
             path = drift_numpy.solve_sde(dom, point, velo, dl, dt , ticks, verbose=verbose)
+        elif use_potential:
+            path = drift_numpy.solve_potential(dom, point, pot, temp, ticks,
+                                               method=interp_order, verbose=verbose)
+        else:
+            path = drifter(dom, point, velo, ticks, verbose=verbose)
         thepaths[ind]=path
 
     if plot:
