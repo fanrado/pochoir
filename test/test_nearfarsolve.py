@@ -178,9 +178,9 @@ def _make_problem():
 
 def test_schwarz_converges_and_matches_on_overlap():
     '''After convergence the two solves share the overlap: the interface value
-    is continuous, and the far inner plane holds exactly the near value there
-    (the gradient carrier) -- i.e. the seam is C0 *and* the near-side slope is
-    consistent with the far solve.'''
+    is exactly continuous (near is pinned to the far there in the final near
+    solve -> exact C0 stitch), and the far inner plane agrees with the near
+    solution there to convergence (the shared gradient carrier).'''
     p = _make_problem()
     near_pot, far_pot, n_iters, delta = nearfar.schwarz_solve(
         p["coarse_pot"], p["coarse_init"], p["coarse_bmask"], p["coarse"],
@@ -189,17 +189,41 @@ def test_schwarz_converges_and_matches_on_overlap():
         axis=2, interface_z=2.0, tol=1e-4, max_iters=12)
 
     assert delta < 1e-4                       # converged
-    assert 1 < n_iters <= 12
+    assert 1 <= n_iters <= 12
 
     ci, ci_in, nt, nt_in = nearfar._interface_indices(p["coarse"], p["near"], 2, 2.0)
-    # Interface value continuity: near top is pinned to the far solution.
+    # Interface value continuity is EXACT: the final near solve pins the top
+    # plane to the far solution there.
     far_iface = nearfar.resample_plane(far_pot, p["coarse"], p["near"], 2, nt)
-    numpy.testing.assert_allclose(near_pot[:, :, nt], far_iface, atol=1e-3)
+    numpy.testing.assert_allclose(near_pot[:, :, nt], far_iface, atol=1e-9)
     # Gradient carrier: the far inner plane (one coarse cell below the seam)
-    # equals the near solution resampled there -- the two solves share it.
+    # agrees with the near solution resampled there, to convergence tolerance.
     near_on_coarse = nearfar.resample_plane(near_pot, p["near"], p["coarse"],
                                             2, ci_in)
-    numpy.testing.assert_allclose(far_pot[:, :, ci_in], near_on_coarse, atol=1e-9)
+    numpy.testing.assert_allclose(far_pot[:, :, ci_in], near_on_coarse, atol=1e-3)
+
+
+def test_schwarz_accepts_near_start():
+    '''Passing a pre-solved near (the driver's discrete sweep-0) skips the
+    internal seed+solve and still converges to a consistent result.'''
+    p = _make_problem()
+    # Sweep-0 the "old" way: seed + pin interface to coarse + solve.
+    ci, ci_in, nt, nt_in = nearfar._interface_indices(p["coarse"], p["near"], 2, 2.0)
+    seed = nearfar.seed_near(p["coarse_pot"], p["coarse"], p["near_init"],
+                             p["near_bmask"], p["near"])
+    ni, nb = seed.copy(), p["near_bmask"].copy()
+    nearfar.graft_plane(ni, nb, p["coarse_pot"], p["coarse"], p["near"], 2, nt, True)
+    near0 = p["solver"](ni, nb)
+
+    near_pot, far_pot, n_iters, delta = nearfar.schwarz_solve(
+        p["coarse_pot"], p["coarse_init"], p["coarse_bmask"], p["coarse"],
+        p["near_init"], p["near_bmask"], p["near"],
+        p["solver"], p["solver"], axis=2, interface_z=2.0,
+        tol=1e-4, max_iters=12, near_start=near0)
+
+    assert delta < 1e-4
+    far_iface = nearfar.resample_plane(far_pot, p["coarse"], p["near"], 2, nt)
+    numpy.testing.assert_allclose(near_pot[:, :, nt], far_iface, atol=1e-9)
 
 
 def test_schwarz_improves_overlap_over_naive_pin():
@@ -285,9 +309,9 @@ def test_cli_near_far_solve_end_to_end(tmp_path):
     assert nmd.get("domain") == "near_dom"
     assert fmd.get("domain") == "coarse_dom"
 
-    # Gradient-carrier overlap agreement holds through the CLI path too.
+    # Exact interface continuity holds through the CLI path too.
     ci, ci_in, nt, nt_in = nearfar._interface_indices(p["coarse"], p["near"], 2, 2.0)
-    near_on_coarse = nearfar.resample_plane(numpy.asarray(near_pot), p["near"],
-                                            p["coarse"], 2, ci_in)
-    numpy.testing.assert_allclose(numpy.asarray(far_pot)[:, :, ci_in],
-                                  near_on_coarse, atol=1e-9)
+    far_iface = nearfar.resample_plane(numpy.asarray(far_pot), p["coarse"],
+                                       p["near"], 2, nt)
+    numpy.testing.assert_allclose(numpy.asarray(near_pot)[:, :, nt],
+                                  far_iface, atol=1e-9)

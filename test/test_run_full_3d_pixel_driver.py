@@ -207,12 +207,10 @@ def test_velo_uses_full_fine_boundary():
                      r"--boundary\s+boundary/fine\b",
                      part_a, re.DOTALL), "boundary/fine not gen'd on domain/fine"
 
-    # PART C's velo consumes that boundary via $DRIFT_BOUNDARY, which defaults
-    # to boundary/fine (the fine-stitch default).
-    assert re.search(r"pochoir velo\b.*?--boundary\s+"
-                     r"\$\{DRIFT_BOUNDARY:-boundary/fine\}",
+    # PART C's velo consumes that full-fine boundary.
+    assert re.search(r"pochoir velo\b.*?--boundary\s+boundary/fine\b",
                      part_c, re.DOTALL), \
-        "PART C velo does not pass --boundary ${DRIFT_BOUNDARY:-boundary/fine}"
+        "PART C velo does not pass --boundary boundary/fine"
 
 
 def test_terminal_outputs_present():

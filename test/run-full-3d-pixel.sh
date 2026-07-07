@@ -68,16 +68,6 @@ export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_driftfield.log"
 gen="pcb_drift_pixel_with_grid"
 cfg="example_gen_pcb_drift_pixel_with_grid.json"
 
-# Spacing at which the near + far solves are stitched into potential/drift3d.
-#   fine   (default): 0.1mm full grid (44x44x3100), best drift-path accuracy.
-#   coarse           : 0.4mm full grid (11x11x775), cheaper, lower resolution.
-STITCH_SPACING="${STITCH_SPACING:-fine}"
-if [ "$STITCH_SPACING" = "coarse" ] ; then
-    DRIFT_DOMAIN=domain/coarse ; DRIFT_BOUNDARY=boundary/coarse
-else
-    DRIFT_DOMAIN=domain/fine   ; DRIFT_BOUNDARY=boundary/fine
-fi
-
 ## ---------------------------------------------------------------------------
 ## Step 1: coarse solve (0.4mm, 11x11x375), full drift region
 ## ---------------------------------------------------------------------------
@@ -103,7 +93,7 @@ want "potential/coarse increment/coarse" \
 date
 
 ## ---------------------------------------------------------------------------
-## Step 2: near-field gen (0.05mm, 88x88x401, z=0..20mm)
+## Step 2: near-field gen + refined coarse seed (0.05mm, 88x88x401, z=0..20mm)
 ## ---------------------------------------------------------------------------
 
 want domain/near \
@@ -116,22 +106,60 @@ want "initial/near boundary/near" \
      --initial initial/near --boundary boundary/near \
      $cfg
 
+# Seed the near-field interior with the upsampled coarse solution.
+want initial/near_refined \
+     pochoir refine \
+     --coarse potential/coarse \
+     --initial initial/near \
+     --boundary boundary/near \
+     --output initial/near_refined
+
 ## ---------------------------------------------------------------------------
-## Step 3+4: overlapping-Schwarz near/far solve (continuous interface)
+## Step 3: Dirichlet interface plane at z=20mm from the coarse bulk
 ## ---------------------------------------------------------------------------
-# Alternately solves the fine near domain (interface plane at z=20mm pinned to
-# the current far solution) and the full coarse far domain (an interior plane
-# one coarse cell below the interface pinned to the near solution), iterating
-# to convergence.  This makes the stitched field continuous in value AND
-# gradient across z=20mm -- unlike the old single near-bc pin, which enforced
-# value continuity only and left an E_z kink (drift-path artifact) at the seam.
-# The command internally seeds the near interior from the coarse solve (the old
-# `refine` step) and pins the overlap planes (the old `near-bc` step).
+
+want "initial/near_bc boundary/near_bc" \
+     pochoir near-bc \
+     --initial initial/near_refined \
+     --boundary boundary/near \
+     --coarse potential/coarse \
+     --initial-out initial/near_bc \
+     --boundary-out boundary/near_bc
+
+## ---------------------------------------------------------------------------
+## Step 4: near-field fine solve (0.05mm), seeded + pinned interface (sweep 0)
+## ---------------------------------------------------------------------------
+
+want "potential/near increment/near" \
+     pochoir fdm \
+     --nepochs 10 --epoch 130000000 --precision 0.00000000002 \
+     --edges per,per,fix \
+     --engine torch \
+     --initial initial/near_bc --boundary boundary/near_bc \
+     --potential potential/near \
+     --increment increment/near
+
+date
+
+## ---------------------------------------------------------------------------
+## Step 4b: overlapping-Schwarz refinement for a continuous interface
+## ---------------------------------------------------------------------------
+# Steps 2-4 above are the original single-pin pipeline and keep producing all
+# their intermediate store keys (initial/near_refined, initial/near_bc,
+# boundary/near_bc, potential/near, increment/near) so a later run/test can
+# resume from them.  That pin gives only value (C0) continuity at z=20mm, so
+# E_z = -dphi/dz is discontinuous at the seam.  This step refines it: starting
+# from the sweep-0 near solve, it alternately re-solves the full coarse far
+# domain (interior plane one coarse cell below the interface pinned to the near
+# solution) and the fine near domain (interface pinned to the far solution),
+# iterating to convergence.  The result is continuous in value AND gradient
+# across z=20mm.  It updates potential/near and writes the consistent far field.
 want "potential/near potential/far" \
      pochoir near-far-solve \
      --coarse-potential potential/coarse \
      --coarse-initial initial/coarse --coarse-boundary boundary/coarse \
      --near-initial initial/near --near-boundary boundary/near \
+     --near-potential potential/near \
      --interface '20*mm' --axis 2 \
      --edges per,per,fix --engine torch \
      --epoch 130000000 --nepochs 10 \
@@ -142,66 +170,42 @@ want "potential/near potential/far" \
 date
 
 ## ---------------------------------------------------------------------------
-## Step 5+6: coarsen the 0.05mm near solve, then stitch onto the Schwarz-
-##           updated far field.  STITCH_SPACING (fine|coarse) selects the
-##           output grid; the far bulk is potential/far, not the raw coarse.
+## Step 5: coarsen the 0.05mm near solve back to 0.1mm, then stitch onto the
+##         Schwarz-updated far field (potential/far, not the raw coarse solve)
 ## ---------------------------------------------------------------------------
 
-if [ "$STITCH_SPACING" = "coarse" ] ; then
-    # Coarse stitch: stride-downsample the 0.05mm near solve by 8 to 0.4mm
-    # (11x11x51, z=0..20mm) and stitch onto the coarse full domain.  Cheaper
-    # but lower resolution.  boundary/coarse (from Step 1) drives PART C.
-    want domain/near_04 \
-         pochoir domain --domain domain/near_04 \
-         --shape=11,11,51 --spacing '0.4*mm'
+# The near solve ran at 0.05mm (88x88x401) so the pixel tile stays symmetric.
+# Stride-downsample it by 2 back to 0.1mm (44x44x201) for stitching onto the
+# far field.  This also avoids building the 88x88x6200 full-fine domain (OOM).
+want domain/near_01 \
+     pochoir domain --domain domain/near_01 \
+     --shape=44,44,201 --spacing '0.1*mm'
 
-    want potential/near_04 \
-         pochoir coarsen \
-         --input potential/near \
-         --domain domain/near_04 \
-         --output potential/near_04
+want potential/near_01 \
+     pochoir coarsen \
+     --input potential/near \
+     --domain domain/near_01 \
+     --output potential/near_01
 
-    want potential/drift3d \
-         pochoir stitch-near \
-         --near potential/near_04 \
-         --coarse potential/far \
-         --domain domain/coarse \
-         --output potential/drift3d
-else
-    # Fine stitch (default): the near solve ran at 0.05mm (88x88x401) so the
-    # pixel tile stays symmetric; stride-downsample by 2 to 0.1mm (44x44x201)
-    # and stitch onto the full 0.1mm grid.  (The full 88x88x6200 0.05mm domain
-    # would OOM.)
-    want domain/near_01 \
-         pochoir domain --domain domain/near_01 \
-         --shape=44,44,201 --spacing '0.1*mm'
+want domain/fine \
+     pochoir domain --domain domain/fine \
+     --shape=44,44,3100 --spacing '0.1*mm'
 
-    want potential/near_01 \
-         pochoir coarsen \
-         --input potential/near \
-         --domain domain/near_01 \
-         --output potential/near_01
+# Generate the full-fine electrode geometry (boundary mask) for the
+# stitched domain.  The FDM solve is NOT run here (that is the whole
+# point of the near-field workflow); this only builds the boundary array
+# so PART C's velo can zero the E-field at electrode cells.
+want "boundary/fine initial/fine" \
+     pochoir gen --generator $gen --domain domain/fine \
+     --initial initial/fine --boundary boundary/fine \
+     $cfg
 
-    want domain/fine \
-         pochoir domain --domain domain/fine \
-         --shape=44,44,3100 --spacing '0.1*mm'
-
-    # Full-fine electrode geometry (boundary mask) for the stitched domain.
-    # The FDM solve is NOT run here (that is the whole point of the near-field
-    # workflow); this only builds the boundary array so PART C's velo can zero
-    # the E-field at electrode cells.
-    want "boundary/fine initial/fine" \
-         pochoir gen --generator $gen --domain domain/fine \
-         --initial initial/fine --boundary boundary/fine \
-         $cfg
-
-    want potential/drift3d \
-         pochoir stitch-near \
-         --near potential/near_01 \
-         --coarse potential/far \
-         --domain domain/fine \
-         --output potential/drift3d
-fi
+want potential/drift3d \
+     pochoir stitch-near \
+     --near potential/near_01 \
+     --coarse potential/far \
+     --domain domain/fine \
+     --output potential/drift3d
 
 date
 
@@ -332,7 +336,7 @@ echo "=== Velocities ==="
 want velocity/drift3d \
      pochoir velo --temperature '87.0*K' \
      --potential potential/drift3d \
-     --boundary ${DRIFT_BOUNDARY:-boundary/fine} \
+     --boundary boundary/fine \
      --velocity velocity/drift3d
 
 echo "=== Paths ==="

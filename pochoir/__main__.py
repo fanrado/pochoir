@@ -2173,9 +2173,13 @@ def stitch_near(ctx, near, coarse, domain, output, axis):
 @click.option("--coarse-boundary", type=str, required=True,
               help="Coarse full-domain boundary (bool) array")
 @click.option("--near-initial", type=str, required=True,
-              help="Near-field initial value array")
+              help="Near-field initial value array (electrode values)")
 @click.option("--near-boundary", type=str, required=True,
-              help="Near-field boundary (bool) array")
+              help="Near-field boundary (bool) array (electrodes only)")
+@click.option("--near-potential", type=str, default=None,
+              help="Optional already-solved near potential to start from "
+                   "(e.g. the discrete refine->near-bc->fdm sweep-0), so its "
+                   "intermediate store files are preserved")
 @click.option("--interface", type=str, required=True,
               help="Interface coordinate along --axis (e.g. '20*mm')")
 @click.option("--axis", type=int, default=2,
@@ -2203,8 +2207,8 @@ def stitch_near(ctx, near, coarse, domain, output, axis):
               help="Output final far-field (coarse) potential")
 @click.pass_context
 def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
-                   near_initial, near_boundary, interface, axis, edges,
-                   engine, epoch, nepochs, near_precision, far_precision,
+                   near_initial, near_boundary, near_potential, interface, axis,
+                   edges, engine, epoch, nepochs, near_precision, far_precision,
                    tol, max_iters, near_out, far_out):
     '''
     Overlapping-Schwarz near/far solve for a continuous stitched potential.
@@ -2232,6 +2236,7 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
     cbnd = ctx.obj.get(coarse_boundary)
     ninit, nmd = ctx.obj.get(near_initial, True)
     nbnd, nbmd = ctx.obj.get(near_boundary, True)
+    near_start = ctx.obj.get(near_potential) if near_potential else None
 
     if cmd is None or "domain" not in cmd:
         click.echo(f'failed to get domain for coarse potential {coarse_potential}')
@@ -2270,7 +2275,8 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
         ninit, nbnd, near_dom,
         _make_solver(near_precision), _make_solver(far_precision),
         axis=axis, interface_z=interface_z,
-        tol=tol_v, max_iters=max_iters, log=info_msg)
+        tol=tol_v, max_iters=max_iters, log=info_msg,
+        near_start=near_start)
 
     info_msg(f'near-far-solve: {n_iters} sweeps, final near delta={delta}')
     print(f'near-far-solve: {n_iters} sweeps, final near delta={delta}')

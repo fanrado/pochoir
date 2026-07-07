@@ -178,9 +178,15 @@ def schwarz_solve(coarse_pot, coarse_init, coarse_bmask, coarse_dom,
                   near_init, near_bmask, near_dom,
                   solve_near, solve_far,
                   axis=2, interface_z=None,
-                  tol=1.0, max_iters=6, log=None):
+                  tol=1.0, max_iters=6, log=None, near_start=None):
     '''
     Alternating overlapping-Schwarz near/far solve.
+
+    Each sweep solves the far domain (interior plane one coarse cell below the
+    interface pinned to the near solution) then the near domain (interface
+    plane pinned to the far solution).  Ending each sweep with the near solve
+    makes the returned near exactly pinned to the returned far at the interface
+    (exact C0 across the stitch seam).
 
     Parameters
     ----------
@@ -192,9 +198,15 @@ def schwarz_solve(coarse_pot, coarse_init, coarse_bmask, coarse_dom,
     coarse_dom : Domain
         Domain of the coarse arrays.
     near_init, near_bmask : ndarray
-        Near-field initial values and boolean boundary mask.
+        Near-field initial values and boolean boundary mask (electrode cells
+        only; the interface plane is grafted each sweep).
     near_dom : Domain
         Domain of the near arrays.
+    near_start : ndarray or None
+        An already-solved near potential to start from (e.g. the discrete
+        refine->near-bc->fdm sweep-0 the driver computes, so its intermediate
+        store files are preserved).  If None, sweep 0 is done internally by
+        seeding from the coarse solve and pinning the interface to it.
     solve_near, solve_far : callable
         `solve(iarr, barr) -> ndarray`.  Each already bound to its engine,
         edges, precision, epoch and nepochs.  Returns the solved potential.
@@ -234,23 +246,25 @@ def schwarz_solve(coarse_pot, coarse_init, coarse_bmask, coarse_dom,
          f'near top idx {nt} (seed {nt_in})')
 
     far_pot = numpy.asarray(coarse_pot, dtype=float).copy()
-    near_new = seed_near(coarse_pot, coarse_dom, near_init, near_bmask, near_dom)
+
+    # Sweep 0: the near solve pinned to the coarse bulk.  When the driver has
+    # already produced this (discrete refine->near-bc->fdm), pass it as
+    # near_start so those intermediate store files are kept; otherwise do it
+    # here by seeding from the coarse solve.
+    if near_start is not None:
+        near_new = numpy.asarray(near_start, dtype=float)
+        _log('schwarz: starting from supplied near solution')
+    else:
+        ni = seed_near(coarse_pot, coarse_dom, near_init, near_bmask, near_dom)
+        nb = near_bmask.copy()
+        graft_plane(ni, nb, coarse_pot, coarse_dom, near_dom, axis, nt, fix=True)
+        graft_plane(ni, nb, coarse_pot, coarse_dom, near_dom, axis, nt_in, fix=False)
+        near_new = numpy.asarray(solve_near(ni, nb), dtype=float)
 
     n_iters = 0
     delta = None
     for it in range(max_iters):
         n_iters = it + 1
-        near_prev = near_new
-
-        # --- NEAR solve: interface pinned to far, adjacent plane seeded ---
-        ni = near_prev.copy()
-        nb = near_bmask.copy()
-        graft_plane(ni, nb, far_pot, coarse_dom, near_dom, axis, nt, fix=True)
-        graft_plane(ni, nb, far_pot, coarse_dom, near_dom, axis, nt_in, fix=False)
-        near_new = numpy.asarray(solve_near(ni, nb), dtype=float)
-
-        delta = float(numpy.max(numpy.abs(near_new - near_prev)))
-        _log(f'schwarz iter {it}: near delta = {delta}')
 
         # --- FAR solve: inner plane pinned to near, interface plane seeded ---
         # Warm-start the interior from the previous far, re-imposing electrode
@@ -262,9 +276,18 @@ def schwarz_solve(coarse_pot, coarse_init, coarse_bmask, coarse_dom,
         graft_plane(fi, fb, near_new, near_dom, coarse_dom, axis, ci, fix=False)
         far_pot = numpy.asarray(solve_far(fi, fb), dtype=float)
 
-        # Converged once successive near solves barely change (skip the first
-        # sweep, whose "previous" is the coarse-interpolated seed).
-        if it > 0 and delta < tol:
+        # --- NEAR solve: interface pinned to far, adjacent plane seeded ---
+        near_prev = near_new
+        ni = near_prev.copy()
+        nb = near_bmask.copy()
+        graft_plane(ni, nb, far_pot, coarse_dom, near_dom, axis, nt, fix=True)
+        graft_plane(ni, nb, far_pot, coarse_dom, near_dom, axis, nt_in, fix=False)
+        near_new = numpy.asarray(solve_near(ni, nb), dtype=float)
+
+        delta = float(numpy.max(numpy.abs(near_new - near_prev)))
+        _log(f'schwarz iter {it}: near delta = {delta}')
+
+        if delta < tol:
             _log(f'schwarz converged after {n_iters} sweeps (delta {delta} < {tol})')
             break
     else:
