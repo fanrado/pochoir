@@ -2250,7 +2250,9 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
         raise ValueError("number of edge conditions does not match dimensions")
 
     interface_z = float(pochoir.arrays.fromstr1(interface)[0])
-    tol_v = float(pochoir.arrays.fromstr1(tol)[0])
+    # potentials are stored in raw volts (pot is not scaled by units.V), so
+    # express the Schwarz tolerance in volts too: '1*V' -> 1.0, '0.05*V' -> 0.05.
+    tol_v = float(pochoir.arrays.fromstr1(tol)[0]) / units.V
 
     def _make_solver(prec):
         def _solve(iarr, barr):

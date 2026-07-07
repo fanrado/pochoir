@@ -150,8 +150,8 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
     prev = None
     for iepoch in range(nepochs):
         torch.cuda.synchronize()
-        info_msg(f'====== epoch: {iepoch}/{nepochs} x {epoch} ===============')
-        print(f'====== epoch: {iepoch}/{nepochs} x {epoch} ===============')
+        info_msg(f'====== epoch: {iepoch+1}/{nepochs} x {epoch} ===============')
+        print(f'====== epoch: {iepoch+1}/{nepochs} x {epoch} ===============')
         epoch_start_time = time.time()
         # potential_path = f'{potential}_epoch{iepoch}'
         # increment_path = f'{increment}_epoch{iepoch}'
