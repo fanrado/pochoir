@@ -209,121 +209,121 @@ want potential/drift3d \
 
 date
 
-############################################################################
-## PART B: WEIGHTING FIELD  (near-field refinement)
-############################################################################
-export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_weightingfield.log"
-
-gen="pcb_pixel_with_grid"
-cfg="example_gen_pixel_with_grid.json"
-
-## ---------------------------------------------------------------------------
-## Step 1: coarse weighting solve (0.4mm, 99x99x375), full drift depth
-## ---------------------------------------------------------------------------
-
-want domain/weight_coarse \
-     pochoir domain --domain domain/weight_coarse \
-     --shape=55,55,775 --spacing '0.4*mm'
-    # --shape=99,99,775 --spacing '0.4*mm'
-
-want "initial/weight_coarse boundary/weight_coarse" \
-     pochoir gen --generator $gen --domain domain/weight_coarse \
-     --initial initial/weight_coarse --boundary boundary/weight_coarse \
-     $cfg
-
-want "potential/weight_coarse increment/weight_coarse" \
-     pochoir fdm \
-     --nepochs 10 --epoch 130000000 --precision 0.0000002 \
-     --edges fix,fix,fix \
-     --engine torch \
-     --initial initial/weight_coarse --boundary boundary/weight_coarse \
-     --potential potential/weight_coarse \
-     --increment increment/weight_coarse \
-     --multisteps no
-
-date
-
-## ---------------------------------------------------------------------------
-## Step 2: near-field gen + refined coarse seed (0.1mm, 396x396x201, z=0..20mm)
-## ---------------------------------------------------------------------------
-
-want domain/weight_near \
-     pochoir domain --domain domain/weight_near \
-     --shape=440,440,401 --spacing '0.05*mm'
-     #--shape=220,220,201 --spacing '0.05*mm'
-     #--shape=396,396,201 --spacing '0.1*mm'
-
-want "initial/weight_near boundary/weight_near" \
-     pochoir gen --generator $gen --domain domain/weight_near \
-     --initial initial/weight_near --boundary boundary/weight_near \
-     $cfg
-
-# Seed the near-field interior with the upsampled coarse weighting solution.
-want initial/weight_near_refined \
-     pochoir refine \
-     --coarse potential/weight_coarse \
-     --initial initial/weight_near \
-     --boundary boundary/weight_near \
-     --output initial/weight_near_refined
-
-## ---------------------------------------------------------------------------
-## Step 3: Dirichlet interface plane at z=20mm from the coarse bulk
-## ---------------------------------------------------------------------------
-
-want "initial/weight_near_bc boundary/weight_near_bc" \
-     pochoir near-bc \
-     --initial initial/weight_near_refined \
-     --boundary boundary/weight_near \
-     --coarse potential/weight_coarse \
-     --initial-out initial/weight_near_bc \
-     --boundary-out boundary/weight_near_bc
-
-## ---------------------------------------------------------------------------
-## Step 4: near-field fine weighting solve (0.1mm), seeded + pinned interface
-## ---------------------------------------------------------------------------
-
-want "potential/weight_near increment/weight_near" \
-     pochoir fdm \
-     --nepochs 10 --epoch 130000000 --precision 0.0000000002 \
-     --edges fix,fix,fix \
-     --engine torch \
-     --initial initial/weight_near_bc --boundary boundary/weight_near_bc \
-     --potential potential/weight_near \
-     --increment increment/weight_near \
-     --multisteps no
-
-date
-
-## ---------------------------------------------------------------------------
-## Step 5: coarsen the 0.05mm near weighting solve back to 0.1mm, then stitch.
-##         Stored as potential/weight3d for downstream induce-pixel.
-## ---------------------------------------------------------------------------
-
-# As in PART A, the near weighting solve ran at 0.05mm (440x440x401) for a
-# symmetric pixel tile.  Stride-downsample by 2 to 0.1mm (220x220x201) before
-# stitching, avoiding the 440x440x6200 full-fine domain (OOM).
-want domain/weight_near_01 \
-     pochoir domain --domain domain/weight_near_01 \
-     --shape=220,220,201 --spacing '0.1*mm'
-
-want potential/weight_near_01 \
-     pochoir coarsen \
-     --input potential/weight_near \
-     --domain domain/weight_near_01 \
-     --output potential/weight_near_01
-
-want domain/weight_full \
-     pochoir domain --domain domain/weight_full \
-     --shape=220,220,3100 --spacing '0.1*mm'
-
-want potential/weight3d \
-     pochoir stitch-near \
-     --near potential/weight_near_01 \
-     --coarse potential/weight_coarse \
-     --domain domain/weight_full \
-     --output potential/weight3d
-
-date
+# ############################################################################
+# ## PART B: WEIGHTING FIELD  (near-field refinement)
+# ############################################################################
+# export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_weightingfield.log"
+# 
+# gen="pcb_pixel_with_grid"
+# cfg="example_gen_pixel_with_grid.json"
+# 
+# ## ---------------------------------------------------------------------------
+# ## Step 1: coarse weighting solve (0.4mm, 99x99x375), full drift depth
+# ## ---------------------------------------------------------------------------
+# 
+# want domain/weight_coarse \
+#      pochoir domain --domain domain/weight_coarse \
+#      --shape=55,55,775 --spacing '0.4*mm'
+#     # --shape=99,99,775 --spacing '0.4*mm'
+# 
+# want "initial/weight_coarse boundary/weight_coarse" \
+#      pochoir gen --generator $gen --domain domain/weight_coarse \
+#      --initial initial/weight_coarse --boundary boundary/weight_coarse \
+#      $cfg
+# 
+# want "potential/weight_coarse increment/weight_coarse" \
+#      pochoir fdm \
+#      --nepochs 10 --epoch 130000000 --precision 0.0000002 \
+#      --edges fix,fix,fix \
+#      --engine torch \
+#      --initial initial/weight_coarse --boundary boundary/weight_coarse \
+#      --potential potential/weight_coarse \
+#      --increment increment/weight_coarse \
+#      --multisteps no
+# 
+# date
+# 
+# ## ---------------------------------------------------------------------------
+# ## Step 2: near-field gen + refined coarse seed (0.1mm, 396x396x201, z=0..20mm)
+# ## ---------------------------------------------------------------------------
+# 
+# want domain/weight_near \
+#      pochoir domain --domain domain/weight_near \
+#      --shape=440,440,401 --spacing '0.05*mm'
+#      #--shape=220,220,201 --spacing '0.05*mm'
+#      #--shape=396,396,201 --spacing '0.1*mm'
+# 
+# want "initial/weight_near boundary/weight_near" \
+#      pochoir gen --generator $gen --domain domain/weight_near \
+#      --initial initial/weight_near --boundary boundary/weight_near \
+#      $cfg
+# 
+# # Seed the near-field interior with the upsampled coarse weighting solution.
+# want initial/weight_near_refined \
+#      pochoir refine \
+#      --coarse potential/weight_coarse \
+#      --initial initial/weight_near \
+#      --boundary boundary/weight_near \
+#      --output initial/weight_near_refined
+# 
+# ## ---------------------------------------------------------------------------
+# ## Step 3: Dirichlet interface plane at z=20mm from the coarse bulk
+# ## ---------------------------------------------------------------------------
+# 
+# want "initial/weight_near_bc boundary/weight_near_bc" \
+#      pochoir near-bc \
+#      --initial initial/weight_near_refined \
+#      --boundary boundary/weight_near \
+#      --coarse potential/weight_coarse \
+#      --initial-out initial/weight_near_bc \
+#      --boundary-out boundary/weight_near_bc
+# 
+# ## ---------------------------------------------------------------------------
+# ## Step 4: near-field fine weighting solve (0.1mm), seeded + pinned interface
+# ## ---------------------------------------------------------------------------
+# 
+# want "potential/weight_near increment/weight_near" \
+#      pochoir fdm \
+#      --nepochs 10 --epoch 130000000 --precision 0.0000000002 \
+#      --edges fix,fix,fix \
+#      --engine torch \
+#      --initial initial/weight_near_bc --boundary boundary/weight_near_bc \
+#      --potential potential/weight_near \
+#      --increment increment/weight_near \
+#      --multisteps no
+# 
+# date
+# 
+# ## ---------------------------------------------------------------------------
+# ## Step 5: coarsen the 0.05mm near weighting solve back to 0.1mm, then stitch.
+# ##         Stored as potential/weight3d for downstream induce-pixel.
+# ## ---------------------------------------------------------------------------
+# 
+# # As in PART A, the near weighting solve ran at 0.05mm (440x440x401) for a
+# # symmetric pixel tile.  Stride-downsample by 2 to 0.1mm (220x220x201) before
+# # stitching, avoiding the 440x440x6200 full-fine domain (OOM).
+# want domain/weight_near_01 \
+#      pochoir domain --domain domain/weight_near_01 \
+#      --shape=220,220,201 --spacing '0.1*mm'
+# 
+# want potential/weight_near_01 \
+#      pochoir coarsen \
+#      --input potential/weight_near \
+#      --domain domain/weight_near_01 \
+#      --output potential/weight_near_01
+# 
+# want domain/weight_full \
+#      pochoir domain --domain domain/weight_full \
+#      --shape=220,220,3100 --spacing '0.1*mm'
+# 
+# want potential/weight3d \
+#      pochoir stitch-near \
+#      --near potential/weight_near_01 \
+#      --coarse potential/weight_coarse \
+#      --domain domain/weight_full \
+#      --output potential/weight3d
+# 
+# date
 
 ############################################################################
 ## PART C: VELOCITY, PATHS, INDUCED CURRENT
@@ -367,14 +367,14 @@ want paths/drift3d_tight \
 # geometry) and over-focuses paths onto the pads; linear is monotone-safe.
 # Evidence: test/interp_overshoot_test.py, docs/drift/drift-path-ode-integration.md.
 
-echo "=== Induced currents ==="
-## Induced current on the pixel via Ramo (weighting field x drift paths).
-want current/induced_current \
-     pochoir induce-pixel --weighting potential/weight3d \
-     --paths paths/drift3d_tight \
-     --output current/induced_current \
-     --npixels 2 \
-     --config example_gen_pixel_with_grid.json \
-     --plot
+# echo "=== Induced currents ==="
+# ## Induced current on the pixel via Ramo (weighting field x drift paths).
+# want current/induced_current \
+#      pochoir induce-pixel --weighting potential/weight3d \
+#      --paths paths/drift3d_tight \
+#      --output current/induced_current \
+#      --npixels 2 \
+#      --config example_gen_pixel_with_grid.json \
+#      --plot
 
 date
