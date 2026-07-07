@@ -48,8 +48,8 @@ memory). So the script:
 
 1. solves the **entire depth coarsely** (0.4 mm),
 2. solves **only the near-field region** (z = 0…20 mm) **finely** (0.05 mm),
-3. **stitches** the fine near-field onto the upsampled coarse far-field to build
-   the full 0.1 mm potential.
+3. **stitches** the fine near-field onto the linearly-upsampled coarse
+   far-field to build the full 0.05 mm potential.
 
 The subtlety — and the part that took the most engineering — is making the join
 between the fine and coarse regions physically seamless. Section 2.3 covers this
@@ -131,19 +131,23 @@ far-field.
 |---|---|---|---|---|
 | **Coarse** (full depth) | 11×11×775 | 0.4 mm | 0 … 309.6 mm | `potential/coarse` |
 | **Fine / near** (near only) | 88×88×401 | 0.05 mm | 0 … 20 mm | `potential/near` |
-| **Stitched full** | 44×44×3100 | 0.1 mm | 0 … 309.9 mm | `potential/drift3d` |
+| **Stitched full** | 88×88×6200 | 0.05 mm | 0 … 309.95 mm | `potential/drift3d` |
 
-A full-depth fine solve would be 88×88×6200 and exhausts memory, so the fine FDM
-runs only where the geometry is strong (z ≤ 20 mm) and is glued onto the coarse
-bulk for the remaining depth.
+A full-depth *fine solve* would be 88×88×6200 and exhausts memory, so the fine
+**FDM** runs only where the geometry is strong (z ≤ 20 mm). The far bulk is never
+solved finely — it is the coarse 0.4 mm solve, linearly upsampled at stitch time
+— so the full 0.05 mm grid only ever holds an interpolated (cheap) far field
+plus the genuinely fine near field.
 
-#### Why 0.05 mm and then coarsen back to 0.1 mm
+#### Why 0.05 mm all the way through
 
 The pixel pitch (4.4 mm) is an **odd** multiple of 0.1 mm, which produces an
 asymmetric FDM pixel tile at 0.1 mm. Solving at **0.05 mm** makes the tile
-symmetric. The fine result is afterward **`coarsen`**-ed (stride-2 downsample,
-`arr[::2, ::2, ::2]`, 401 → 201 planes) back to the 0.1 mm stitch resolution.
-This step also sidesteps the full-fine OOM.
+symmetric. The near solve keeps its native **0.05 mm** and is **not** coarsened;
+instead the coarse far field is linearly upsampled 0.4 mm → 0.05 mm at stitch
+time, so the whole stitched drift potential (`potential/drift3d`) is 0.05 mm
+(88×88×6200). The full grid is ~48 M cells; stitch/velo/drift are numpy, so this
+runs as a background job (see the risk note in the driver's Step 5).
 
 #### Coupling flavor 1 — single-shot Dirichlet pin (C0 only)
 
@@ -207,14 +211,13 @@ its own precision (near `2e-11`, far `2e-7`). Ending every sweep on the near
 solve leaves the near field exactly C0-pinned to the far field. Outputs: an
 updated `potential/near` **and** a consistent far field `potential/far`.
 
-#### The final "→ coarse": coarsen and stitch
+#### The final "→ stitch" (no coarsen)
 
-- **`coarsen`** downsamples `potential/near` (0.05 mm) to `potential/near_01`
-  (0.1 mm). The stride is inferred from the spacing ratio
-  (`round(0.1/0.05) = 2`).
-- **`stitch-near`** multi-linearly upsamples the far field onto the full 0.1 mm
-  grid, then overwrites the **first 201 planes** (z = 0…20 mm) with the near
-  solve. The seam is continuous because it was pinned.
+- **`stitch-near`** multi-linearly upsamples the far field (`potential/far`)
+  onto the full **0.05 mm** grid (88×88×6200), then overwrites the **first 401
+  planes** (z = 0…20 mm) with the native 0.05 mm near solve (`potential/near`).
+  Transverse shapes already match (88×88), so no `coarsen` step is needed. The
+  seam is continuous because it was pinned (and, for drift, Schwarz-refined).
 
 #### The asymmetry between the two PARTs
 
@@ -262,14 +265,14 @@ The `want` chain, step → store keys produced:
 
 | Step | Command | Produces (drift / weighting) |
 |---|---|---|
-| grids | `domain` | `domain/coarse`, `domain/near`, `domain/near_01`, `domain/fine` (+ `weight_*`) |
+| grids | `domain` | `domain/coarse`, `domain/near`, `domain/fine` (+ `weight_*`) |
 | geometry | `gen` | `initial/coarse`,`boundary/coarse` (+ `near`, `fine`, `weight_*`) |
 | coarse solve | `fdm` | `potential/coarse` / `potential/weight_coarse` |
 | warm start | `refine` | `initial/near_refined` / `initial/weight_near_refined` |
 | C0 pin | `near-bc` | `initial/near_bc`,`boundary/near_bc` (+ `weight_*`) |
 | near solve | `fdm` | `potential/near` / `potential/weight_near` |
 | Schwarz (drift only) | `near-far-solve` | `potential/near` (updated), `potential/far` |
-| coarsen | `coarsen` | `potential/near_01` / `potential/weight_near_01` |
+| coarsen (weighting only) | `coarsen` | `potential/weight_near_01` |
 | stitch | `stitch-near` | **`potential/drift3d`** / **`potential/weight3d`** |
 | velocity | `velo` | `velocity/drift3d` |
 | starts | `starts` | `starts/drift3d` |

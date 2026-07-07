@@ -170,26 +170,18 @@ want "potential/near potential/far" \
 date
 
 ## ---------------------------------------------------------------------------
-## Step 5: coarsen the 0.05mm near solve back to 0.1mm, then stitch onto the
-##         Schwarz-updated far field (potential/far, not the raw coarse solve)
+## Step 5: stitch the 0.05mm near solve onto the Schwarz-updated far field
+##         (potential/far), keeping the whole stitched drift potential at
+##         0.05mm by linearly upsampling the far field (no near coarsen).
 ## ---------------------------------------------------------------------------
 
-# The near solve ran at 0.05mm (88x88x401) so the pixel tile stays symmetric.
-# Stride-downsample it by 2 back to 0.1mm (44x44x201) for stitching onto the
-# far field.  This also avoids building the 88x88x6200 full-fine domain (OOM).
-want domain/near_01 \
-     pochoir domain --domain domain/near_01 \
-     --shape=44,44,201 --spacing '0.1*mm'
-
-want potential/near_01 \
-     pochoir coarsen \
-     --input potential/near \
-     --domain domain/near_01 \
-     --output potential/near_01
-
+# The near solve stays at its native 0.05mm (88x88x401).  The full stitched
+# domain is 0.05mm (88x88x6200): stitch-near upsamples the coarse/far field
+# (potential/far) to 0.05mm with linear RGI and overwrites the first 401 z
+# planes (z 0..20mm) with the near solve.  Transverse shapes match (88x88).
 want domain/fine \
      pochoir domain --domain domain/fine \
-     --shape=44,44,3100 --spacing '0.1*mm'
+     --shape=88,88,6200 --spacing '0.05*mm'
 
 # Generate the full-fine electrode geometry (boundary mask) for the
 # stitched domain.  The FDM solve is NOT run here (that is the whole
@@ -202,7 +194,7 @@ want "boundary/fine initial/fine" \
 
 want potential/drift3d \
      pochoir stitch-near \
-     --near potential/near_01 \
+     --near potential/near \
      --coarse potential/far \
      --domain domain/fine \
      --output potential/drift3d
