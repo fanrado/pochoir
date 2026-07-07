@@ -2165,6 +2165,128 @@ def stitch_near(ctx, near, coarse, domain, output, axis):
     ctx.obj.put(output, full, taxon="potential", **params)
 
 
+@cli.command("near-far-solve")
+@click.option("-C", "--coarse-potential", type=str, required=True,
+              help="Coarse full-domain solved potential (initial far field)")
+@click.option("--coarse-initial", type=str, required=True,
+              help="Coarse full-domain initial value array")
+@click.option("--coarse-boundary", type=str, required=True,
+              help="Coarse full-domain boundary (bool) array")
+@click.option("--near-initial", type=str, required=True,
+              help="Near-field initial value array")
+@click.option("--near-boundary", type=str, required=True,
+              help="Near-field boundary (bool) array")
+@click.option("--interface", type=str, required=True,
+              help="Interface coordinate along --axis (e.g. '20*mm')")
+@click.option("--axis", type=int, default=2,
+              help="Stitch axis normal to the interface (def: 2, i.e. z)")
+@click.option("-e", "--edges", default="periodic,periodic,fixed",
+              help="Comma list of fixed/periodic per axis (matches fdm)")
+@click.option("--engine", default="torch",
+              help="FDM solver engine (numpy/numba/torch/cupy/cumba)")
+@click.option("--epoch", default=1000000, type=int,
+              help="FDM iterations per precision check")
+@click.option("-n", "--nepochs", default=10, type=int,
+              help="FDM max number of epochs")
+@click.option("--near-precision", default=2e-11, type=float,
+              help="Convergence precision for the fine near solve")
+@click.option("--far-precision", default=2e-7, type=float,
+              help="Convergence precision for the coarse far solve")
+@click.option("--tol", type=str, default="1.0",
+              help="Schwarz tolerance: max near-solution change per sweep "
+                   "(may use units, e.g. '1*V')")
+@click.option("--max-iters", default=6, type=int,
+              help="Maximum number of near<->far Schwarz sweeps")
+@click.option("--near-out", type=str, required=True,
+              help="Output final near-field potential")
+@click.option("--far-out", type=str, required=True,
+              help="Output final far-field (coarse) potential")
+@click.pass_context
+def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
+                   near_initial, near_boundary, interface, axis, edges,
+                   engine, epoch, nepochs, near_precision, far_precision,
+                   tol, max_iters, near_out, far_out):
+    '''
+    Overlapping-Schwarz near/far solve for a continuous stitched potential.
+
+    Alternately solves the fine near domain (interface plane pinned to the
+    current far solution) and the full coarse far domain (an interior plane
+    one coarse cell below the interface pinned to the near solution), sharing
+    a 1-cell overlap.  Iterating to convergence makes the stitched field
+    continuous in value *and* gradient across the interface, unlike the
+    single-shot near-bc pin.  Writes the final near and far potentials, which
+    are then coarsened + stitched (`coarsen`, `stitch-near`) as usual.
+    '''
+    import numpy
+    import pochoir.fdm
+    from pochoir import nearfar
+
+    try:
+        solve = getattr(pochoir.fdm, f'solve_{engine}')
+    except AttributeError:
+        click.echo(f'no fdm solver engine {engine}')
+        sys.exit(-1)
+
+    cpot, cmd = ctx.obj.get(coarse_potential, True)
+    cinit = ctx.obj.get(coarse_initial)
+    cbnd = ctx.obj.get(coarse_boundary)
+    ninit, nmd = ctx.obj.get(near_initial, True)
+    nbnd, nbmd = ctx.obj.get(near_boundary, True)
+
+    if cmd is None or "domain" not in cmd:
+        click.echo(f'failed to get domain for coarse potential {coarse_potential}')
+        sys.exit(-1)
+    near_dom_key = nbmd["domain"] if (nbmd and "domain" in nbmd) else nmd["domain"]
+    coarse_dom = ctx.obj.get_domain(cmd["domain"])
+    near_dom = ctx.obj.get_domain(near_dom_key)
+
+    bool_edges = [e.startswith("per") for e in edges.split(",")]
+    if len(bool_edges) != numpy.asarray(cpot).ndim:
+        raise ValueError("number of edge conditions does not match dimensions")
+
+    interface_z = float(pochoir.arrays.fromstr1(interface)[0])
+    tol_v = float(pochoir.arrays.fromstr1(tol)[0])
+
+    def _make_solver(prec):
+        def _solve(iarr, barr):
+            if engine == "torch":
+                arr, _err = solve(
+                    numpy.asarray(iarr, dtype=float),
+                    numpy.asarray(barr).astype(bool),
+                    bool_edges, prec, epoch, nepochs,
+                    info_msg=info_msg, _dtype=torch.float64,
+                    ctx=ctx, potential=near_out, increment=near_out + "/inc",
+                    params=dict(command="near-far-solve"), epsilon=None)
+            else:
+                arr, _err = solve(
+                    numpy.asarray(iarr, dtype=float),
+                    numpy.asarray(barr).astype(bool),
+                    bool_edges, prec, epoch, nepochs)
+            return numpy.asarray(arr)
+        return _solve
+
+    near_pot, far_pot, n_iters, delta = nearfar.schwarz_solve(
+        cpot, cinit, cbnd, coarse_dom,
+        ninit, nbnd, near_dom,
+        _make_solver(near_precision), _make_solver(far_precision),
+        axis=axis, interface_z=interface_z,
+        tol=tol_v, max_iters=max_iters, log=info_msg)
+
+    info_msg(f'near-far-solve: {n_iters} sweeps, final near delta={delta}')
+    print(f'near-far-solve: {n_iters} sweeps, final near delta={delta}')
+
+    nparams = dict(operation="near-far-solve", domain=near_dom_key,
+                   coarse=coarse_potential, interface=interface,
+                   interface_axis=axis, sweeps=int(n_iters),
+                   command="near-far-solve")
+    fparams = dict(operation="near-far-solve", domain=cmd["domain"],
+                   near=near_initial, interface=interface,
+                   interface_axis=axis, sweeps=int(n_iters),
+                   command="near-far-solve")
+    ctx.obj.put(near_out, near_pot, taxon="potential", **nparams)
+    ctx.obj.put(far_out, far_pot, taxon="potential", **fparams)
+
+
 def main():
     cli(obj=None)
 
