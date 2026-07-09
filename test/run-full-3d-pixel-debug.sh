@@ -31,7 +31,7 @@
 
 set -e
 
-export POCHOIR_STORE="${1:-store_debug}"
+export POCHOIR_STORE="${1:-store_debug10cm}"
 
 source helpers.sh
 
@@ -89,10 +89,14 @@ echo "=== DEBUG short-drift harness: DRIFT_MM=${DRIFT_MM} (10cm), store=${POCHOI
 export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_driftfield.log"
 
 gen="pcb_drift_pixel_with_grid"
-# The drift generator places the cathode at the last z-plane and ignores
-# driftZDepth, so the reference drift config is reused unchanged; only the
-# domain z depth (Z_COARSE/Z_FINE) and the launch plane are shortened.
-cfg="example_gen_pcb_drift_pixel_with_grid.json"
+# The drift generator places the cathode at the last z-plane, so the physical
+# drift field = CathodePotential / gap.  Over the short 100mm gap the reference
+# -15400V would give ~150 V/mm (3x too strong) and change the near-pad physics
+# under debug.  The debug config scales CathodePotential to -5000V so the bulk
+# field stays ~-50 V/mm (5000V/99.6mm), matching the reference 30cm run
+# (15400V/307.6mm).  Laplace streamlines are voltage-scale-invariant so the
+# overshoot still reproduces; this just keeps the drift speed/physics faithful.
+cfg="example_gen_pcb_drift_pixel_with_grid_debug.json"
 
 ## ---------------------------------------------------------------------------
 ## Step 1: coarse solve (0.4mm, 11x11xZ_COARSE), short drift region
