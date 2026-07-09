@@ -62,9 +62,15 @@ import torch
 from . import units
 # no others than click and pochoir!
 import logging
-if not os.path.exists('store'):
-    os.makedirs('store')
-log_filename = os.environ.get('POCHOIR_LOG', 'store/pochoir.log')
+# Directory for auxiliary artifacts (PNGs, legacy .npy dumps) written by
+# commands that side-save outside the ctx.obj store.  Respect POCHOIR_STORE so
+# a debug/alternate run (e.g. run-full-3d-pixel-debug.sh) does not clobber the
+# default ./store.  The ctx.obj store itself is resolved separately via the
+# --store/POCHOIR_STORE click option.
+STORE_DIR = os.environ.get('POCHOIR_STORE', 'store')
+if not os.path.exists(STORE_DIR):
+    os.makedirs(STORE_DIR)
+log_filename = os.environ.get('POCHOIR_LOG', os.path.join(STORE_DIR, 'pochoir.log'))
 logging.basicConfig(
     level=logging.INFO,
     filename=log_filename,
@@ -612,13 +618,13 @@ def starts(ctx, starts, mode, configs, plot, points):
     if plot:
         import os
         import matplotlib.pyplot as plt
-        os.makedirs('store', exist_ok=True)
+        os.makedirs(STORE_DIR, exist_ok=True)
         plt.figure(figsize=(10,10))
         plt.scatter(arr[:,0],arr[:,1])
         plt.title('starting points')
         plt.xlabel('x')
         plt.ylabel('y')
-        plt.savefig('store/starting_points.png')
+        plt.savefig(os.path.join(STORE_DIR, 'starting_points.png'))
         plt.close()
     debug_msg(f"whatever we save: {arr}")
     ctx.obj.put(starts, arr, taxon="points", command="starts")
@@ -717,7 +723,7 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, plot, i
     if plot:
         import os
         import matplotlib.pyplot as plt
-        os.makedirs('store', exist_ok=True)
+        os.makedirs(STORE_DIR, exist_ok=True)
         fig = plt.figure(figsize=(10,10))
         ax = fig.add_subplot(111, projection='3d')
         for i in range(0,thepaths.shape[0]):
@@ -726,7 +732,7 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, plot, i
         ax.set_xlabel('x')
         ax.set_ylabel('y')
         ax.set_zlabel('z')
-        plt.savefig('store/drift_paths_3d.png')
+        plt.savefig(os.path.join(STORE_DIR, 'drift_paths_3d.png'))
         plt.close()
     params=dict(taxon="paths", command="drift", domain=domain,
                 tstart=start, tstop=stop, nsteps=nsteps)
@@ -1186,10 +1192,10 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
     if plot:
         import os
         import matplotlib.pyplot as plt
-        os.makedirs('store', exist_ok=True)
+        os.makedirs(STORE_DIR, exist_ok=True)
         plt.figure(figsize=(10,6))
         plt.plot(ticks[1:], Q[0,1:], label="Charge")
-        plt.savefig('store/charge.png')
+        plt.savefig(os.path.join(STORE_DIR, 'charge.png'))
         plt.close()
     dT = ticks[1:] - ticks[:-1]
     # print(f'dT [:10] : {dT[:10]}r')
@@ -1214,9 +1220,9 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
         # print("I=",I)
     import numpy as np
     #np.save('fr_4p4pitch_3.8pix_circgrid_1p9.npy', I)
-    np.save('store/fr_4p4pitch_3.8pix_nogrid_10pathsperpixel.npy', I)
-    np.save('store/startpoints.npy', startpoints)
-    np.save('store/endpoints.npy', endpoints)
+    np.save(os.path.join(STORE_DIR, 'fr_4p4pitch_3.8pix_nogrid_10pathsperpixel.npy'), I)
+    np.save(os.path.join(STORE_DIR, 'startpoints.npy'), startpoints)
+    np.save(os.path.join(STORE_DIR, 'endpoints.npy'), endpoints)
     ctx.obj.put(output, I, command="induce", taxon="current",
                 charge = charge,
                 domain=domain, paths=paths,average=average,nsteps=nsteps, weighting=weighting)
