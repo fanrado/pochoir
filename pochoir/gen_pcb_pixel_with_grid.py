@@ -291,7 +291,6 @@ def generator(dom, cfg):
     # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
     barr[:,:,0]=1
-    barr[:,:,-1] = 1 ## Ground the cathode plane when calculating the weighting potential ==> weighting potential at the starting point of the electrons ~=0
 
     # Ground the cathode plane for the weighting potential.  Ramo's theorem
     # requires every non-collecting electrode (including the cathode) held at
@@ -307,6 +306,11 @@ def generator(dom, cfg):
         if 0 <= z_cat < dom.shape[2]:
             draw_plane(barr, z_cat, 1)   # mark whole cathode plane immutable
             arr[:, :, z_cat] = 0.0       # weighting potential 0 at cathode
+            # Full-depth domain: the far z-face is the electron launch plane,
+            # so ground it to weighting potential 0 too.  Gated by this guard
+            # so near-field tiles (whose far face is the Schwarz/near-bc
+            # interface plane at z=20mm) are left free for near-bc to pin.
+            barr[:, :, -1] = 1
             log.debug('grounded cathode plane at z index %s (driftZDepth=%s)',
                       z_cat, cfg['driftZDepth'])
 
