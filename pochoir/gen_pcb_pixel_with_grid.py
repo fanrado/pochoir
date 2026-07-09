@@ -291,6 +291,7 @@ def generator(dom, cfg):
     # draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width)
 
     barr[:,:,0]=1
+    barr[:,:,-1] = 1 ## Ground the cathode plane when calculating the weighting potential ==> weighting potential at the starting point of the electrons ~=0
 
     # Ground the cathode plane for the weighting potential.  Ramo's theorem
     # requires every non-collecting electrode (including the cathode) held at
