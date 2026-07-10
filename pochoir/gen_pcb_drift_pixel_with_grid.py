@@ -494,17 +494,37 @@ def generator(dom, cfg, info_msg=None):
         epsilon[:, :, pp_loweredge+pp_width+pcb_width+1:] = LArPermittivity
 
     # Pixel-plane laminate FR4 WITHOUT a shield grid (Task7a): default LAr
-    # everywhere, then make the BOTTOM n_fr4 cell(s) of the 0.1mm pixel-plane
-    # layer FR4.  The pad conductor sits on TOP of the layer (see
-    # draw_pixel_plane fr4_bottom); the FR4 cell(s) stay FREE so their
-    # permittivity enters the harmonic-mean Poisson solve.  LAr fills the drift
-    # gap above the pad and the region below the FR4.  Default off -> epsilon
-    # stays None for every non-FR4 run (byte-unchanged).
+    # everywhere, then make the BOTTOM n_fr4 cell(s) of the pixel-plane layer
+    # FR4.  The pad conductor sits on TOP of the layer (see draw_pixel_plane
+    # fr4_bottom); the FR4 cell(s) stay FREE so their permittivity enters the
+    # harmonic-mean Poisson solve.  LAr fills the drift gap above the pad and
+    # the region below the FR4.  Default off -> epsilon stays None for every
+    # non-FR4 run (byte-unchanged).
+    #
+    # Physically-correct laminate geometry: the pad and FR4 thicknesses are
+    # given explicitly (in mm) via 'padThickness'/'FR4Thickness' -- e.g. a
+    # 1oz-copper pad (~0.0348 mm) over a 1.6 mm FR4 substrate.  Because 1oz Cu
+    # is thinner than one 0.05 mm cell, n_pad is clamped to a 1-cell minimum;
+    # n_fr4 likewise.  The pixel-plane layer thickness pp_width is then derived
+    # so the conductor occupies exactly n_pad cells on top and FR4 the n_fr4
+    # cells below (pad cells = z2 - zp1 = pp_width + 1 - n_fr4 = n_pad).  If the
+    # thickness keys are absent, fall back to the legacy half-and-half split
+    # (n_fr4 = pp_width // 2) so older FR4 configs are unchanged.
     enableFR4 = cfg.get('enableFR4', False)
     fr4_bottom = False
     n_fr4 = 0
     if enableFR4 and LArPermittivity is not None and FR4Permittivity is not None:
-        n_fr4 = max(1, pp_width // 2)
+        fr4_thickness = cfg.get('FR4Thickness', None)
+        pad_thickness = cfg.get('padThickness', None)
+        if fr4_thickness is not None and pad_thickness is not None:
+            n_fr4 = max(1, int(round(fr4_thickness / dom.spacing[0])))
+            n_pad = max(1, int(round(pad_thickness / dom.spacing[0])))
+            pp_width = n_pad + n_fr4 - 1
+            if info_msg is not None:
+                info_msg(f'FR4 laminate: pad={pad_thickness}mm ({n_pad} cell(s)), '
+                         f'FR4={fr4_thickness}mm ({n_fr4} cell(s)), pp_width={pp_width}')
+        else:
+            n_fr4 = max(1, pp_width // 2)
         epsilon = numpy.full(dom.shape, LArPermittivity)
         epsilon[:, :, pp_loweredge:pp_loweredge + n_fr4] = FR4Permittivity
         fr4_bottom = True
