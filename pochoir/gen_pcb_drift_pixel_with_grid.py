@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
 
+import os
 import numpy
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+
+
+def _plot_dir():
+    """Directory for diagnostic plots, following the run's output folder.
+
+    Mirrors ``pochoir/__main__.py`` (``POCHOIR_STORE`` env, default ``store``)
+    so these side-saved figures land in the *renamed* output folder instead of
+    a hardcoded ``store/``. The outer folder name is configurable; only the
+    inner store layout is fixed.
+    """
+    d = os.environ.get('POCHOIR_STORE', 'store')
+    os.makedirs(d, exist_ok=True)
+    return d
 
 def draw_quarter_circle(x0,y0,r):
     """
@@ -175,6 +189,41 @@ def trimCorner(arr, x, y, z1, z2, corner, val=0, chamfer_r=4):
     arr[x0:x1, y0:y1, z1:z2][mask] = val
 
 
+def trimCorner_forpix(arr, x, y, z1, z2, corner):
+    """Fixed-cell corner trim, copied VERBATIM from branch ``for_pix``.
+
+    This is the original, non-parametric chamfer: it carves a hardcoded
+    ~4-cell staircase notch at an inner corner, *independent of the grid
+    spacing*.  It always writes ``0`` (carve a pad).  The reach along each
+    edge is fixed at 4 grid cells, so the physical size of the removed
+    region scales with the spacing (0.4 mm at 0.1 mm, 0.2 mm at 0.05 mm).
+
+    Used only when ``chamferMode == 'fixed_cell'`` to reproduce the exact
+    footprint of the ``for_pix`` branch.  Kept byte-for-byte identical to
+    that branch's ``trimCorner`` so the removed cells match exactly.
+    """
+    if corner == 0:
+        arr[x-3:x+1, y, z1:z2] = 0
+        arr[x, y-3:y+1, z1:z2] = 0
+        arr[x, y, z1:z2] = 0
+        arr[x-1, y-1, z1:z2] = 0
+    if corner == 1:
+        arr[x-3:x+1, y, z1:z2] = 0
+        arr[x, y:y+4, z1:z2] = 0
+        arr[x, y, z1:z2] = 0
+        arr[x-1, y+1, z1:z2] = 0
+    if corner == 2:
+        arr[x:x+4, y, z1:z2] = 0
+        arr[x, y:y+4, z1:z2] = 0
+        arr[x, y, z1:z2] = 0
+        arr[x+1, y+1, z1:z2] = 0
+    if corner == 3:
+        arr[x:x+4, y, z1:z2] = 0
+        arr[x, y-3:y+1, z1:z2] = 0
+        arr[x, y, z1:z2] = 0
+        arr[x+1, y-1, z1:z2] = 0
+
+
 def _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val, chamfer_r):
     """Apply ``trimCorner`` to all four inner corners of a square aperture.
 
@@ -267,7 +316,7 @@ def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_lowe
 ##----
 
 import sys
-def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, cathodePotential, gridPotential, epsilon=None, chamfer_r=0.7):
+def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, cathodePotential, gridPotential, epsilon=None, chamfer_r=0.7, chamferMode='dynamic', fr4_bottom=False, n_fr4=0):
     """Draw the pixel collection plane as solid pads with rounded-square corners.
 
     Initialises the full volume with the cathode potential and a solid boundary
@@ -326,11 +375,26 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
     dims = p_size*n_pix+p_gap*(n_pix-1)
     half = (p_size + 1) // 2 ## This change here is related to the comment by Brett about a broken symmetry in the quarter pixels corners/rounded
     z1, z2 = pp_loweredge, pp_width + pp_loweredge + 1
-    barr[0:half,        0:half,        z1:z2] = 1
-    barr[0:half,        half+p_gap:,   z1:z2] = 1
-    barr[half+p_gap:,   0:half,        z1:z2] = 1
-    barr[half+p_gap:,   half+p_gap:,   z1:z2] = 1
-    _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val=0, chamfer_r=chamfer_r)
+    # When the pixel-plane laminate FR4 is activated (fr4_bottom), the pad
+    # conductor covers only the TOP of the pp_width layer; the bottom n_fr4
+    # cell(s) are left FREE so their FR4 permittivity enters the Poisson solve.
+    # For fr4_bottom=False (n_fr4=0) this is byte-identical to the old behaviour.
+    zp1 = z1 + n_fr4 if fr4_bottom else z1
+    barr[0:half,        0:half,        zp1:z2] = 1
+    barr[0:half,        half+p_gap:,   zp1:z2] = 1
+    barr[half+p_gap:,   0:half,        zp1:z2] = 1
+    barr[half+p_gap:,   half+p_gap:,   zp1:z2] = 1
+    if chamferMode == 'fixed_cell':
+        # Reproduce the for_pix branch EXACTLY: fixed-cell staircase chamfer
+        # (spacing-independent 4-cell reach), applied at the same anchor
+        # positions and quadrant order as for_pix's draw_pixel_plane.
+        h = p_size // 2
+        trimCorner_forpix(barr, h - 1,     h - 1,     zp1, z2, 0)
+        trimCorner_forpix(barr, h - 1,     h + p_gap, zp1, z2, 1)
+        trimCorner_forpix(barr, h + p_gap, h - 1,     zp1, z2, 3)
+        trimCorner_forpix(barr, h + p_gap, h + p_gap, zp1, z2, 2)
+    else:
+        _apply_rounded_corners(barr, p_size, p_gap, zp1, z2, val=0, chamfer_r=chamfer_r)
     # arr[(p_size+p_gap):(p_size+p_gap)+p_size,(p_size+p_gap):(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
     # draw pixel plane for drift field
     # 3D scatter plot of arr (non-zero voxels colored by potential)
@@ -347,7 +411,7 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
         ax.set_zlabel('z')
         ax.set_title('arr (drift field boundary conditions)')
         plt.tight_layout()
-        plt.savefig('store/domain_drift_arr_3d.png', dpi=150)
+        plt.savefig(os.path.join(_plot_dir(), 'domain_drift_arr_3d.png'), dpi=150)
         plt.close()
 
     # 3D scatter plot of barr (boundary mask, non-zero voxels)
@@ -363,7 +427,7 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
         ax.set_zlabel('z')
         ax.set_title('barr (drift field boundary mask)')
         plt.tight_layout()
-        plt.savefig('store/domain_drift_barr_3d.png', dpi=150)
+        plt.savefig(os.path.join(_plot_dir(), 'domain_drift_barr_3d.png'), dpi=150)
         plt.close()
 
     # Same plot but clipped to first 150 z-planes, with large markers to prove surface-like render
@@ -389,7 +453,7 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
             ax.set_zlabel('z')
             ax.set_title(f'barr drift (first 150 z) - s={marker_size}')
             plt.tight_layout()
-            plt.savefig(f'store/{fname}', dpi=150)
+            plt.savefig(os.path.join(_plot_dir(), fname), dpi=150)
             plt.close()
 
     # plt.figure(figsize=(10,10))
@@ -412,6 +476,7 @@ def generator(dom, cfg, info_msg=None):
     p_gap=int(round(cfg["pixelGap"]/dom.spacing[0]))
     #chamfer_r=int(cfg["chamfer_r"]/dom.spacing[0])
     chamfer_r=int(round(cfg["chamfer_r"]/dom.spacing[0]))
+    chamferMode = cfg.get('chamferMode', 'dynamic')
     n_pix = cfg['Npixels']
     pp_width = int(cfg['pixelPlaneWidth']/dom.spacing[0])
 
@@ -427,6 +492,22 @@ def generator(dom, cfg, info_msg=None):
         ## This is correct if there was no hole in the FR4
         # epsilon[:, :, pp_loweredge+pp_width+1:pp_loweredge+pp_width+pcb_width-1] = FR4Permittivity
         epsilon[:, :, pp_loweredge+pp_width+pcb_width+1:] = LArPermittivity
+
+    # Pixel-plane laminate FR4 WITHOUT a shield grid (Task7a): default LAr
+    # everywhere, then make the BOTTOM n_fr4 cell(s) of the 0.1mm pixel-plane
+    # layer FR4.  The pad conductor sits on TOP of the layer (see
+    # draw_pixel_plane fr4_bottom); the FR4 cell(s) stay FREE so their
+    # permittivity enters the harmonic-mean Poisson solve.  LAr fills the drift
+    # gap above the pad and the region below the FR4.  Default off -> epsilon
+    # stays None for every non-FR4 run (byte-unchanged).
+    enableFR4 = cfg.get('enableFR4', False)
+    fr4_bottom = False
+    n_fr4 = 0
+    if enableFR4 and LArPermittivity is not None and FR4Permittivity is not None:
+        n_fr4 = max(1, pp_width // 2)
+        epsilon = numpy.full(dom.shape, LArPermittivity)
+        epsilon[:, :, pp_loweredge:pp_loweredge + n_fr4] = FR4Permittivity
+        fr4_bottom = True
     if gridHoleShape == 'circular':
         draw_pcb_plane((len(arr),len(arr[0])), arr, barr, pp_loweredge+pcb_width, r1, gridPotential) # Draw the PCB plane with holes circular
         ## We need to use a mask to define the holes in the FR4 and set the permittivity to LAr in those holes
@@ -445,7 +526,7 @@ def generator(dom, cfg, info_msg=None):
     barr[arr==0]=0
 
 
-    draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential, epsilon=epsilon, chamfer_r=chamfer_r)
+    draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential, epsilon=epsilon, chamfer_r=chamfer_r, chamferMode=chamferMode, fr4_bottom=fr4_bottom, n_fr4=n_fr4)
     
 
     if info_msg is not None:
