@@ -39,12 +39,16 @@
 #   * Electrons launched at z = 59.5 mm, drift ~49.5 mm to the pad at z = 10 mm.
 #
 # INSULATOR THREADING: --insulator is passed to the near fine fdm solve (where
-# the FR4 is resolved), to velo (zeros velocity inside FR4), and to drift (stops
-# paths at the FR4 surface = surface charge, endtag 2).  The overlapping-Schwarz
-# `near-far-solve` step is OMITTED for the DRIFT field (same rationale as Task8:
-# overshoot is a pad-local z=10 mm phenomenon far below the z=20 mm interface,
-# already pinned Dirichlet via near-bc); it IS used for the WEIGHTING field
-# (insulator-aware, pochoir-oz2l).
+# the FR4 is resolved), to the overlapping-Schwarz near-far-solve (near re-solve
+# is insulator-aware, pochoir-oz2l), to velo (zeros velocity inside FR4), and to
+# drift (stops paths at the FR4 surface = surface charge, endtag 2).
+#
+# The overlapping-Schwarz `near-far-solve` step is now RUN for the DRIFT field
+# too (pochoir-m4lu): the single-shot near-bc Dirichlet pin makes the stitched
+# potential only C0 at z=20 mm, so E_z (hence v_z) steps ~0.8% across the seam
+# (near 48.29 vs far 49.82 V/mm).  The Schwarz sweep makes the interface C1
+# (gradient-consistent), removing the v_z discontinuity.  It IS also used for
+# the WEIGHTING field.
 #
 # Output folder: store_task9_stress_wide_gap_insul/
 # Run from test/:  ./run-task9-stress-wide-gap-insul.sh
@@ -122,15 +126,39 @@ want "potential/near increment/near" \
      --potential potential/near --increment increment/near
 date
 
+## Step 4b: overlapping-Schwarz near-far-solve (pochoir-m4lu) so the near/far
+## interface at z=20mm is continuous in value AND gradient (C1), not just the
+## single-shot C0 near-bc pin.  Alternately re-solves the coarse far domain
+## (plane one coarse cell below z=20mm pinned to the near) and the fine near
+## domain (interface pinned to the far), the near re-solve carrying the same
+## no-flux FR4 insulator mask (--insulator, pochoir-oz2l; the coarse far never
+## sees it -- FR4 unresolved at 0.4mm).  Updates potential/near + writes
+## potential/far.  edges/precision match Step 4; drift tol '1*V'.
+want "potential/near potential/far" \
+     pochoir near-far-solve \
+     --coarse-potential potential/coarse \
+     --coarse-initial initial/coarse --coarse-boundary boundary/coarse \
+     --near-initial initial/near --near-boundary boundary/near \
+     --near-potential potential/near \
+     --insulator initial/near_insulator \
+     --interface '20*mm' --axis 2 \
+     --edges per,per,fix --engine torch \
+     --epoch 130000000 --nepochs 10 \
+     --near-precision 2e-11 --far-precision 2e-7 \
+     --tol '1*V' --max-iters 6 \
+     --near-out potential/near --far-out potential/far
+date
+
 ## Step 5: fine full domain gen (stores initial/fine_insulator on the 1201-cell
-## grid for velo/drift) + stitch the near fine solve onto the coarse far field.
+## grid for velo/drift) + stitch the near fine solve onto the Schwarz-updated
+## far field (potential/far), giving a C1-continuous stitched drift potential.
 want domain/fine \
      pochoir domain --domain domain/fine --shape=88,88,1201 --spacing '0.05*mm'
 want "boundary/fine initial/fine" \
      pochoir gen --generator $gen --domain domain/fine \
      --initial initial/fine --boundary boundary/fine $CFG
 want potential/drift3d \
-     pochoir stitch-near --near potential/near --coarse potential/coarse \
+     pochoir stitch-near --near potential/near --coarse potential/far \
      --domain domain/fine --output potential/drift3d
 date
 
