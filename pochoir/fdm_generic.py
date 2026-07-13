@@ -166,6 +166,11 @@ def stencil_poisson_harmonic(phi, eps, res=None):
             res = amod.zeros(core_shape, dtype=phi.dtype, device=phi.device)
         else:
             res = amod.zeros(core_shape)
+    else:
+        # res is reused across relaxation steps (fdm_torch passes tmp_core);
+        # it must be zeroed each call or the `res += ...` accumulation below
+        # grows without bound and the solve diverges. Mirrors stencil_poisson.
+        res[:] = 0
 
     denom = amod.zeros_like(res)
 
@@ -188,7 +193,164 @@ def stencil_poisson_harmonic(phi, eps, res=None):
 
         res   += e_pos * phi_pos + e_neg * phi_neg
         denom += e_pos + e_neg
-    print(f'stencil_poisson_harmonic: max denom = {denom.max()}, min denom = {denom.min()}')
-    sys.exit()
     res /= denom
+    return res
+
+
+def neumann_coeff(solid_mask, like=None):
+    '''
+    Pre-compute the per-interior-cell multiplicative coefficient for the
+    masked no-flux (Neumann) stencil :func:`stencil_poisson_neumann`.
+
+    For a free cell adjacent to ``k`` insulator ("solid") neighbours the
+    no-flux update averages over only its ``(2N - k)`` non-solid neighbours
+    (mirror / ghost cell => zero normal derivative).  The coefficient is the
+    reciprocal of that active-neighbour count::
+
+        coeff = 1 / (number of non-solid neighbours)
+
+    It depends only on the geometry, so it is built once and reused for every
+    relaxation step -- the per-step stencil then stays branch-free and
+    torch.compile-safe.
+
+    Multiplying by this reciprocal, rather than dividing by the count, is what
+    makes the all-``False`` mask case *bit-identical* to :func:`stencil_poisson`:
+    with no solid cells every interior cell keeps its full ``2N`` neighbours, so
+    ``coeff == 1/(2N) == norm`` uniformly and the update reduces exactly to the
+    plain-Laplace relaxation.
+
+    Parameters
+    ----------
+    solid_mask : N-D bool array (including boundary halo), True where the cell
+                 is an excluded insulator ("solid") cell.
+    like       : optional reference array (e.g. the field ``phi``) supplying the
+                 dtype / device / backend of the returned coefficient.  When
+                 omitted the coefficient follows ``solid_mask``'s backend in the
+                 default float type.
+
+    Returns
+    -------
+    coeff : array of the reduced (interior) shape holding 1 / active-count.
+
+    Raises
+    ------
+    AssertionError
+        If any *free* interior cell is fully enclosed by solid cells (zero
+        active neighbours): such a cell is decoupled from the solve and the
+        geometry is ill-posed.
+    '''
+    ref = solid_mask if like is None else like
+    amod = arrays.module(ref)
+    slices = [slice(1, s - 1) for s in solid_mask.shape]
+    core_shape = [s - 2 for s in solid_mask.shape]
+
+    # active neighbour = a cell that is NOT solid.  The coefficient dtype must
+    # match the dtype the stencil's `res` accumulator uses, so that the final
+    # `res *= coeff` reproduces stencil_poisson's `res *= norm` bit-for-bit:
+    # torch res follows phi.dtype, while numpy `zeros` defaults to float64
+    # regardless of the input dtype.
+    if arrays.is_torch(ref):
+        dtype = ref.dtype if like is not None else amod.float64
+        count = amod.zeros(core_shape, dtype=dtype, device=ref.device)
+        active_f = (~solid_mask).to(dtype)
+    else:
+        dtype = amod.float64
+        count = amod.zeros(core_shape, dtype=dtype)
+        active_f = (~solid_mask).astype(dtype)
+
+    for dim, n in enumerate(solid_mask.shape):
+        pos = list(slices)
+        pos[dim] = slice(2, n)
+        count += active_f[tuple(pos)]
+
+        neg = list(slices)
+        neg[dim] = slice(0, n - 2)
+        count += active_f[tuple(neg)]
+
+    # A free interior cell with zero active neighbours is fully enclosed by
+    # insulator and cannot be relaxed; reject such geometries up front so the
+    # per-step stencil never has to branch on it.
+    free_interior = ~solid_mask[tuple(slices)]
+    enclosed = free_interior & (count == 0)
+    assert not bool(amod.any(enclosed)), \
+        'insulator mask leaves fully-enclosed free cell(s); geometry ill-posed'
+
+    # Clamp the count to >= 1 so solid cells (whose result is discarded
+    # downstream) never produce inf/nan; free cells are guaranteed >= 1 above.
+    denom = count + (count == 0)
+    return 1.0 / denom
+
+
+def stencil_poisson_neumann(phi, solid_mask, coeff, res=None):
+    '''
+    Return the source-free (Laplace) relaxation update for ``phi`` with a masked
+    no-flux (Neumann) boundary on the ``solid_mask`` region.
+
+    Each free interior cell is updated to the average of its **non-solid**
+    neighbours::
+
+        phi_new = ( sum over non-solid neighbours of phi ) * coeff
+
+    where ``coeff = 1 / (number of non-solid neighbours)`` is pre-computed once
+    by :func:`neumann_coeff`.  Dropping the solid neighbours from both the sum
+    and the normalisation is a mirror / ghost-cell realisation of a zero normal
+    derivative (dphi/dn = 0) on every face of the excluded region: field lines
+    run tangential to the insulator and can only terminate on the conductors.
+
+    NO permittivity / epsilon enters here -- this is plain Laplace on E with a
+    reflecting mask, distinct from :func:`stencil_poisson_harmonic`.
+
+    When ``solid_mask`` is all-``False`` the result is bit-identical to
+    :func:`stencil_poisson` with ``source=None`` (every cell keeps its full
+    ``2N`` neighbours and ``coeff == 1/(2N)``): the non-negotiable plain-Laplace
+    regression.
+
+    All operations are array-level with no data-dependent branching, so the
+    step is torch.compile-safe.
+
+    Parameters
+    ----------
+    phi        : N-D field array (including boundary halo).
+    solid_mask : N-D bool array (same shape as ``phi``), True on excluded
+                 insulator cells whose bonds to free cells are cut.
+    coeff      : pre-computed reciprocal-active-neighbour-count array of the
+                 reduced (interior) shape, from :func:`neumann_coeff`.
+    res        : optional pre-allocated output of the reduced shape; created if
+                 not supplied and zeroed on reuse (mirrors ``stencil_poisson``).
+
+    Returns
+    -------
+    res : array of shape (s0-2, s1-2, ...) with the updated interior values.
+    '''
+    slices = [slice(1, s - 1) for s in phi.shape]
+    amod = arrays.module(phi)
+
+    if res is None:
+        core_shape = [s - 2 for s in phi.shape]
+        if arrays.is_torch(phi):
+            res = amod.zeros(core_shape, dtype=phi.dtype, device=phi.device)
+        else:
+            res = amod.zeros(core_shape)
+    else:
+        # res is reused across relaxation steps (fdm_torch passes tmp_core); it
+        # must be zeroed each call or the `res += ...` accumulation grows without
+        # bound.  Mirrors stencil_poisson / stencil_poisson_harmonic.
+        res[:] = 0
+
+    # active neighbour value = phi where the neighbour is NOT solid, else 0.
+    if arrays.is_torch(phi):
+        active = (~solid_mask).to(phi.dtype)
+    else:
+        active = (~solid_mask).astype(phi.dtype)
+
+    for dim, n in enumerate(phi.shape):
+        pos = list(slices)
+        pos[dim] = slice(2, n)
+        res += phi[tuple(pos)] * active[tuple(pos)]
+
+        neg = list(slices)
+        neg[dim] = slice(0, n - 2)
+        res += phi[tuple(neg)] * active[tuple(neg)]
+
+    res *= coeff
     return res
