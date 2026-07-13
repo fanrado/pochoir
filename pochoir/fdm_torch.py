@@ -14,7 +14,9 @@ import numpy as np
 
 from torch.profiler import profile, record_function, ProfilerActivity # For profiling the performance of the solver
 
-from .fdm_generic import edge_condition, stencil, stencil_poisson, stencil_poisson_harmonic
+from .fdm_generic import (edge_condition, stencil, stencil_poisson,
+                          stencil_poisson_harmonic, stencil_poisson_neumann,
+                          neumann_coeff)
 
 # torch.set_default_dtype(torch.float32)
 # torch.float64 = torch.float32
@@ -26,9 +28,18 @@ def set_core2(dst, src, core):
     dst[core] = src
 
 @torch.compile
-def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, 
-                   core, periodic, spacing=1.0, source=None, epsilon=None):
-    if epsilon is None: # The bug was here: the condition was "epsilon is not None" instead of "epsilon is None"
+def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core,
+                   core, periodic, spacing=1.0, source=None, epsilon=None,
+                   insulator=None, coeff=None):
+    # Three-way relaxation step (branch is on None-ness, static per solve run,
+    # so torch.compile specialises once with no recompilation blowup):
+    #   - insulator mask present : masked no-flux (Neumann) plain-Laplace step,
+    #                              NO epsilon (insulating-surface boundary);
+    #   - epsilon present        : harmonic-mean Poisson (dielectric path);
+    #   - otherwise              : plain Poisson/Laplace (unchanged default).
+    if insulator is not None:
+        stencil_poisson_neumann(iarr_pad, insulator, coeff, res=tmp_core)
+    elif epsilon is None: # The bug was here: the condition was "epsilon is not None" instead of "epsilon is None"
         stencil_poisson(iarr_pad, source=source, spacing=spacing, res=tmp_core)
     else:
         stencil_poisson_harmonic(iarr_pad, eps=epsilon, res=tmp_core)
@@ -36,7 +47,7 @@ def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core,
     edge_condition(iarr_pad, *periodic, info_msg=None)
 
 
-def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torch.float64, phi0=None, ctx=None, potential=None, increment=None, params=None, epsilon=None):
+def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torch.float64, phi0=None, ctx=None, potential=None, increment=None, params=None, epsilon=None, insulator=None):
     '''
     Solve boundary value problem
 
@@ -78,6 +89,32 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
     core = core_slices1(iarr_pad)
 
     epsilon_pad = torch.tensor(numpy.pad(epsilon, 1), requires_grad=False, dtype=_dtype).to(device) if epsilon is not None else None
+
+    # --- insulating-surface (Neumann no-flux) boundary, NO epsilon ---
+    # When an insulator mask is supplied, the excluded region (the continuous
+    # FR4 slab) is treated as a reflecting body: free cells relax via the masked
+    # no-flux stencil (stencil_poisson_neumann) and the insulator cells are
+    # FROZEN -- removed from the mutable set -- so they neither inject values
+    # into free cells nor perturb the convergence metric (maxerr over the core).
+    # The active-neighbour-count coefficient is geometry-only, so it is built
+    # once here on-device and reused every step.  NO permittivity enters; the
+    # dielectric (epsilon) path is bypassed.  With insulator=None this whole
+    # block is skipped and the solve stays byte-identical to plain Laplace.
+    insulator_pad = None
+    insulator_coeff = None
+    if insulator is not None:
+        insulator_bool = insulator.astype(numpy.bool)
+        insulator_pad = torch.tensor(numpy.pad(insulator_bool, 1),
+                                     requires_grad=False).to(device)
+        insulator_coeff = neumann_coeff(insulator_pad, like=iarr_pad)
+        # Freeze insulator cells (excluded from the solve): mutable -> 0 there.
+        free_of_insulator = torch.tensor(numpy.invert(insulator_bool),
+                                         requires_grad=False, dtype=_dtype).to(device)
+        mutable_core = mutable_core * free_of_insulator
+        if epsilon_pad is not None:
+            info_msg('insulator mask supplied: ignoring epsilon (NO dielectric '
+                     'path in the insulating-surface boundary)')
+            epsilon_pad = None
     # iarr_pad_source = iarr_pad.clone().detach().requires_grad_(False).to(device)
     source = None ## Variable to hold the source term for poisson equation, if phi0 is provided
     non_padded_phi0 = None ## Variable to hold the original phi0 before padding, for computing the source term without the influence of padding values.
@@ -162,7 +199,7 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
                 prev = iarr_pad.clone().detach().requires_grad_(False)
 
             # _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic)
-            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, spacing=1.0, source=source, epsilon=epsilon_pad)
+            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, spacing=1.0, source=source, epsilon=epsilon_pad, insulator=insulator_pad, coeff=insulator_coeff)
             # stencil(iarr_pad, tmp_core)
             # iarr_pad[core] = bi_core + mutable_core * tmp_core
             # edge_condition(iarr_pad, *periodic, info_msg=None)
