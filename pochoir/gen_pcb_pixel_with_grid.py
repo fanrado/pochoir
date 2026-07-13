@@ -169,27 +169,34 @@ def trimCorner(arr, x, y, z1, z2, corner, val=0, chamfer_r=4):
     arr[x0:x1, y0:y1, z1:z2][mask] = val
 
 
-def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width, chamfer_r=7):
+def draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width, chamfer_r=7, fr4_bottom=False, n_fr4=0):
     dims = p_size*n_pix+p_gap*(n_pix-1)
+    # z-range of the pad conductor.  When the FR4 laminate is active
+    # (fr4_bottom), the pad covers only the TOP of the pp_width layer so the
+    # bottom n_fr4 cells stay free for the FR4 no-flux slab -- identical
+    # placement to the drift generator, keeping the weighting geometry
+    # consistent.  fr4_bottom=False (n_fr4=0) is byte-identical to before.
+    z2 = pp_width + pp_loweredge + 1
+    zp1 = pp_loweredge + n_fr4 if fr4_bottom else pp_loweredge
     for i in range(0,n_pix):
         for j in range(0,n_pix):
-            barr[int(p_gap/2)+i*(p_size+p_gap):int(p_gap/2)+i*(p_size+p_gap)+p_size,int(p_gap/2)+j*(p_size+p_gap):int(p_gap/2)+j*(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
-            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,0,chamfer_r=chamfer_r)
+            barr[int(p_gap/2)+i*(p_size+p_gap):int(p_gap/2)+i*(p_size+p_gap)+p_size,int(p_gap/2)+j*(p_size+p_gap):int(p_gap/2)+j*(p_size+p_gap)+p_size,zp1:z2]=1
+            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap)+p_size-1,zp1,z2,0,chamfer_r=chamfer_r)
 
-            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,1,chamfer_r=chamfer_r)
+            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap),zp1,z2,1,chamfer_r=chamfer_r)
 
-            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,3,chamfer_r=chamfer_r)
+            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap)+p_size-1,zp1,z2,3,chamfer_r=chamfer_r)
 
-            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,2,chamfer_r=chamfer_r)
+            trimCorner(barr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),zp1,z2,2,chamfer_r=chamfer_r)
             if i==int(n_pix/2) and i==j:
-                    arr[int(p_gap/2)+i*(p_size+p_gap):int(p_gap/2)+i*(p_size+p_gap)+p_size,int(p_gap/2)+j*(p_size+p_gap):int(p_gap/2)+j*(p_size+p_gap)+p_size,pp_loweredge:pp_width+pp_loweredge+1]=1
-                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,0,chamfer_r=chamfer_r)
+                    arr[int(p_gap/2)+i*(p_size+p_gap):int(p_gap/2)+i*(p_size+p_gap)+p_size,int(p_gap/2)+j*(p_size+p_gap):int(p_gap/2)+j*(p_size+p_gap)+p_size,zp1:z2]=1
+                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap)+p_size-1,zp1,z2,0,chamfer_r=chamfer_r)
 
-                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,1,chamfer_r=chamfer_r)
+                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap)+p_size-1,int(p_gap/2)+j*(p_size+p_gap),zp1,z2,1,chamfer_r=chamfer_r)
 
-                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap)+p_size-1,pp_loweredge,pp_width+pp_loweredge+1,3,chamfer_r=chamfer_r)
+                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap)+p_size-1,zp1,z2,3,chamfer_r=chamfer_r)
 
-                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),pp_loweredge,pp_width+pp_loweredge+1,2,chamfer_r=chamfer_r)
+                    trimCorner(arr,int(p_gap/2)+i*(p_size+p_gap),int(p_gap/2)+j*(p_size+p_gap),zp1,z2,2,chamfer_r=chamfer_r)
     # # draw pixel plane
     # plt.figure(figsize=(10,10))
     # plt.imshow(barr[:,:,pp_loweredge],origin='lower')
@@ -227,7 +234,30 @@ def generator(dom, cfg):
     LArpermittivity = cfg['LArPermittivity']
     FR4permittivity = cfg['FR4Permittivity']
 
-    draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width, chamfer_r=chamfer_r)
+    # No-flux FR4 insulator (weighting side of EPIC pochoir-ktj0/weighting): the
+    # SAME continuous FR4 slab as the drift generator, so the weighting field
+    # uses an identical no-flux boundary (E_w tangential at the FR4).  NO
+    # epsilon.  The pad is placed on TOP of the layer (fr4_bottom) so the bottom
+    # n_fr4 slab cells stay free for the mask, disjoint from the 1V/0V pad.
+    # Off by default -> 3-tuple return, byte-identical weighting solve.
+    enableInsulatorFR4 = cfg.get('enableInsulatorFR4', False)
+    fr4_bottom = False
+    n_fr4 = 0
+    insulator = None
+    if enableInsulatorFR4:
+        fr4_thickness = cfg.get('FR4Thickness', None)
+        pad_thickness = cfg.get('padThickness', None)
+        if fr4_thickness is not None and pad_thickness is not None:
+            n_fr4 = max(1, int(round(fr4_thickness / dom.spacing[0])))
+            n_pad = max(1, int(round(pad_thickness / dom.spacing[0])))
+            pp_width = n_pad + n_fr4 - 1
+        else:
+            n_fr4 = max(1, pp_width // 2)
+        fr4_bottom = True
+        insulator = numpy.zeros(dom.shape, dtype=bool)
+        insulator[:, :, pp_loweredge:pp_loweredge + n_fr4] = True
+
+    draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width, chamfer_r=chamfer_r, fr4_bottom=fr4_bottom, n_fr4=n_fr4)
 
     log.debug('p_size=%s, p_gap=%s, n_pix=%s, pp_width=%s, pp_loweredge=%s',
               p_size, p_gap, n_pix, pp_width, pp_loweredge)
@@ -326,6 +356,12 @@ def generator(dom, cfg):
     plot_barr_3d(barr, save_path='store/barr_3d.png')
     plot_barr_3d(arr, save_path='store/arr_3d.png', alpha=0.5, s=2, cmap='viridis')
 
+    # The no-flux slab must be disjoint from every weighting conductor (the 1V
+    # target pad, the 0V pads, and the grounded cathode/far planes).
+    if insulator is not None:
+        assert not (insulator & (barr != 0)).any(), \
+            'weighting insulator slab overlaps a conductor cell (barr)'
+        return arr, barr, epsilon, insulator
     return arr,barr,epsilon
 
 
