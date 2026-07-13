@@ -2262,11 +2262,16 @@ def stitch_near(ctx, near, coarse, domain, output, axis):
               help="Output final near-field potential")
 @click.option("--far-out", type=str, required=True,
               help="Output final far-field (coarse) potential")
+@click.option('--insulator', type=str, default=None,
+              help="Near-field no-flux insulator mask; applied in the NEAR "
+                   "Schwarz re-solves so they preserve the no-flux FR4 field "
+                   "instead of discarding it (NO epsilon). The coarse/far "
+                   "re-solves never see it (FR4 unresolved at coarse pitch).")
 @click.pass_context
 def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
                    near_initial, near_boundary, near_potential, interface, axis,
                    edges, engine, epoch, nepochs, near_precision, far_precision,
-                   tol, max_iters, near_out, far_out):
+                   tol, max_iters, near_out, far_out, insulator):
     '''
     Overlapping-Schwarz near/far solve for a continuous stitched potential.
 
@@ -2294,6 +2299,9 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
     ninit, nmd = ctx.obj.get(near_initial, True)
     nbnd, nbmd = ctx.obj.get(near_boundary, True)
     near_start = ctx.obj.get(near_potential) if near_potential else None
+    # The near-field FR4 no-flux mask (if any) is applied only to the NEAR
+    # re-solves; the coarse/far domain does not resolve the FR4.
+    near_insulator = ctx.obj.get(insulator) if insulator else None
 
     if cmd is None or "domain" not in cmd:
         click.echo(f'failed to get domain for coarse potential {coarse_potential}')
@@ -2311,16 +2319,19 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
     # express the Schwarz tolerance in volts too: '1*V' -> 1.0, '0.05*V' -> 0.05.
     tol_v = float(pochoir.arrays.fromstr1(tol)[0]) / units.V
 
-    def _make_solver(prec):
+    def _make_solver(prec, insulator=None):
         def _solve(iarr, barr):
             if engine == "torch":
+                # Pass the insulator mask only when present so the no-mask path
+                # (and the far solve) stay byte-identical to before.
+                extra = {} if insulator is None else {'insulator': insulator}
                 arr, _err = solve(
                     numpy.asarray(iarr, dtype=float),
                     numpy.asarray(barr).astype(bool),
                     bool_edges, prec, epoch, nepochs,
                     info_msg=info_msg, _dtype=torch.float64,
                     ctx=ctx, potential=near_out, increment=near_out + "/inc",
-                    params=dict(command="near-far-solve"), epsilon=None)
+                    params=dict(command="near-far-solve"), epsilon=None, **extra)
             else:
                 arr, _err = solve(
                     numpy.asarray(iarr, dtype=float),
@@ -2332,7 +2343,8 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
     near_pot, far_pot, n_iters, delta = nearfar.schwarz_solve(
         cpot, cinit, cbnd, coarse_dom,
         ninit, nbnd, near_dom,
-        _make_solver(near_precision), _make_solver(far_precision),
+        _make_solver(near_precision, insulator=near_insulator),
+        _make_solver(far_precision),
         axis=axis, interface_z=interface_z,
         tol=tol_v, max_iters=max_iters, log=info_msg,
         near_start=near_start)
