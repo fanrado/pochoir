@@ -224,8 +224,13 @@ def gen(ctx, domain, generator, initial, boundary, configs):
     # info_msg("domain={}".format(dom))
     # info_msg("cfg={}".format(cfg))
     
-    iarr, barr, epsilon = meth(dom, cfg)#, info_msg) # iarr is initial array, barr is boundary array
-    
+    # Generators return (iarr, barr, epsilon); those that build a no-flux
+    # insulator mask append it as an optional 4th element (see EPIC
+    # pochoir-ktj0).  Unpack tolerantly so 3-tuple generators are unaffected.
+    result = meth(dom, cfg)#, info_msg) # iarr is initial array, barr is boundary array
+    iarr, barr, epsilon = result[0], result[1], result[2]
+    insulator = result[3] if len(result) > 3 else None
+
     # info_msg("initial array shape={}, boundary array shape={}".format(iarr.shape, barr.shape))
     # info_msg("initial array dtype={}, boundary array dtype={}".format(iarr.dtype, barr.dtype))
 
@@ -235,6 +240,8 @@ def gen(ctx, domain, generator, initial, boundary, configs):
     ctx.obj.put(boundary, barr, taxon="boundary", **params)
     if epsilon is not None:
         ctx.obj.put(initial+"_epsilon", epsilon, taxon="permittivity", **params)
+    if insulator is not None:
+        ctx.obj.put(initial+"_insulator", insulator, taxon="insulator", **params)
 
     
 @cli.command()
@@ -308,6 +315,8 @@ def init(ctx, initial, boundary, ambient, domain, filenames):
               help="Input the boundary array")
 @click.option('--epsilon', type=str, default=None,
               help="Input the permittivity array for Poisson equation")
+@click.option('--insulator', type=str, default=None,
+              help="Input the no-flux (Neumann) insulator mask array (NO epsilon)")
 @click.option("-e","--edges", type=str,
               help="Comma separated list of 'fixed' or 'periodic' giving domain edge conditions")
 @click.option("--precision", type=float, default=0.0,
@@ -329,7 +338,7 @@ def init(ctx, initial, boundary, ambient, domain, filenames):
 @click.pass_context
 def fdm(ctx, initial, boundary,
         edges, precision, epoch, nepochs, engine,
-        potential, increment, multisteps, epsilon):
+        potential, increment, multisteps, epsilon, insulator):
     '''
     Apply finite-difference method.
 
@@ -351,6 +360,9 @@ def fdm(ctx, initial, boundary,
     eps = None
     if epsilon is not None:
         eps, bmd = ctx.obj.get(epsilon, True) if epsilon else (None, None)
+    ins = None
+    if insulator is not None:
+        ins, _ = ctx.obj.get(insulator, True)
     if not "domain" in bmd:
         click.echo(f'failed to get domain for {boundary}')
         info_msg(f'failed to get domain for {boundary}')
@@ -398,8 +410,13 @@ def fdm(ctx, initial, boundary,
         ctx.obj.put(potential, arr, taxon="potential", **params)
         ctx.obj.put(increment, err, taxon="increment", **params)
     else:
+        # Pass the insulator mask only when present so non-torch engines and
+        # flag-off runs (which do not accept an `insulator` kwarg) are unchanged.
+        extra = {}
+        if ins is not None:
+            extra['insulator'] = ins
         phi_0, err_phi0 = solve(iarr, barr, bool_edges,
-                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64, epsilon=eps) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64, epsilon=eps, **extra) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
         ctx.obj.put(potential, phi_0, taxon="potential", **params)
         ctx.obj.put(increment, err_phi0, taxon="increment", **params)
 

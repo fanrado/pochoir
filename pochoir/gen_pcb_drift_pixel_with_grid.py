@@ -510,10 +510,26 @@ def generator(dom, cfg, info_msg=None):
     # cells below (pad cells = z2 - zp1 = pp_width + 1 - n_fr4 = n_pad).  If the
     # thickness keys are absent, fall back to the legacy half-and-half split
     # (n_fr4 = pp_width // 2) so older FR4 configs are unchanged.
+    #
+    # The SAME continuous FR4 slab can be expressed two mutually-exclusive ways:
+    #   * enableFR4          -> a dielectric permittivity slab (epsilon), used by
+    #                           the harmonic-mean Poisson path (deactivated: see
+    #                           pochoir-44j2); and/or
+    #   * enableInsulatorFR4 -> a no-flux (Neumann) insulator MASK over the same
+    #                           cells, used by the insulating-surface boundary
+    #                           (EPIC pochoir-ktj0), NO epsilon.
+    # Either flag places the pad conductor on TOP of the layer (fr4_bottom) so
+    # the bottom n_fr4 cells form the laminate slab and stay disjoint from the
+    # pad.  With both flags off, fr4_bottom stays False and the return is the
+    # legacy 3-tuple -> every non-laminate run is byte-unchanged.
     enableFR4 = cfg.get('enableFR4', False)
+    enableInsulatorFR4 = cfg.get('enableInsulatorFR4', False)
     fr4_bottom = False
     n_fr4 = 0
-    if enableFR4 and LArPermittivity is not None and FR4Permittivity is not None:
+    insulator = None
+    epsilon_on = enableFR4 and LArPermittivity is not None and FR4Permittivity is not None
+    if epsilon_on or enableInsulatorFR4:
+        # --- shared laminate-slab geometry (pad on top, slab the bottom n_fr4) ---
         fr4_thickness = cfg.get('FR4Thickness', None)
         pad_thickness = cfg.get('padThickness', None)
         if fr4_thickness is not None and pad_thickness is not None:
@@ -525,9 +541,15 @@ def generator(dom, cfg, info_msg=None):
                          f'FR4={fr4_thickness}mm ({n_fr4} cell(s)), pp_width={pp_width}')
         else:
             n_fr4 = max(1, pp_width // 2)
-        epsilon = numpy.full(dom.shape, LArPermittivity)
-        epsilon[:, :, pp_loweredge:pp_loweredge + n_fr4] = FR4Permittivity
         fr4_bottom = True
+        # --- dielectric permittivity slab (only when the epsilon path is on) ---
+        if epsilon_on:
+            epsilon = numpy.full(dom.shape, LArPermittivity)
+            epsilon[:, :, pp_loweredge:pp_loweredge + n_fr4] = FR4Permittivity
+        # --- no-flux insulator mask over the SAME continuous slab (NO epsilon) ---
+        if enableInsulatorFR4:
+            insulator = numpy.zeros(dom.shape, dtype=bool)
+            insulator[:, :, pp_loweredge:pp_loweredge + n_fr4] = True
     if gridHoleShape == 'circular':
         draw_pcb_plane((len(arr),len(arr[0])), arr, barr, pp_loweredge+pcb_width, r1, gridPotential) # Draw the PCB plane with holes circular
         ## We need to use a mask to define the holes in the FR4 and set the permittivity to LAr in those holes
@@ -547,7 +569,15 @@ def generator(dom, cfg, info_msg=None):
 
 
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential, epsilon=epsilon, chamfer_r=chamfer_r, chamferMode=chamferMode, fr4_bottom=fr4_bottom, n_fr4=n_fr4)
-    
+
+    # The no-flux insulator slab must be disjoint from every conductor (barr):
+    # the pad sits on TOP of the laminate (fr4_bottom) so the bottom n_fr4 slab
+    # cells never coincide with a Cu pad or the cathode plane.  Assert it here,
+    # once barr is fully drawn, so a mis-placed slab fails loudly at generation.
+    if insulator is not None:
+        assert not (insulator & (barr != 0)).any(), \
+            'insulator slab overlaps a conductor cell (barr); check pad/FR4 z-placement'
+
 
     if info_msg is not None:
         info_msg(f'cathode potential : {cathodePotential} V')
@@ -566,4 +596,9 @@ def generator(dom, cfg, info_msg=None):
         info_msg(f'barr[:, :, pp_loweredge] = {barr[:, :, pp_loweredge]}')
         
         info_msg(f'p_size = {p_size}, p_gap = {p_gap}, n_pix = {n_pix}, pp_width = {pp_width}')
+    # Return the no-flux insulator mask as a 4th element ONLY when the insulator
+    # path is enabled; otherwise keep the legacy 3-tuple so existing callers
+    # (and non-insulator runs) are byte-unchanged.  gen() unpacks tolerantly.
+    if enableInsulatorFR4:
+        return arr, barr, epsilon, insulator
     return arr,barr, epsilon
