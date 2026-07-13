@@ -735,11 +735,11 @@ def drift(ctx, paths, starts, velocity, insulator, dl_key, dt_key, verbose, engi
     if use_potential:
         pot = ctx.obj.get(md['potential'])
         temp = md['temperature']
-        print(f'drift: potential-based (key={md["potential"]}, '
-              f'T={temp}, interp={interp_order})')
+        info_msg(f'drift: potential-based (key={md["potential"]}, '
+                 f'T={temp}, interp={interp_order})')
     elif not use_sde:
-        print('drift: legacy velocity-interpolation '
-              '(no potential/temperature metadata found)')
+        info_msg('drift: legacy velocity-interpolation '
+                 '(no potential/temperature metadata found)')
 
     # Optional no-flux insulator mask: stop potential-based paths at the FR4
     # surface and tag surface-charge endings distinctly from pad collections.
