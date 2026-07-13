@@ -209,6 +209,22 @@ export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_weightingfield.log"
 gen="pcb_pixel_with_grid"
 cfg="example_gen_pixel_with_grid.json"
 
+## Optional no-flux FR4 insulator for the WEIGHTING field (W2, weight-insul,
+## EPIC pochoir-75l9): set WINS=1 to build the weighting near FR4 mask (the near
+## gen uses the insulator config, storing initial/weight_near_insulator) and
+## apply it in the near fine solve AND the near Schwarz re-solves so the
+## weighting field uses the SAME no-flux FR4 boundary as the drift field.  The
+## coarse (0.4mm) domain does not resolve the FR4, so it stays maskless (as does
+## the far side of the Schwarz solve).  NO epsilon.  Default off -> the whole
+## weighting pipeline is byte-unchanged.
+wcfg_near="$cfg"
+wins_arg=()
+if [ -n "${WINS:-}" ] ; then
+    wcfg_near="example_gen_pixel_with_grid_insul.json"
+    wins_arg=(--insulator initial/weight_near_insulator)
+    echo "=== WINS set: weighting near field uses no-flux FR4 insulator (NO epsilon) ==="
+fi
+
 ## ---------------------------------------------------------------------------
 ## Step 1: coarse weighting solve (0.4mm, 55x55x775), full drift depth
 ## ---------------------------------------------------------------------------
@@ -248,7 +264,7 @@ want domain/weight_near \
 want "initial/weight_near boundary/weight_near" \
      pochoir gen --generator $gen --domain domain/weight_near \
      --initial initial/weight_near --boundary boundary/weight_near \
-     $cfg
+     $wcfg_near
 
 # Seed the near-field interior with the upsampled coarse weighting solution.
 want initial/weight_near_refined \
@@ -280,6 +296,7 @@ want "potential/weight_near increment/weight_near" \
      --edges fix,fix,fix \
      --engine torch \
      --initial initial/weight_near_bc --boundary boundary/weight_near_bc \
+     "${wins_arg[@]}" \
      --potential potential/weight_near \
      --increment increment/weight_near \
      --multisteps no
@@ -304,6 +321,7 @@ want "potential/weight_near potential/weight_far" \
      --coarse-initial initial/weight_coarse --coarse-boundary boundary/weight_coarse \
      --near-initial initial/weight_near --near-boundary boundary/weight_near \
      --near-potential potential/weight_near \
+     "${wins_arg[@]}" \
      --interface '20*mm' --axis 2 \
      --edges fix,fix,fix --engine torch \
      --epoch 130000000 --nepochs 10 \
