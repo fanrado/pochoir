@@ -73,13 +73,25 @@ if [ -n "${NEPS:-}" ] ; then
     eps_arg=(--epsilon initial/near2cm_epsilon)
     echo "=== NEPS set: solving Poisson with epsilon=initial/near2cm_epsilon ==="
 fi
+## Optional no-flux insulator (Task7a insulating-surface boundary, EPIC
+## pochoir-ktj0): set NINS=1 to thread the FR4 insulator mask (stored by gen as
+## initial/near2cm_insulator) through the fdm solve, the velo field, and the
+## drift paths.  This is the epsilon-free replacement for NEPS: the FR4 slab is
+## a reflecting (Neumann) body, drift velocity is zeroed inside it, and paths
+## terminate at the FR4 surface as surface charge.  Default off -> unchanged.
+## NINS takes precedence over NEPS (NO epsilon in the insulating-surface model).
+ins_arg=()
+if [ -n "${NINS:-}" ] ; then
+    ins_arg=(--insulator initial/near2cm_insulator)
+    echo "=== NINS set: insulating-surface (no-flux) boundary active (NO epsilon) ==="
+fi
 want "potential/drift_near2cm increment/near2cm" \
      pochoir fdm \
      --nepochs 10 --epoch 130000000 --precision 0.00000000002 \
      --edges per,per,fix \
      --engine torch \
      --initial initial/near2cm --boundary boundary/near2cm \
-     "${eps_arg[@]}" \
+     "${eps_arg[@]}" "${ins_arg[@]}" \
      --potential potential/drift_near2cm \
      --increment increment/near2cm
 date
@@ -89,6 +101,7 @@ want velocity/near2cm \
      pochoir velo --temperature '87.0*K' \
      --potential potential/drift_near2cm \
      --boundary boundary/near2cm \
+     "${ins_arg[@]}" \
      --velocity velocity/near2cm
 
 ## Step 4: launch 10x10 grid across one pixel at z=19.5mm (end of near field)
@@ -108,6 +121,7 @@ want starts/near2cm \
 want paths/near2cm \
      pochoir drift --starts starts/near2cm \
      --velocity velocity/near2cm \
+     "${ins_arg[@]}" \
      --interp-order linear \
      --paths paths/near2cm "0*us,${NTWIN}*us,0.05*us" \
      --plot
