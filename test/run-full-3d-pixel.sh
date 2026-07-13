@@ -68,22 +68,37 @@ export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_driftfield.log"
 gen="pcb_drift_pixel_with_grid"
 cfg="example_gen_pcb_drift_pixel_with_grid.json"
 
+## No-flux FR4 insulator for the DRIFT field (task9 port, pochoir-hh0s): gate
+## DINS default ON.  When on, ALL drift gens use the insulator config (so the
+## pad/FR4 laminate placement is consistent and the near/fine gens store the
+## no-flux masks initial/near_insulator, initial/fine_insulator); --insulator is
+## threaded into the near fdm + near-far-solve (near_insulator) and velo + drift
+## (fine_insulator).  The coarse (0.4mm) fdm never sees the mask.  NO epsilon.
+## Set DINS=0 to fall back to the plain-Laplace drift field (byte-unchanged).
+dcfg="$cfg"; dins_near=(); dins_fine=()
+if [ "${DINS:-1}" != "0" ] ; then
+    dcfg="example_gen_pcb_drift_pixel_with_grid_insul.json"
+    dins_near=(--insulator initial/near_insulator)
+    dins_fine=(--insulator initial/fine_insulator)
+    echo "=== DINS on: drift field uses no-flux FR4 insulator (NO epsilon) ==="
+fi
+
 ## ---------------------------------------------------------------------------
-## Step 1: coarse solve (0.4mm, 11x11x375), full drift region
+## Step 1: coarse solve (0.4mm, 11x11x151), full 5cm drift region (z=0..60mm)
 ## ---------------------------------------------------------------------------
 
 want domain/coarse \
      pochoir domain --domain domain/coarse \
-     --shape=11,11,775 --spacing '0.4*mm'
+     --shape=11,11,151 --spacing '0.4*mm'
 
 want "initial/coarse boundary/coarse" \
      pochoir gen --generator $gen --domain domain/coarse \
      --initial initial/coarse --boundary boundary/coarse \
-     $cfg
+     $dcfg
 
 want "potential/coarse increment/coarse" \
      pochoir fdm \
-     --nepochs 10 --epoch 130000000 --precision 0.0000002 \
+     --nepochs 10 --epoch 130000000 --precision 0.00000002 \
      --edges per,per,fix \
      --engine torch \
      --initial initial/coarse --boundary boundary/coarse \
@@ -104,7 +119,7 @@ want domain/near \
 want "initial/near boundary/near" \
      pochoir gen --generator $gen --domain domain/near \
      --initial initial/near --boundary boundary/near \
-     $cfg
+     $dcfg
 
 # Seed the near-field interior with the upsampled coarse solution.
 want initial/near_refined \
@@ -136,6 +151,7 @@ want "potential/near increment/near" \
      --edges per,per,fix \
      --engine torch \
      --initial initial/near_bc --boundary boundary/near_bc \
+     "${dins_near[@]}" \
      --potential potential/near \
      --increment increment/near
 
@@ -160,11 +176,13 @@ want "potential/near potential/far" \
      --coarse-initial initial/coarse --coarse-boundary boundary/coarse \
      --near-initial initial/near --near-boundary boundary/near \
      --near-potential potential/near \
+     "${dins_near[@]}" \
      --interface '20*mm' --axis 2 \
+     --overlap 15 \
      --edges per,per,fix --engine torch \
      --epoch 130000000 --nepochs 10 \
      --near-precision 2e-11 --far-precision 2e-7 \
-     --tol '1*V' --max-iters 6 \
+     --tol '0.001*V' --max-iters 12 \
      --near-out potential/near --far-out potential/far
 
 date
@@ -176,12 +194,12 @@ date
 ## ---------------------------------------------------------------------------
 
 # The near solve stays at its native 0.05mm (88x88x401).  The full stitched
-# domain is 0.05mm (88x88x6200): stitch-near upsamples the coarse/far field
+# domain is 0.05mm (88x88x1201): stitch-near upsamples the coarse/far field
 # (potential/far) to 0.05mm with linear RGI and overwrites the first 401 z
 # planes (z 0..20mm) with the near solve.  Transverse shapes match (88x88).
 want domain/fine \
      pochoir domain --domain domain/fine \
-     --shape=88,88,6200 --spacing '0.05*mm'
+     --shape=88,88,1201 --spacing '0.05*mm'
 
 # Generate the full-fine electrode geometry (boundary mask) for the
 # stitched domain.  The FDM solve is NOT run here (that is the whole
@@ -190,7 +208,7 @@ want domain/fine \
 want "boundary/fine initial/fine" \
      pochoir gen --generator $gen --domain domain/fine \
      --initial initial/fine --boundary boundary/fine \
-     $cfg
+     $dcfg
 
 want potential/drift3d \
      pochoir stitch-near \
@@ -219,19 +237,19 @@ cfg="example_gen_pixel_with_grid.json"
 ## weighting pipeline is byte-unchanged.
 wcfg_near="$cfg"
 wins_arg=()
-if [ -n "${WINS:-}" ] ; then
+if [ "${WINS:-1}" != "0" ] ; then
     wcfg_near="example_gen_pixel_with_grid_insul.json"
     wins_arg=(--insulator initial/weight_near_insulator)
-    echo "=== WINS set: weighting near field uses no-flux FR4 insulator (NO epsilon) ==="
+    echo "=== WINS on: weighting near field uses no-flux FR4 insulator (NO epsilon) ==="
 fi
 
 ## ---------------------------------------------------------------------------
-## Step 1: coarse weighting solve (0.4mm, 55x55x775), full drift depth
+## Step 1: coarse weighting solve (0.4mm, 55x55x151), full drift depth
 ## ---------------------------------------------------------------------------
 
 want domain/weight_coarse \
      pochoir domain --domain domain/weight_coarse \
-     --shape=55,55,775 --spacing '0.4*mm'
+     --shape=55,55,151 --spacing '0.4*mm'
     # --shape=99,99,775 --spacing '0.4*mm'
 
 want "initial/weight_coarse boundary/weight_coarse" \
@@ -241,7 +259,7 @@ want "initial/weight_coarse boundary/weight_coarse" \
 
 want "potential/weight_coarse increment/weight_coarse" \
      pochoir fdm \
-     --nepochs 10 --epoch 130000000 --precision 0.0000002 \
+     --nepochs 10 --epoch 130000000 --precision 0.00000002 \
      --edges fix,fix,fix \
      --engine torch \
      --initial initial/weight_coarse --boundary boundary/weight_coarse \
@@ -323,10 +341,11 @@ want "potential/weight_near potential/weight_far" \
      --near-potential potential/weight_near \
      "${wins_arg[@]}" \
      --interface '20*mm' --axis 2 \
+     --overlap 15 \
      --edges fix,fix,fix --engine torch \
      --epoch 130000000 --nepochs 10 \
      --near-precision 2e-10 --far-precision 2e-7 \
-     --tol '0.001*V' --max-iters 6 \
+     --tol '0.001*V' --max-iters 12 \
      --near-out potential/weight_near --far-out potential/weight_far
 
 date
@@ -339,7 +358,7 @@ date
 
 # The near weighting solve ran at 0.05mm (440x440x401) for a symmetric pixel
 # tile.  Stride-downsample by 2 to 0.1mm (220x220x201) and stitch the full
-# volume at 0.1mm (220x220x3100), avoiding the 440x440x6200 full-fine OOM.
+# volume at 0.1mm (220x220x601), avoiding the 440x440x1201 full-fine OOM.
 want domain/weight_near_01 \
      pochoir domain --domain domain/weight_near_01 \
      --shape=220,220,201 --spacing '0.1*mm'
@@ -352,7 +371,7 @@ want potential/weight_near_01 \
 
 want domain/weight_full \
      pochoir domain --domain domain/weight_full \
-     --shape=220,220,3100 --spacing '0.1*mm'
+     --shape=220,220,601 --spacing '0.1*mm'
 
 want potential/weight3d \
      pochoir stitch-near \
@@ -375,16 +394,20 @@ want velocity/drift3d \
      pochoir velo --temperature '87.0*K' \
      --potential potential/drift3d \
      --boundary boundary/fine \
+     "${dins_fine[@]}" \
      --velocity velocity/drift3d
 
 echo "=== Paths ==="
-## 10x10 grid per pixel (0.44 mm spacing), 100 starting points total,
-## launched from the cathode plane (z=148 mm).
+## 10x10 grid per pixel (0.44 mm spacing), 100 starting points total, launched
+## as close to the cathode (z=60mm) as the drift field allows: z=59.95mm is the
+## last node carrying the full drift velocity (v=0 in the cathode cell at z=60),
+## where the weighting potential is ~0 so the Ramo start-point baseline vanishes
+## (collected charge ~1 e-, task9 fix).
 dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,308*mm")
+         points+=("${d}*mm,${d2}*mm,59.95*mm")
      done
 done
 
@@ -398,8 +421,9 @@ want starts/drift3d \
 want paths/drift3d_tight \
      pochoir drift --starts starts/drift3d \
      --velocity velocity/drift3d \
+     "${dins_fine[@]}" \
      --interp-order linear \
-     --paths paths/drift3d_tight '0*us,210*us,0.05*us' \
+     --paths paths/drift3d_tight '0*us,90*us,0.05*us' \
      --plot
 # --interp-order linear: cubic rings/overshoots near the pixel plane (strong
 # geometry) and over-focuses paths onto the pads; linear is monotone-safe.
