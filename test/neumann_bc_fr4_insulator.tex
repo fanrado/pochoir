@@ -1,0 +1,195 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{siunitx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\En}{E_{\perp}}
+\newcommand{\nhat}{\hat{\mathbf{n}}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{The no-flux (Neumann) boundary condition for the FR4 laminate\\
+       in the \textsc{pochoir} pixel drift solver:\\
+       why it is physically correct and why the FR4 surface-charge\\
+       density need not appear as an explicit source term}
+\author{\textsc{pochoir} --- insulating-surface-boundary branch}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The drift-path overshoot at the inter-pixel gap of a LArTPC pixel plane is removed
+by treating the FR4 laminate below the copper pads as a \emph{no-flux (homogeneous
+Neumann)} boundary, $\partial\phi/\partial n = 0$, rather than as a dielectric
+permittivity slab. This note argues that the Neumann condition is the correct
+\emph{steady-state} model of a charged-up bulk insulator in a DC drift field, and
+shows that the accumulated surface charge on the FR4 is not neglected but rather
+\emph{absorbed into} the boundary condition: it is the response that enforces
+$\En=0$, so the field can be solved without it as an input. The dielectric
+(displacement) formulation is shown to be the wrong regime, consistent with the
+observed worsening of the overshoot when a finite permittivity is used.
+\end{abstract}
+
+\section{Geometry and the discrete operator}
+
+The pixel plane is a physical laminate: a \SI{1}{oz} copper pad
+($\approx\SI{0.0348}{mm}$, one cell at \SI{0.05}{mm}) sitting on top of a
+\SI{1.6}{mm} FR4 slab (32 cells). Electrons drift downward through liquid argon
+(LAr) under a uniform field ($-\SI{50}{V/mm}$) and are collected on the pads at
+$z=\SI{10}{mm}$; the FR4 occupies $z\in[8.4,10.0]\,\si{mm}$ directly beneath and
+between the pads.
+
+The solver relaxes the electrostatic potential $\phi$ with a masked
+mirror/ghost-cell stencil. For a live cell adjacent to $k$ FR4 (``solid'')
+neighbours, $\phi$ is updated as the average over only its $(2N-k)$ non-solid
+neighbours, with the normalisation reduced to match:
+\begin{equation}
+  \phi_{\mathrm{new}}
+     \;=\;
+     \frac{1}{\,2N-k\,}\!\!\sum_{\substack{\text{neighbours }m \\ m\notin\text{FR4}}}\!\!\phi_m ,
+  \label{eq:stencil}
+\end{equation}
+where $N$ is the spatial dimension. Dropping the FR4 bonds from \emph{both} the sum
+and the denominator is the standard ghost-cell discretisation of a zero normal
+derivative on every face of the excluded region,
+\begin{equation}
+  \left.\frac{\partial \phi}{\partial n}\right|_{\text{FR4 face}} = 0
+  \qquad\Longleftrightarrow\qquad
+  \En \equiv \mathbf{E}\cdot\nhat = 0 .
+  \label{eq:neumann}
+\end{equation}
+No permittivity and no charge/source term enter Eq.~\eqref{eq:stencil}; the FR4
+cells are frozen and excluded from the solve. In the code this is
+\code{neumann\_coeff}/\code{stencil\_poisson\_neumann}
+(\code{pochoir/fdm\_generic.py}), routed to whenever an insulator mask is supplied
+(\code{pochoir/fdm\_torch.py}), with any supplied \code{epsilon} explicitly nulled.
+On the drift side the velocity is set to zero inside the FR4 and a terminal event
+stops a path at the FR4 top face (tagged \code{DRIFT\_SURFACE}); that tag is a
+bookkeeping label, not a term in the field equation.
+
+\section{Why $\En = 0$ is the correct physics}
+
+\subsection{FR4 carries no free current}
+FR4 is a bulk insulator with volume resistivity
+$\rho \sim \SI{e14}{\ohm\,m}$. In DC steady state the conduction current density is
+$\mathbf{J}=\sigma\mathbf{E}$ with $\sigma\to 0$, so the normal current into the
+laminate surface vanishes,
+\begin{equation}
+  J_\perp = \sigma\,\En \approx 0 .
+\end{equation}
+Physically, a drifting electron in the LAr cannot enter or cross the FR4: it faces
+a wide-bandgap insulator with no available conduction states. The interface is
+impermeable to the drift current.
+
+\subsection{The surface charges up until the normal field vanishes}
+Because charge cannot pass \emph{through} the FR4, any field line that would
+otherwise terminate on the laminate deposits electrons \emph{on its surface}. Those
+accumulated electrons repel subsequently arriving electrons. This continues until,
+in equilibrium, no further charge can land --- i.e.\ until the normal field at the
+LAr/FR4 interface is driven to zero:
+\begin{equation}
+  \En\big|_{\text{LAr side}} \;\xrightarrow{\;\text{steady state}\;}\; 0 .
+\end{equation}
+A detector operates in exactly this charged-up steady state. The equilibrium
+condition is therefore the homogeneous Neumann condition of
+Eq.~\eqref{eq:neumann}. Its consequence is that the field lines run \emph{tangential}
+to the FR4 and can only terminate on the conductors: a gap electron is
+\emph{funnelled along the surface onto the nearest pad} instead of diving through
+the laminate. This is precisely the mechanism that removes the gap overshoot.
+
+\section{Why the FR4 surface-charge density is not an explicit term}
+
+This is the subtle point: the surface charge is \emph{not neglected}; it is
+\emph{absorbed into} the boundary condition.
+
+\subsection{Free (accumulated) surface charge is the response, not an input}
+The accumulated surface charge density $\sigma_s$ is, by definition, whatever value
+makes $\En=0$ hold. It is the system's \emph{response}, not an independent datum.
+Imposing the homogeneous Neumann condition \emph{is} the statement ``the equilibrium
+surface charge has built up.'' Consequently $\sigma_s$ is never required to
+\emph{solve} the field. If one wants it, it is recovered \emph{after} the solve from
+Gauss's law at the interface, evaluated just outside the excluded region:
+\begin{equation}
+  \sigma_s \;=\; \varepsilon_0\,\varepsilon_{\mathrm{LAr}}\;
+               \En\big|_{\text{LAr side}} .
+  \label{eq:gauss}
+\end{equation}
+The boundary condition and the surface charge are two descriptions of the same
+equilibrium; fixing one fixes the other. We choose to impose $\En=0$ because it is
+the quantity the field solver needs and it requires no material constant.
+
+\subsection{Bound (polarization) surface charge is the wrong regime}
+The alternative is to carry the \emph{bound} surface charge
+$\sigma_b = \mathbf{P}\cdot\nhat$ of a dielectric, which is exactly the displacement
+formulation
+\begin{equation}
+  \nabla\!\cdot\!\big(\varepsilon\,\mathbf{E}\big) = 0 .
+  \label{eq:displacement}
+\end{equation}
+A finite $\varepsilon$ only \emph{refracts} field lines across the interface
+(Snell-type bending of $\mathbf{E}$); it never \emph{terminates} them, because a
+pure dielectric conducts no charge and never reaches a charged-up steady state. In
+the \textsc{pochoir} tests this made the overshoot \emph{worse}: with the
+$\varepsilon$ slab the paths reached $z_{\min}=\SI{9.573}{mm}$ with 4 paths pulled
+below the pad plane, versus $z_{\min}=\SI{10.000}{mm}$ and 0 paths below with the
+no-flux mask. The physical reason is that the free accumulated surface charge, not
+the polarization response, governs the boundary of a real insulator held in a DC
+field for long times.
+
+\section{What is actually approximated}
+
+Stated honestly, the model makes three approximations, all well justified here:
+\begin{enumerate}
+  \item \textbf{$\sigma_{\mathrm{FR4}}\to 0$} (perfect insulator): FR4 leakage over
+        drift-scale times is negligible given $\rho\sim\SI{e14}{\ohm\,m}$.
+  \item \textbf{Steady state}: the one-time transient charging phase is skipped;
+        the operating equilibrium is modelled directly.
+  \item \textbf{Dielectric refraction dropped}: deliberate --- the free surface
+        charge dominates the boundary, so carrying $\varepsilon$ would misdescribe
+        the regime (and, as shown, worsens the result).
+\end{enumerate}
+
+\section{Comparison of candidate boundary conditions}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}p{0.30\linewidth} p{0.42\linewidth} c@{}}
+\toprule
+\textbf{Model} & \textbf{Behaviour at the FR4} & \textbf{Verdict} \\
+\midrule
+Dirichlet, grounded gap & forces charge collection in the gap
+  & non-physical (electron accumulation) \\
+Drift-terminate only, field unchanged & $\mathbf{E}$ still points into FR4
+  & physically inconsistent \\
+Dielectric $\varepsilon$ (displacement, Eq.~\ref{eq:displacement})
+  & refracts field lines, never terminates them
+  & overshoot persists / worsens \\
+\textbf{No-flux Neumann} (Eq.~\ref{eq:neumann})
+  & field tangential; charge funnelled to pads
+  & \textbf{correct} (charged-up insulator) \\
+\bottomrule
+\end{tabular}
+\caption{Candidate FR4 boundary conditions. Only the homogeneous Neumann condition
+reproduces the charged-up-insulator steady state; it needs neither a permittivity
+nor an explicit surface-charge density.}
+\end{table}
+
+\section{Summary}
+
+The FR4 laminate is modelled as a no-flux (homogeneous Neumann) boundary,
+$\partial\phi/\partial n = 0$, equivalent to $\En=0$ at the LAr/FR4 interface. This
+is the correct steady-state description of a bulk insulator that cannot conduct the
+drift current and therefore charges up until the normal field vanishes. The
+accumulated surface charge is not omitted from the physics --- it is the very
+response that enforces the boundary condition and is recoverable \emph{a posteriori}
+from Gauss's law, Eq.~\eqref{eq:gauss}. Carrying the FR4 as a dielectric
+permittivity would model the wrong regime (polarization refraction rather than free
+charge accumulation) and empirically worsens the gap overshoot. The no-flux model
+introduces no material permittivity and no surface-charge source term, and it
+funnels gap electrons onto the pads, eliminating the overshoot.
+
+\end{document}
