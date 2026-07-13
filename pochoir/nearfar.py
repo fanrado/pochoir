@@ -134,16 +134,27 @@ def seed_near(coarse_pot, coarse_dom, near_init, near_bmask, near_dom):
     return seed
 
 
-def _interface_indices(coarse_dom, near_dom, axis, interface_z, atol=1e-6):
+def _interface_indices(coarse_dom, near_dom, axis, interface_z, atol=1e-6,
+                       overlap=1):
     '''
     Resolve the interface grid indices on both domains and validate alignment.
 
     Returns (ci, ci_in, nt, nt_in):
       ci     - coarse index at z = interface_z
-      ci_in  - coarse index one coarse cell below (the far Dirichlet plane)
+      ci_in  - coarse index `overlap` coarse cells below (the far Dirichlet
+               plane); with overlap=1 this is one coarse cell below, the
+               original single-cell overlap
       nt     - near top index (the near Dirichlet plane, at z = interface_z)
       nt_in  - near index one near cell below (the near seed plane)
+
+    `overlap` (>=1, in coarse cells) widens the Schwarz overlap: the far domain
+    is pinned to the near solution `overlap` coarse cells below the interface
+    (the near already covers that depth, z=0..interface), so no taller near
+    domain is needed.  A wider overlap accelerates Schwarz convergence and makes
+    the interface gradient-continuous (C1).
     '''
+    if overlap < 1:
+        raise ValueError(f'overlap must be >= 1 coarse cell (got {overlap})')
     cdz = float(coarse_dom.spacing[axis])
     corg = float(coarse_dom.origin[axis])
     ci = int(round((interface_z - corg) / cdz))
@@ -152,11 +163,23 @@ def _interface_indices(coarse_dom, near_dom, axis, interface_z, atol=1e-6):
         raise ValueError(
             f'interface z={interface_z} does not land on a coarse grid node '
             f'(nearest node z={ci_z}, spacing={cdz}, origin={corg})')
-    ci_in = ci - 1
+    ci_in = ci - overlap
     if ci_in < 0 or ci >= int(coarse_dom.shape[axis]):
         raise ValueError(
-            f'interface coarse index {ci} (inner {ci_in}) out of range for '
-            f'coarse shape {int(coarse_dom.shape[axis])} on axis {axis}')
+            f'interface coarse index {ci} (inner {ci_in}, overlap {overlap}) '
+            f'out of range for coarse shape {int(coarse_dom.shape[axis])} on '
+            f'axis {axis}')
+    # The far Dirichlet plane (ci_in) must lie inside the near domain's z-range,
+    # since it is pinned to the (resampled) near solution.
+    ndz = float(near_dom.spacing[axis])
+    norg = float(near_dom.origin[axis])
+    ci_in_z = corg + ci_in * cdz
+    near_lo = norg
+    near_hi = norg + (int(near_dom.shape[axis]) - 1) * ndz
+    if ci_in_z < near_lo - atol or ci_in_z > near_hi + atol:
+        raise ValueError(
+            f'overlap {overlap}: far Dirichlet plane z={ci_in_z} is outside the '
+            f'near domain z-range [{near_lo}, {near_hi}]; reduce --overlap')
 
     nt = int(near_dom.shape[axis]) - 1
     ndz = float(near_dom.spacing[axis])
@@ -178,15 +201,24 @@ def schwarz_solve(coarse_pot, coarse_init, coarse_bmask, coarse_dom,
                   near_init, near_bmask, near_dom,
                   solve_near, solve_far,
                   axis=2, interface_z=None,
-                  tol=1.0, max_iters=6, log=None, near_start=None):
+                  tol=1.0, max_iters=6, log=None, near_start=None, overlap=1):
     '''
     Alternating overlapping-Schwarz near/far solve.
 
-    Each sweep solves the far domain (interior plane one coarse cell below the
-    interface pinned to the near solution) then the near domain (interface
-    plane pinned to the far solution).  Ending each sweep with the near solve
-    makes the returned near exactly pinned to the returned far at the interface
-    (exact C0 across the stitch seam).
+    Each sweep solves the far domain (interior plane `overlap` coarse cells
+    below the interface pinned to the near solution) then the near domain
+    (interface plane pinned to the far solution).  Ending each sweep with the
+    near solve makes the returned near exactly pinned to the returned far at the
+    interface (exact C0 across the stitch seam).
+
+    `overlap` (>=1 coarse cells, default 1 = the original single-cell overlap)
+    widens the region where the fine near and coarse far solutions overlap: the
+    far is pinned to the near solution `overlap` coarse cells below the
+    interface (the near already covers that depth).  A wider overlap converges
+    much faster (the ~0.95/sweep rate of the 1-cell coupling improves strongly
+    with width) and drives the interface toward gradient-continuity (C1), so the
+    induced current i(t)=q*v.gradW has no spurious glitch where a drift electron
+    crosses the seam.  overlap=1 is byte-identical to the previous behaviour.
 
     Parameters
     ----------
@@ -241,7 +273,7 @@ def schwarz_solve(coarse_pot, coarse_init, coarse_bmask, coarse_dom,
     near_bmask = numpy.asarray(near_bmask).astype(bool)
 
     ci, ci_in, nt, nt_in = _interface_indices(
-        coarse_dom, near_dom, axis, interface_z)
+        coarse_dom, near_dom, axis, interface_z, overlap=overlap)
     _log(f'schwarz: interface z={interface_z} coarse idx {ci} (inner {ci_in}), '
          f'near top idx {nt} (seed {nt_in})')
 

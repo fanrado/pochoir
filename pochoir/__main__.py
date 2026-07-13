@@ -2258,6 +2258,11 @@ def stitch_near(ctx, near, coarse, domain, output, axis):
                    "(may use units, e.g. '1*V')")
 @click.option("--max-iters", default=6, type=int,
               help="Maximum number of near<->far Schwarz sweeps")
+@click.option("--overlap", default=1, type=int,
+              help="Schwarz overlap width in coarse cells (>=1, def 1). Wider "
+                   "overlap converges faster and gives a C1 (gradient-"
+                   "continuous) near/far interface. The far is pinned to the "
+                   "near solution this many coarse cells below the interface.")
 @click.option("--near-out", type=str, required=True,
               help="Output final near-field potential")
 @click.option("--far-out", type=str, required=True,
@@ -2271,7 +2276,7 @@ def stitch_near(ctx, near, coarse, domain, output, axis):
 def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
                    near_initial, near_boundary, near_potential, interface, axis,
                    edges, engine, epoch, nepochs, near_precision, far_precision,
-                   tol, max_iters, near_out, far_out, insulator):
+                   tol, max_iters, near_out, far_out, insulator, overlap):
     '''
     Overlapping-Schwarz near/far solve for a continuous stitched potential.
 
@@ -2347,7 +2352,7 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
         _make_solver(far_precision),
         axis=axis, interface_z=interface_z,
         tol=tol_v, max_iters=max_iters, log=info_msg,
-        near_start=near_start)
+        near_start=near_start, overlap=overlap)
 
     info_msg(f'near-far-solve: {n_iters} sweeps, final near delta={delta}')
     print(f'near-far-solve: {n_iters} sweeps, final near delta={delta}')
