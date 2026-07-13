@@ -9,6 +9,12 @@ from scipy.interpolate import RegularGridInterpolator as RGI
 from pochoir import units
 from pochoir import lar
 
+# Drift-path ending classification (P4 insul-bc, EPIC pochoir-ktj0):
+DRIFT_NONE = 0      # still drifting / uncollected at the end of the time window
+DRIFT_PAD = 1       # parked on a conductor pad -> normal charge collection
+DRIFT_SURFACE = 2   # terminated at the FR4 insulator surface -> SURFACE CHARGE
+                    # (terminal, but NOT counted as a pad collection)
+
 class Simple:
     '''
     Simple ODE calable
@@ -132,18 +138,29 @@ class PotentialField:
     '''
 
     def __init__(self, domain, potential, temperature,
-                 method='linear', verbose=False):
+                 method='linear', verbose=False, insulator=None):
         '''
         domain      : pochoir Domain (shape/spacing/origin).
         potential   : scalar potential array on the domain grid.
         temperature : LAr temperature in system-of-units.
         method      : RGI interpolation order ('linear' or 'cubic').
+        insulator   : optional bool mask (domain shape) marking excluded FR4
+                      cells; drift velocity is zeroed inside them so a charge
+                      that reaches the insulator sticks as surface charge (also
+                      a safety net against near-surface numerical residual).
         '''
         self.bb = domain.bb
         self.spacing = numpy.array(domain.spacing, dtype=float)
         self.temp = temperature
         self.verbose = verbose
         self.calls = 0
+
+        # geometry for mapping a physical position to a grid cell (insulator)
+        self.insulator = None
+        if insulator is not None:
+            self.insulator = numpy.asarray(insulator).astype(bool)
+            self._origin = numpy.array(domain.origin, dtype=float)
+            self._ishape = numpy.array(domain.shape, dtype=int)
 
         # Use the exact grid coordinate axes (shape-length) so the axes
         # match the potential array shape exactly.
@@ -164,6 +181,19 @@ class PotentialField:
 
     def potential_at(self, pos):
         return float(self.interp([pos])[0])
+
+    def _cell(self, pos):
+        '''Nearest grid cell index for a physical position, clamped in-range.'''
+        idx = numpy.round((numpy.asarray(pos, float) - self._origin)
+                          / self.spacing).astype(int)
+        idx = numpy.clip(idx, 0, self._ishape - 1)
+        return tuple(idx)
+
+    def in_insulator(self, pos):
+        '''True when ``pos`` falls inside an excluded FR4 (insulator) cell.'''
+        if self.insulator is None:
+            return False
+        return bool(self.insulator[self._cell(pos)])
 
     def efield(self, pos):
         '''
@@ -199,6 +229,10 @@ class PotentialField:
         self.calls += 1
         if not self.inside(pos):
             return numpy.zeros_like(numpy.asarray(pos, dtype=float))
+        if self.in_insulator(pos):
+            # Inside the reflecting FR4: zero drift velocity so the charge
+            # sticks (surface charge) instead of diving through the insulator.
+            return numpy.zeros_like(numpy.asarray(pos, dtype=float))
         efield = self.efield(pos)
         emag = math.sqrt(sum([e*e for e in efield]))
         mu = lar.mobility(emag, self.temp)
@@ -206,10 +240,23 @@ class PotentialField:
 
 
 def solve_potential(domain, start, potential, temperature, times,
-                    method='linear', verbose=False):
+                    method='linear', verbose=False, insulator=None):
     '''
-    Return the path of points at times from start, drifting through the
-    velocity field derived on-the-fly from the interpolated scalar potential.
+    Return ``(path, endtag)`` for one charge drifting from ``start`` through
+    the velocity field derived on-the-fly from the interpolated scalar
+    potential.  ``path`` is the (len(times), ndims) array of positions;
+    ``endtag`` is one of ``DRIFT_NONE`` / ``DRIFT_PAD`` / ``DRIFT_SURFACE``.
+
+    With ``insulator=None`` the behaviour (and the returned ``path``) is
+    identical to before -- the full time window is integrated with no
+    termination -- and ``endtag`` is ``DRIFT_NONE``.
+
+    With an insulator mask the drift terminates when the charge reaches the
+    FR4 top surface: the path is padded with that terminal point for the
+    remaining ticks and tagged ``DRIFT_SURFACE`` (surface charge, NOT a pad
+    collection).  A charge that instead parks on a conductor (drift speed
+    collapses) is tagged ``DRIFT_PAD``; one still moving at the end is
+    ``DRIFT_NONE``.
     '''
     start = numpy.array(start, dtype=float)
     potential = numpy.asarray(potential)
@@ -217,13 +264,55 @@ def solve_potential(domain, start, potential, temperature, times,
 
     print(f'start @{start}')
     func = PotentialField(domain, potential, temperature,
-                          method=method, verbose=verbose)
+                          method=method, verbose=verbose, insulator=insulator)
+
+    if insulator is None:
+        res = solve_ivp(func, [times[0], times[-1]], start, t_eval=times,
+                        rtol=0.0000000001, atol=0.0000000001,
+                        method='Radau',
+                        )
+        print("Last Point=", res['y'].T[-1]/units.mm)
+        return res['y'].T, DRIFT_NONE
+
+    # --- insulating-surface termination + ending classification ---
+    # FR4 top face (facing the drift gap) = highest insulator z-index + 1, in
+    # physical units.  Charges drift DOWN (decreasing z) toward the pad plane;
+    # in the inter-pad gaps they reach this surface and must stop there.
+    ins = func.insulator
+    z_top_index = int(numpy.max(numpy.where(ins.any(axis=(0, 1)))[0])) + 1
+    z_surface = float(domain.origin[2] + z_top_index * domain.spacing[2])
+
+    def hit_surface(t, y):
+        return y[2] - z_surface
+    hit_surface.terminal = True
+    hit_surface.direction = -1   # fire only when descending through the surface
+
     res = solve_ivp(func, [times[0], times[-1]], start, t_eval=times,
                     rtol=0.0000000001, atol=0.0000000001,
-                    method='Radau',
+                    method='Radau', events=hit_surface,
                     )
-    print("Last Point=", res['y'].T[-1]/units.mm)
-    return res['y'].T
+
+    ys = res['y'].T
+    nt = len(times)
+    ndim = start.shape[0]
+    path = numpy.empty((nt, ndim))
+    n = min(len(ys), nt)
+    path[:n] = ys[:n]
+
+    surfaced = (res.status == 1) and len(res.t_events) and len(res.t_events[0])
+    if surfaced:
+        term = numpy.asarray(res.y_events[0][-1], dtype=float)  # point on surface
+        endtag = DRIFT_SURFACE
+    else:
+        term = ys[-1] if len(ys) else start
+        # PAD if the drift speed collapsed near a conductor, else still drifting
+        sp_end = float(numpy.sqrt((func(0.0, term) ** 2).sum()))
+        sp0 = float(numpy.sqrt((func(0.0, start) ** 2).sum()))
+        endtag = DRIFT_PAD if (sp0 > 0.0 and sp_end < 1e-2 * sp0) else DRIFT_NONE
+    if n < nt:
+        path[n:] = term
+    print("Last Point=", path[-1] / units.mm, "endtag=", endtag)
+    return path, endtag
 
 
 class ScalarField:

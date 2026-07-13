@@ -429,6 +429,8 @@ def fdm(ctx, initial, boundary,
               help="Input potential array")
 @click.option("-b", "--boundary", type=str, default=None,
               help="Input boundary array (def: resolve via potential metadata)")
+@click.option('--insulator', type=str, default=None,
+              help="Input no-flux insulator mask; zeros the velocity inside FR4")
 @click.option("-V", "--velocity", type=str,
               help="Output velocity array")
 @click.option("-L", "--diff-longitudinal", "dl_key", type=str, default=None,
@@ -436,7 +438,7 @@ def fdm(ctx, initial, boundary,
 @click.option("-T", "--diff-transverse", "dt_key", type=str, default=None,
               help="Output key for transverse diffusion (dt)")
 @click.pass_context
-def velo(ctx, temperature, potential, boundary, velocity,dl_key,dt_key):
+def velo(ctx, temperature, potential, boundary, insulator, velocity,dl_key,dt_key):
     '''
     Calculate a velocity field from a potential field
     '''
@@ -496,7 +498,17 @@ def velo(ctx, temperature, potential, boundary, velocity,dl_key,dt_key):
     #efield[0][:,:,:]=0
     #efield[1][:,:,:]=0
     #efield[2][:,:,:]=48.67*units.V
-    
+
+    # Zero the field (hence velocity) inside the excluded FR4 insulator so a
+    # charge that reaches it cannot drift through it (surface charge).  Off by
+    # default -> velocity unchanged for every non-insulator run.
+    insarr = ctx.obj.get(insulator) if insulator else None
+    if insarr is not None:
+        insmask = insarr.astype(bool)
+        efield[0][insmask] = 0
+        efield[1][insmask] = 0
+        efield[2][insmask] = 0
+
     #temp=87.7
     debug_msg(f"temp={temp}")
     emag = pochoir.arrays.vmag(efield)
@@ -507,6 +519,10 @@ def velo(ctx, temperature, potential, boundary, velocity,dl_key,dt_key):
         dt = pochoir.lar.diff_tran(emag,temp)
     varr = [e*mu/units.mm**2 for e in efield]
     varr=numpy.array(varr)
+    if insarr is not None:
+        varr[0][insmask] = 0
+        varr[1][insmask] = 0
+        varr[2][insmask] = 0
     #varr[2][:,:,:101]=0
     
     params = dict(domain=domain, command="velo",
@@ -654,6 +670,8 @@ def starts(ctx, starts, mode, configs, plot, points):
               help="Input starting points")
 @click.option("--velocity", type=str,
               help="Intput velocity array")
+@click.option('--insulator', type=str, default=None,
+              help="Input no-flux insulator mask; stop paths at the FR4 surface")
 @click.option("-L", "--diff-longitudinal", "dl_key", type=str, default=None,
               help="(Optional) Input longitudinal diffusion field")
 @click.option("-T", "--diff-transverse", "dt_key", type=str, default=None,
@@ -670,7 +688,7 @@ def starts(ctx, starts, mode, configs, plot, points):
               help="Interpolation order for the scalar potential (potential-based drift)")
 @click.argument("steps", nargs=-1)
 @click.pass_context
-def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, plot, interp_order, steps):
+def drift(ctx, paths, starts, velocity, insulator, dl_key, dt_key, verbose, engine, plot, interp_order, steps):
     '''
     Calculate drift paths.
 
@@ -723,19 +741,29 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, plot, i
         print('drift: legacy velocity-interpolation '
               '(no potential/temperature metadata found)')
 
-    # shape: (nstarts, nticks, ndims)
+    # Optional no-flux insulator mask: stop potential-based paths at the FR4
+    # surface and tag surface-charge endings distinctly from pad collections.
+    ins = None
+    if insulator is not None:
+        ins = ctx.obj.get(insulator)
+
+    # shape: (nstarts, nticks, ndims); endtags: per-path ending classification
     thepaths = pochoir.arrays.zeros((len(start_points), len(ticks),
                                      len(dom.shape)))
+    endtags = pochoir.arrays.zeros(len(start_points))
     for ind, point in enumerate(start_points):
         #print("input point: ",point)
+        endtag = drift_numpy.DRIFT_NONE
         if use_sde:
             path = drift_numpy.solve_sde(dom, point, velo, dl, dt , ticks, verbose=verbose)
         elif use_potential:
-            path = drift_numpy.solve_potential(dom, point, pot, temp, ticks,
-                                               method=interp_order, verbose=verbose)
+            path, endtag = drift_numpy.solve_potential(dom, point, pot, temp, ticks,
+                                               method=interp_order, verbose=verbose,
+                                               insulator=ins)
         else:
             path = drifter(dom, point, velo, ticks, verbose=verbose)
         thepaths[ind]=path
+        endtags[ind]=endtag
 
     if plot:
         import os
@@ -754,6 +782,12 @@ def drift(ctx, paths, starts, velocity, dl_key, dt_key, verbose, engine, plot, i
     params=dict(taxon="paths", command="drift", domain=domain,
                 tstart=start, tstop=stop, nsteps=nsteps)
     ctx.obj.put(paths, thepaths, **params)
+    # Companion per-path ending tags (0=none/drifting, 1=pad collection,
+    # 2=FR4 surface charge).  Stored under a separate key so consumers of the
+    # positions array are unaffected; only written for the potential engine.
+    if use_potential:
+        ctx.obj.put(paths + "_endtag", endtags,
+                    **{**params, "taxon": "paths_endtag"})
 
 
 @cli.command("bc-interp")
