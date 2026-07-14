@@ -2,7 +2,7 @@
     "HoleRadius" : 1.9,
     "PcbWidth" : 1.6,
     "GridHoleShape" : "None",
-    "pixelPlaneLowEdgePosition" : 2,
+    "pixelPlaneLowEdgePosition" : 9.9,
     "pixelPlaneWidth" : 0.1,
     "pixelSize" : 3.8,
     "pixelGap" : 0.6,
