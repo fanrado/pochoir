@@ -127,7 +127,27 @@ want paths/drift3d_nodes \
 # --interp-order linear: cubic rings/overshoots near the pixel plane and
 # over-focuses paths onto the pads; linear is monotone-safe.
 
+############################################################################
+## DRIFT VELOCITY + E-FIELD ALONG THE PATHS
+############################################################################
+## Sample the drift velocity and drift E-field at every point ALONG each path,
+## using the SAME PotentialField the drift integrated (interpolate potential ->
+## finite-diff E -> mobility -> velocity).  This gives the dynamics AT the landing
+## instant (and just before), so we can argue about what happens at t+dt -- i.e.
+## whether a gap electron is still being driven (v != 0, funnelled toward the pad)
+## rather than sitting in equilibrium on the FR4 surface.  Analysis helper only,
+## no production code.  Writes alongpath/velocity.npz + alongpath/efield.npz (V/mm).
+## Guarded: set ALONGPATH=0 to skip; want() makes a re-run with the arrays a no-op.
+if [ "${ALONGPATH:-1}" != "0" ] ; then
+    echo "=== Sample velocity + E-field along the drift paths ==="
+    want "alongpath/velocity alongpath/efield" \
+         python sample_field_along_paths.py "$POCHOIR_STORE" \
+         --potential potential/drift3d --paths paths/drift3d_nodes \
+         "${dins_fine[@]}" --domain domain/drift_full
+fi
+
 date
 echo "=== DONE: Task8 node-grid drift-path run complete ==="
-echo "    starts:  $POCHOIR_STORE/starts/drift3d_nodes.npz"
-echo "    paths:   $POCHOIR_STORE/paths/drift3d_nodes.npz  (+ _endtag)"
+echo "    starts:   $POCHOIR_STORE/starts/drift3d_nodes.npz"
+echo "    paths:    $POCHOIR_STORE/paths/drift3d_nodes.npz  (+ _endtag)"
+echo "    alongpath:$POCHOIR_STORE/alongpath/velocity.npz , efield.npz (V/mm)"
