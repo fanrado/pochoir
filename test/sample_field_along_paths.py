@@ -115,8 +115,10 @@ def main():
     vmm_per_unit = 50.0 / Ebulk if Ebulk > 0 else 1.0      # bulk = 50 V/mm by design
     efld_vmm = efld * vmm_per_unit                         # E in V/mm
 
-    z_top = int(np.max(np.where(ins.any(axis=(0, 1)))[0])) + 1 if ins is not None else -1
-    z_surface = float(origin[2] + z_top * spacing[2]) if z_top >= 0 else float('nan')
+    # FR4 top face = (max FR4 z-index + 0.5)*spacing, matching the termination
+    # plane in drift_numpy.solve_potential (commit 09fb55c, pochoir-qqlw).
+    max_fr4 = int(np.max(np.where(ins.any(axis=(0, 1)))[0])) if ins is not None else -1
+    z_surface = float(origin[2] + (max_fr4 + 0.5) * spacing[2]) if max_fr4 >= 0 else float('nan')
 
     np.savez(f'{a.store}/{a.outprefix}/velocity.npz', velocity=velo)
     np.savez(f'{a.store}/{a.outprefix}/efield.npz', efield=efld_vmm)
