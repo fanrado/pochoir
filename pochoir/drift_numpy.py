@@ -275,12 +275,18 @@ def solve_potential(domain, start, potential, temperature, times,
         return res['y'].T, DRIFT_NONE
 
     # --- insulating-surface termination + ending classification ---
-    # FR4 top face (facing the drift gap) = highest insulator z-index + 1, in
-    # physical units.  Charges drift DOWN (decreasing z) toward the pad plane;
-    # in the inter-pad gaps they reach this surface and must stop there.
+    # FR4 top face (facing the drift gap).  The highest insulator z-index is the
+    # FR4 cell whose CENTRE sits at that node; its top face is half a cell above
+    # the node centre, i.e. (max index + 0.5)*spacing -- NOT (index + 1), which
+    # would place the plane a full cell too high (at the pad node centre) and
+    # leave a half-cell gap the descending electron never crosses.  This 9.95mm
+    # face coincides with the pad bottom and with the in_insulator rounding
+    # boundary (positions below it round to the FR4 node).  Charges drift DOWN
+    # (decreasing z) toward the pad plane; in the inter-pad gaps they reach this
+    # surface and must stop there.
     ins = func.insulator
-    z_top_index = int(numpy.max(numpy.where(ins.any(axis=(0, 1)))[0])) + 1
-    z_surface = float(domain.origin[2] + z_top_index * domain.spacing[2])
+    max_fr4_index = int(numpy.max(numpy.where(ins.any(axis=(0, 1)))[0]))
+    z_surface = float(domain.origin[2] + (max_fr4_index + 0.5) * domain.spacing[2])
 
     def hit_surface(t, y):
         return y[2] - z_surface
