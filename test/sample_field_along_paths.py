@@ -65,9 +65,27 @@ def main():
     flat = paths.reshape(-1, ndim)                         # (N*T, 3)
 
     def efield_batch(P):
-        """Vectorised copy of PotentialField.efield over an (M,3) array of points."""
+        """Vectorised copy of the MASK-AWARE PotentialField.efield over an (M,3)
+        array of points (pochoir-9keo / pochoir-0342).
+
+        When an insulator mask is present the naive central difference would be
+        taken ACROSS the frozen FR4 cells (phi=0), fabricating a spurious normal
+        field at the surface.  Matching production drift_numpy.PotentialField.
+        efield exactly: for each +/- half-cell sample, test the ADJACENT CELL in
+        that direction (the same neighbour the solver's stencil_poisson_neumann
+        drops its bond to); if exactly one neighbour cell is solid, mirror that
+        sample about the point (ghost = active-side value) so the NORMAL
+        component vanishes at the FR4 face while the TANGENTIAL components (whose
+        samples stay in the LAr) survive; if both neighbours are solid there is
+        no field.  Kept in lockstep with PotentialField.efield -- if that rule
+        changes, update here too.
+        """
         M = P.shape[0]
         E = np.zeros((M, ndim))
+        if ins is not None:
+            # nearest grid cell per point, clamped in range (== PotentialField._cell)
+            base = np.clip(np.rint((P - origin) / spacing).astype(int),
+                           0, ishape - 1)
         for d in range(ndim):
             h = 0.5 * spacing[d]
             pp = P.copy(); pm = P.copy()
@@ -76,8 +94,23 @@ def main():
             pp[:, d] = phigh; pm[:, d] = plow
             denom = phigh - plow
             good = denom > 0
+            phi_plus = np.zeros(M); phi_minus = np.zeros(M)
+            phi_plus[good] = interp(pp[good])
+            phi_minus[good] = interp(pm[good])
+            sel = good.copy()
+            if ins is not None:
+                cp = base.copy(); cp[:, d] = np.minimum(cp[:, d] + 1, ishape[d] - 1)
+                cm = base.copy(); cm[:, d] = np.maximum(cm[:, d] - 1, 0)
+                plus_solid = ins[tuple(cp.T)]
+                minus_solid = ins[tuple(cm.T)]
+                mp = plus_solid & ~minus_solid       # i+1 solid -> mirror plus
+                mm = minus_solid & ~plus_solid       # i-1 solid -> mirror minus
+                both = plus_solid & minus_solid      # sandwiched -> no field
+                phi_plus[mp] = phi_minus[mp]
+                phi_minus[mm] = phi_plus[mm]
+                sel = good & ~both
             val = np.zeros(M)
-            val[good] = (interp(pp[good]) - interp(pm[good])) / denom[good]
+            val[sel] = (phi_plus[sel] - phi_minus[sel]) / denom[sel]
             E[:, d] = val
         return E * units.V
 
