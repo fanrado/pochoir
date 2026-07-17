@@ -2,13 +2,15 @@
 '''
 Solve initial value problem to get drift paths using pytorch
 
-NOTE (enforcement removed): earlier revisions imposed two artificial conditions
-on the potential-based drift -- a terminal event that force-stopped a path at
-the FR4 top face, and a v=0 zeroing inside the insulator so charges "stuck" as
-surface charge.  Those dictated the outcome instead of letting it follow from
-the field.  They have been deleted: the drift now simply integrates the
-velocity field derived from the (Neumann-BC) potential.  The pre-removal version
-is preserved verbatim in drift_numpy_enforced_backup.py.
+NOTE (all drift-side enforcement removed, pochoir-w3x9): earlier revisions
+imposed artificial conditions on the potential-based drift -- a terminal event
+that force-stopped a path at the FR4 top face, a v=0 zeroing inside the
+insulator, and a mask-aware (ghost/mirror) correction of the E-field at the FR4
+surface.  All are deleted.  The drift now simply integrates v = mu*grad(phi) on
+the SOLVED potential; E = grad(phi) is taken plainly, with no insulator mask or
+field correction here.  The ONLY insulator condition is the no-flux (Neumann)
+FR4 boundary that the Laplace SOLVER imposed when producing the potential --
+whatever the field does near the frozen FR4 cells is reported honestly.
 '''
 import math
 import numpy
@@ -146,29 +148,25 @@ class PotentialField:
     '''
 
     def __init__(self, domain, potential, temperature,
-                 method='linear', verbose=False, insulator=None):
+                 method='linear', verbose=False):
         '''
         domain      : pochoir Domain (shape/spacing/origin).
         potential   : scalar potential array on the domain grid.
         temperature : LAr temperature in system-of-units.
         method      : RGI interpolation order ('linear' or 'cubic').
-        insulator   : optional bool mask (domain shape) marking excluded FR4
-                      cells; drift velocity is zeroed inside them so a charge
-                      that reaches the insulator sticks as surface charge (also
-                      a safety net against near-surface numerical residual).
+
+        The drift E-field is the plain gradient of the interpolated potential,
+        E = grad(phi_interp).  No insulator mask, ghost/mirror fill, or other
+        manipulation is applied here: the ONLY condition on the field is the
+        no-flux (Neumann) FR4 boundary that the Laplace SOLVER imposed when it
+        produced ``potential``.  Whatever the field does near the frozen FR4
+        cells is reported honestly, not corrected.
         '''
         self.bb = domain.bb
         self.spacing = numpy.array(domain.spacing, dtype=float)
         self.temp = temperature
         self.verbose = verbose
         self.calls = 0
-
-        # geometry for mapping a physical position to a grid cell (insulator)
-        self.insulator = None
-        if insulator is not None:
-            self.insulator = numpy.asarray(insulator).astype(bool)
-            self._origin = numpy.array(domain.origin, dtype=float)
-            self._ishape = numpy.array(domain.shape, dtype=int)
 
         # Use the exact grid coordinate axes (shape-length) so the axes
         # match the potential array shape exactly.
@@ -190,40 +188,13 @@ class PotentialField:
     def potential_at(self, pos):
         return float(self.interp([pos])[0])
 
-    def _cell(self, pos):
-        '''Nearest grid cell index for a physical position, clamped in-range.'''
-        idx = numpy.round((numpy.asarray(pos, float) - self._origin)
-                          / self.spacing).astype(int)
-        idx = numpy.clip(idx, 0, self._ishape - 1)
-        return tuple(idx)
-
-    def in_insulator(self, pos):
-        '''True when ``pos`` falls inside an excluded FR4 (insulator) cell.'''
-        if self.insulator is None:
-            return False
-        return bool(self.insulator[self._cell(pos)])
-
     def efield(self, pos):
         '''
         E = grad(phi_interp) via central finite differences, using the same
         (+grad phi) sign convention and units.V scaling as the `velo` command.
         Sample points are clamped inside the bounding box; a one-sided
-        difference is used when a neighbour would fall outside.
-
-        Mask-aware ghost/mirror at the FR4 surface (pochoir-9keo): the FDM
-        solve implements the no-flux (Neumann) insulator BC by dropping stencil
-        bonds to the frozen FR4 cells (stencil_poisson_neumann), which is a
-        mirror reflection (dphi/dn = 0) across the surface.  A NAIVE central
-        difference here instead reaches into those frozen cells (phi = 0),
-        fabricating a spurious normal-field spike just above the surface and
-        reading (0,0,0) inside the solid -- so gap electrons get shoved through
-        the FR4 and halt with no field.  To stay consistent with the solve, a
-        +/- sample that lands inside an insulator cell is mirrored back across
-        the surface (its value replaced by the reflected active-side sample),
-        which drives the NORMAL component to zero at the FR4 face while leaving
-        the TANGENTIAL components (whose samples stay in the LAr, off the solid)
-        intact.  Gap electrons then slide toward the pad instead of being
-        pushed into the insulator -- no clamp, just the correct field.
+        difference is used when a neighbour would fall outside.  This is the
+        plain gradient of the solved potential -- no insulator/mask correction.
         '''
         pos = numpy.asarray(pos, dtype=float)
         lo = numpy.array(self.bb[0], dtype=float)
@@ -242,29 +213,7 @@ class PotentialField:
             if denom <= 0.0:
                 efield[dim] = 0.0
                 continue
-            phi_plus = self.potential_at(pp)
-            phi_minus = self.potential_at(pm)
-            # ghost/mirror reflection at the insulator surface.  The half-cell
-            # sample points straddle a cell face, so test the ADJACENT CELL in
-            # each direction (the same neighbour the FDM stencil drops its bond
-            # to) rather than rounding a point sitting exactly on the face.  If
-            # exactly one neighbour cell is solid, reflect that sample about pos
-            # (ghost value = active-side value) so the normal derivative
-            # vanishes there; if both neighbours are solid there is no field.
-            if self.insulator is not None:
-                base = numpy.asarray(self._cell(pos), dtype=int)
-                cp = base.copy(); cp[dim] = min(cp[dim] + 1, self._ishape[dim] - 1)
-                cm = base.copy(); cm[dim] = max(cm[dim] - 1, 0)
-                plus_solid = bool(self.insulator[tuple(cp)])
-                minus_solid = bool(self.insulator[tuple(cm)])
-                if plus_solid and not minus_solid:
-                    phi_plus = phi_minus
-                elif minus_solid and not plus_solid:
-                    phi_minus = phi_plus
-                elif plus_solid and minus_solid:
-                    efield[dim] = 0.0
-                    continue
-            efield[dim] = (phi_plus - phi_minus) / denom
+            efield[dim] = (self.potential_at(pp) - self.potential_at(pm)) / denom
         return efield * units.V
 
     def __call__(self, time, pos):
@@ -283,7 +232,7 @@ class PotentialField:
 
 
 def solve_potential(domain, start, potential, temperature, times,
-                    method='linear', verbose=False, insulator=None):
+                    method='linear', verbose=False):
     '''
     Return ``(path, endtag)`` for one charge drifting from ``start`` through
     the velocity field derived on-the-fly from the interpolated scalar
@@ -291,18 +240,16 @@ def solve_potential(domain, start, potential, temperature, times,
 
     The drift is a plain integration of the velocity field v = mu*E, with
     E = grad(phi) taken from the potential that was solved WITH the no-flux
-    FR4 Neumann boundary condition.  NO path-termination event and NO
-    in-insulator velocity zeroing are imposed: whatever the charge does near
-    the FR4 surface (decelerate, slide tangentially, pile up) must emerge from
-    the field itself -- we simulate the physics, we do not dictate where the
-    charge is allowed to go.  If a trajectory fails to converge near the
-    surface that is a NUMERICAL problem to be solved by the integrator
-    settings (step size / method / tolerances), not by forcing the path to
-    stop.
+    FR4 Neumann boundary condition.  NO path-termination event, NO in-insulator
+    velocity zeroing, and NO mask-aware field correction are imposed: whatever
+    the charge does near the FR4 surface (decelerate, slide tangentially, pile
+    up) must emerge from the SOLVED field itself -- we simulate the physics, we
+    do not dictate where the charge is allowed to go.  The solver's Neumann FR4
+    boundary is the only condition on the field.  If a trajectory fails to
+    converge near the surface that is a NUMERICAL problem for the integrator
+    settings (step size / method / tolerances), not a reason to force a stop.
 
     ``endtag`` is always ``DRIFT_NONE`` (kept for call-site compatibility).
-    The ``insulator`` argument is accepted for CLI compatibility but does NOT
-    alter the drift.
     '''
     start = numpy.array(start, dtype=float)
     potential = numpy.asarray(potential)
@@ -310,7 +257,7 @@ def solve_potential(domain, start, potential, temperature, times,
 
     print(f'start @{start}')
     func = PotentialField(domain, potential, temperature,
-                          method=method, verbose=verbose, insulator=insulator)
+                          method=method, verbose=verbose)
 
     res = solve_ivp(func, [times[0], times[-1]], start, t_eval=times,
                     rtol=0.0000000001, atol=0.0000000001,

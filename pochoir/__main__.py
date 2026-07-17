@@ -430,7 +430,7 @@ def fdm(ctx, initial, boundary,
 @click.option("-b", "--boundary", type=str, default=None,
               help="Input boundary array (def: resolve via potential metadata)")
 @click.option('--insulator', type=str, default=None,
-              help="Input no-flux insulator mask; zeros the velocity inside FR4")
+              help="Accepted for compatibility; INERT (velocity is pure grad(phi))")
 @click.option("-V", "--velocity", type=str,
               help="Output velocity array")
 @click.option("-L", "--diff-longitudinal", "dl_key", type=str, default=None,
@@ -446,68 +446,17 @@ def velo(ctx, temperature, potential, boundary, insulator, velocity,dl_key,dt_ke
     pot, md = ctx.obj.get(potential, True)
     domain = md['domain']
     dom = ctx.obj.get_domain(domain)
-    # The boundary mask zeros the E-field at electrode cells.  Prefer an
-    # explicitly named boundary (needed when the potential was produced by
-    # an operation whose metadata carries no 'boundary' key, e.g.
-    # stitch-near); otherwise resolve it from the potential's metadata as
-    # the fdm-produced reference workflow does.  If neither is available
-    # the electrode zeroing is skipped (the field is still valid away from
-    # electrodes) -- pass --boundary for the full electrode treatment.
-    bc = boundary if boundary else md.get('boundary')
-    barr = ctx.obj.get(bc) if bc else None
+    import numpy
     pot = pot#*units.V
     debug_msg(f"TEST={pot[1,1,-1]}; Spacing={dom.spacing}")
+    # Pure drift field: E = grad(phi) of the solved potential.  No electrode
+    # zeroing, tile-edge zeroing, or in-insulator manipulation is applied here
+    # -- the ONLY condition on the field is the no-flux Neumann FR4 boundary
+    # that the Laplace SOLVER imposed when it produced the potential.  The
+    # --boundary and --insulator options are accepted for CLI backward
+    # compatibility but no longer alter the field (pochoir-w3x9).
     efield = pochoir.arrays.gradient(pot, *dom.spacing)
-    if barr is not None:
-        flag = barr==1
-        efield[0][flag]=0
-        efield[1][flag]=0
-        efield[2][flag]=0
-    else:
-        info_msg('velo: no boundary array; skipping electrode E-field zeroing '
-                 '(pass --boundary for the full treatment)')
-    #efield[0][:,0,:]=0
-    #efield[0][:,-1,:]=0
-    efield[1][:,0,:]=0
-    efield[1][:,-1,:]=0
-    efield[0][0,:,:]=0
-    efield[0][-1,:,:]=0
-    #efield[1][0,:,:]=0
-    #efield[1][-1,:,:]=0
-    #for i in range(1,barr.shape[0]-1):
-    #    for j in range(1,barr.shape[1]-1):
-    #        for k in range(1,barr.shape[2]-1):
-    #            if barr[i-1,j,k]==1 and efield[0][i,j,k]<0:
-    #                efield[0][i,j,k]=0
-    #            if barr[i+1,j,k]==1 and efield[0][i,j,k]>0:
-    #                efield[0][i,j,k]=0
-    #            if barr[i,j-1,k]==1 and efield[0][i,j,k]<0:
-    #                efield[0][i,j,k]=0
-    #            if barr[i,j+1,k]==1 and efield[0][i,j,k]>0:
-    #                efield[0][i,j,k]=0
-    #            if barr[i,j,k-1]==1 and efield[0][i,j,k]<0:
-    #                efield[0][i,j,k]=0
-    #            if barr[i,j,k+1]==1 and efield[0][i,j,k]>0:
-    #                efield[0][i,j,k]=0
-
-    import numpy
-    #efield[2][:,:,:102]=0
-    #efield[0][:,:,:102]=0
-    #efield[1][:,:,:102]=0
-    efield=efield*units.V
-    #efield[0][:,:,:]=0
-    #efield[1][:,:,:]=0
-    #efield[2][:,:,:]=48.67*units.V
-
-    # NOTE (enforcement removed): no in-insulator field zeroing.  The FR4 cells
-    # are masked when the Laplace equation is solved (no-flux Neumann BC), so
-    # they retain their initial values and the resulting field already encodes
-    # the no-flux behavior.  The velocity there must follow from that solved
-    # field, not be forced to zero here.  --insulator is kept for CLI
-    # compatibility but is now inert.
-    if insulator:
-        info_msg('velo: --insulator is now inert (in-insulator velocity '
-                 'zeroing removed; velocity follows the Neumann-BC field)')
+    efield = efield*units.V
 
     #temp=87.7
     debug_msg(f"temp={temp}")
@@ -668,7 +617,7 @@ def starts(ctx, starts, mode, configs, plot, points):
 @click.option("--velocity", type=str,
               help="Intput velocity array")
 @click.option('--insulator', type=str, default=None,
-              help="Input no-flux insulator mask; stop paths at the FR4 surface")
+              help="Accepted for compatibility; INERT (drift is pure grad(phi))")
 @click.option("-L", "--diff-longitudinal", "dl_key", type=str, default=None,
               help="(Optional) Input longitudinal diffusion field")
 @click.option("-T", "--diff-transverse", "dt_key", type=str, default=None,
@@ -738,11 +687,14 @@ def drift(ctx, paths, starts, velocity, insulator, dl_key, dt_key, verbose, engi
         info_msg('drift: legacy velocity-interpolation '
                  '(no potential/temperature metadata found)')
 
-    # Optional no-flux insulator mask: stop potential-based paths at the FR4
-    # surface and tag surface-charge endings distinctly from pad collections.
-    ins = None
+    # --insulator is accepted for CLI backward compatibility but is INERT: the
+    # drift is a pure integration of v = mu*grad(phi) on the solved potential,
+    # whose only insulator condition is the solver's no-flux Neumann FR4 BC.
+    # No mask-based path termination or field/velocity correction is applied
+    # (pochoir-w3x9).
     if insulator is not None:
-        ins = ctx.obj.get(insulator)
+        info_msg('drift: --insulator is inert (drift follows the solved '
+                 'Neumann-BC field; no mask-based termination or correction)')
 
     # shape: (nstarts, nticks, ndims); endtags: per-path ending classification
     thepaths = pochoir.arrays.zeros((len(start_points), len(ticks),
@@ -755,8 +707,7 @@ def drift(ctx, paths, starts, velocity, insulator, dl_key, dt_key, verbose, engi
             path = drift_numpy.solve_sde(dom, point, velo, dl, dt , ticks, verbose=verbose)
         elif use_potential:
             path, endtag = drift_numpy.solve_potential(dom, point, pot, temp, ticks,
-                                               method=interp_order, verbose=verbose,
-                                               insulator=ins)
+                                               method=interp_order, verbose=verbose)
         else:
             path = drifter(dom, point, velo, ticks, verbose=verbose)
         thepaths[ind]=path
