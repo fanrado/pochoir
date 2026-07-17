@@ -209,6 +209,21 @@ class PotentialField:
         (+grad phi) sign convention and units.V scaling as the `velo` command.
         Sample points are clamped inside the bounding box; a one-sided
         difference is used when a neighbour would fall outside.
+
+        Mask-aware ghost/mirror at the FR4 surface (pochoir-9keo): the FDM
+        solve implements the no-flux (Neumann) insulator BC by dropping stencil
+        bonds to the frozen FR4 cells (stencil_poisson_neumann), which is a
+        mirror reflection (dphi/dn = 0) across the surface.  A NAIVE central
+        difference here instead reaches into those frozen cells (phi = 0),
+        fabricating a spurious normal-field spike just above the surface and
+        reading (0,0,0) inside the solid -- so gap electrons get shoved through
+        the FR4 and halt with no field.  To stay consistent with the solve, a
+        +/- sample that lands inside an insulator cell is mirrored back across
+        the surface (its value replaced by the reflected active-side sample),
+        which drives the NORMAL component to zero at the FR4 face while leaving
+        the TANGENTIAL components (whose samples stay in the LAr, off the solid)
+        intact.  Gap electrons then slide toward the pad instead of being
+        pushed into the insulator -- no clamp, just the correct field.
         '''
         pos = numpy.asarray(pos, dtype=float)
         lo = numpy.array(self.bb[0], dtype=float)
@@ -227,7 +242,29 @@ class PotentialField:
             if denom <= 0.0:
                 efield[dim] = 0.0
                 continue
-            efield[dim] = (self.potential_at(pp) - self.potential_at(pm)) / denom
+            phi_plus = self.potential_at(pp)
+            phi_minus = self.potential_at(pm)
+            # ghost/mirror reflection at the insulator surface.  The half-cell
+            # sample points straddle a cell face, so test the ADJACENT CELL in
+            # each direction (the same neighbour the FDM stencil drops its bond
+            # to) rather than rounding a point sitting exactly on the face.  If
+            # exactly one neighbour cell is solid, reflect that sample about pos
+            # (ghost value = active-side value) so the normal derivative
+            # vanishes there; if both neighbours are solid there is no field.
+            if self.insulator is not None:
+                base = numpy.asarray(self._cell(pos), dtype=int)
+                cp = base.copy(); cp[dim] = min(cp[dim] + 1, self._ishape[dim] - 1)
+                cm = base.copy(); cm[dim] = max(cm[dim] - 1, 0)
+                plus_solid = bool(self.insulator[tuple(cp)])
+                minus_solid = bool(self.insulator[tuple(cm)])
+                if plus_solid and not minus_solid:
+                    phi_plus = phi_minus
+                elif minus_solid and not plus_solid:
+                    phi_minus = phi_plus
+                elif plus_solid and minus_solid:
+                    efield[dim] = 0.0
+                    continue
+            efield[dim] = (phi_plus - phi_minus) / denom
         return efield * units.V
 
     def __call__(self, time, pos):
