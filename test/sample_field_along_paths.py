@@ -81,13 +81,6 @@ def main():
             E[:, d] = val
         return E * units.V
 
-    def in_insulator_batch(P):
-        if ins is None:
-            return np.zeros(P.shape[0], dtype=bool)
-        idx = np.round((P - origin) / spacing).astype(int)
-        idx = np.clip(idx, 0, ishape - 1)
-        return ins[idx[:, 0], idx[:, 1], idx[:, 2]]
-
     # process in chunks to bound memory
     velo = np.zeros_like(flat)
     efld = np.zeros_like(flat)
@@ -99,8 +92,11 @@ def main():
         emag = np.sqrt((E**2).sum(axis=1))
         mu = lar.mobility(emag, temp)
         v = E * (mu / units.mm**2)[:, None]
-        kill = ~inside | in_insulator_batch(P)             # outside bb or inside FR4 -> v=0
-        v[kill] = 0.0
+        # Match the enforcement-free production drift (pochoir-h3y1): velocity is
+        # zeroed ONLY outside the domain bbox (no field data there), NOT inside the
+        # FR4 mask.  The in-insulator v=0 zeroing was removed from PotentialField
+        # so the reconstructed velocity here must follow the Neumann-BC field too.
+        v[~inside] = 0.0
         velo[s:s+CH] = v
         efld[s:s+CH] = E
 
