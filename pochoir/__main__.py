@@ -499,15 +499,15 @@ def velo(ctx, temperature, potential, boundary, insulator, velocity,dl_key,dt_ke
     #efield[1][:,:,:]=0
     #efield[2][:,:,:]=48.67*units.V
 
-    # Zero the field (hence velocity) inside the excluded FR4 insulator so a
-    # charge that reaches it cannot drift through it (surface charge).  Off by
-    # default -> velocity unchanged for every non-insulator run.
-    insarr = ctx.obj.get(insulator) if insulator else None
-    if insarr is not None:
-        insmask = insarr.astype(bool)
-        efield[0][insmask] = 0
-        efield[1][insmask] = 0
-        efield[2][insmask] = 0
+    # NOTE (enforcement removed): no in-insulator field zeroing.  The FR4 cells
+    # are masked when the Laplace equation is solved (no-flux Neumann BC), so
+    # they retain their initial values and the resulting field already encodes
+    # the no-flux behavior.  The velocity there must follow from that solved
+    # field, not be forced to zero here.  --insulator is kept for CLI
+    # compatibility but is now inert.
+    if insulator:
+        info_msg('velo: --insulator is now inert (in-insulator velocity '
+                 'zeroing removed; velocity follows the Neumann-BC field)')
 
     #temp=87.7
     debug_msg(f"temp={temp}")
@@ -519,12 +519,9 @@ def velo(ctx, temperature, potential, boundary, insulator, velocity,dl_key,dt_ke
         dt = pochoir.lar.diff_tran(emag,temp)
     varr = [e*mu/units.mm**2 for e in efield]
     varr=numpy.array(varr)
-    if insarr is not None:
-        varr[0][insmask] = 0
-        varr[1][insmask] = 0
-        varr[2][insmask] = 0
-    #varr[2][:,:,:101]=0
-    
+    # NOTE (enforcement removed): no in-insulator velocity zeroing here either;
+    # the saved velocity follows directly from the Neumann-BC field.
+
     params = dict(domain=domain, command="velo",
                   potential=potential, temperature=temp)
     # save velocity

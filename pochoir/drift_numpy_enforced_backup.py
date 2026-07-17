@@ -1,14 +1,6 @@
 #!/usr/bin/env python3
 '''
 Solve initial value problem to get drift paths using pytorch
-
-NOTE (enforcement removed): earlier revisions imposed two artificial conditions
-on the potential-based drift -- a terminal event that force-stopped a path at
-the FR4 top face, and a v=0 zeroing inside the insulator so charges "stuck" as
-surface charge.  Those dictated the outcome instead of letting it follow from
-the field.  They have been deleted: the drift now simply integrates the
-velocity field derived from the (Neumann-BC) potential.  The pre-removal version
-is preserved verbatim in drift_numpy_enforced_backup.py.
 '''
 import math
 import numpy
@@ -236,8 +228,10 @@ class PotentialField:
         '''
         self.calls += 1
         if not self.inside(pos):
-            # Outside the solved domain there is simply no field data; this is a
-            # data-availability limit, NOT an imposed physics condition.
+            return numpy.zeros_like(numpy.asarray(pos, dtype=float))
+        if self.in_insulator(pos):
+            # Inside the reflecting FR4: zero drift velocity so the charge
+            # sticks (surface charge) instead of diving through the insulator.
             return numpy.zeros_like(numpy.asarray(pos, dtype=float))
         efield = self.efield(pos)
         emag = math.sqrt(sum([e*e for e in efield]))
@@ -250,22 +244,19 @@ def solve_potential(domain, start, potential, temperature, times,
     '''
     Return ``(path, endtag)`` for one charge drifting from ``start`` through
     the velocity field derived on-the-fly from the interpolated scalar
-    potential.  ``path`` is the (len(times), ndims) array of positions.
+    potential.  ``path`` is the (len(times), ndims) array of positions;
+    ``endtag`` is one of ``DRIFT_NONE`` / ``DRIFT_PAD`` / ``DRIFT_SURFACE``.
 
-    The drift is a plain integration of the velocity field v = mu*E, with
-    E = grad(phi) taken from the potential that was solved WITH the no-flux
-    FR4 Neumann boundary condition.  NO path-termination event and NO
-    in-insulator velocity zeroing are imposed: whatever the charge does near
-    the FR4 surface (decelerate, slide tangentially, pile up) must emerge from
-    the field itself -- we simulate the physics, we do not dictate where the
-    charge is allowed to go.  If a trajectory fails to converge near the
-    surface that is a NUMERICAL problem to be solved by the integrator
-    settings (step size / method / tolerances), not by forcing the path to
-    stop.
+    With ``insulator=None`` the behaviour (and the returned ``path``) is
+    identical to before -- the full time window is integrated with no
+    termination -- and ``endtag`` is ``DRIFT_NONE``.
 
-    ``endtag`` is always ``DRIFT_NONE`` (kept for call-site compatibility).
-    The ``insulator`` argument is accepted for CLI compatibility but does NOT
-    alter the drift.
+    With an insulator mask the drift terminates when the charge reaches the
+    FR4 top surface: the path is padded with that terminal point for the
+    remaining ticks and tagged ``DRIFT_SURFACE`` (surface charge, NOT a pad
+    collection).  A charge that instead parks on a conductor (drift speed
+    collapses) is tagged ``DRIFT_PAD``; one still moving at the end is
+    ``DRIFT_NONE``.
     '''
     start = numpy.array(start, dtype=float)
     potential = numpy.asarray(potential)
@@ -275,12 +266,59 @@ def solve_potential(domain, start, potential, temperature, times,
     func = PotentialField(domain, potential, temperature,
                           method=method, verbose=verbose, insulator=insulator)
 
+    if insulator is None:
+        res = solve_ivp(func, [times[0], times[-1]], start, t_eval=times,
+                        rtol=0.0000000001, atol=0.0000000001,
+                        method='Radau',
+                        )
+        print("Last Point=", res['y'].T[-1]/units.mm)
+        return res['y'].T, DRIFT_NONE
+
+    # --- insulating-surface termination + ending classification ---
+    # FR4 top face (facing the drift gap).  The highest insulator z-index is the
+    # FR4 cell whose CENTRE sits at that node; its top face is half a cell above
+    # the node centre, i.e. (max index + 0.5)*spacing -- NOT (index + 1), which
+    # would place the plane a full cell too high (at the pad node centre) and
+    # leave a half-cell gap the descending electron never crosses.  This 9.95mm
+    # face coincides with the pad bottom and with the in_insulator rounding
+    # boundary (positions below it round to the FR4 node).  Charges drift DOWN
+    # (decreasing z) toward the pad plane; in the inter-pad gaps they reach this
+    # surface and must stop there.
+    ins = func.insulator
+    max_fr4_index = int(numpy.max(numpy.where(ins.any(axis=(0, 1)))[0]))
+    z_surface = float(domain.origin[2] + (max_fr4_index + 0.5) * domain.spacing[2])
+
+    def hit_surface(t, y):
+        return y[2] - z_surface
+    hit_surface.terminal = True
+    hit_surface.direction = -1   # fire only when descending through the surface
+
     res = solve_ivp(func, [times[0], times[-1]], start, t_eval=times,
                     rtol=0.0000000001, atol=0.0000000001,
-                    method='Radau',
+                    method='Radau', events=hit_surface,
                     )
-    print("Last Point=", res['y'].T[-1]/units.mm)
-    return res['y'].T, DRIFT_NONE
+
+    ys = res['y'].T
+    nt = len(times)
+    ndim = start.shape[0]
+    path = numpy.empty((nt, ndim))
+    n = min(len(ys), nt)
+    path[:n] = ys[:n]
+
+    surfaced = (res.status == 1) and len(res.t_events) and len(res.t_events[0])
+    if surfaced:
+        term = numpy.asarray(res.y_events[0][-1], dtype=float)  # point on surface
+        endtag = DRIFT_SURFACE
+    else:
+        term = ys[-1] if len(ys) else start
+        # PAD if the drift speed collapsed near a conductor, else still drifting
+        sp_end = float(numpy.sqrt((func(0.0, term) ** 2).sum()))
+        sp0 = float(numpy.sqrt((func(0.0, start) ** 2).sum()))
+        endtag = DRIFT_PAD if (sp0 > 0.0 and sp_end < 1e-2 * sp0) else DRIFT_NONE
+    if n < nt:
+        path[n:] = term
+    print("Last Point=", path[-1] / units.mm, "endtag=", endtag)
+    return path, endtag
 
 
 class ScalarField:
