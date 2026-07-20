@@ -354,3 +354,136 @@ def stencil_poisson_neumann(phi, solid_mask, coeff, res=None):
 
     res *= coeff
     return res
+
+
+def mirror_masks(insulator, lar):
+    '''
+    Pre-compute the geometry-only masks for the no-flux insulator boundary
+    realised as an interface *mirror projection* (see
+    :func:`mirror_project`).
+
+    Unlike the :func:`neumann_coeff` / :func:`stencil_poisson_neumann` pair --
+    which drops insulator neighbours from the free-cell relaxation and freezes
+    the insulator region -- this scheme relaxes the whole volume with plain
+    Laplace (:func:`stencil_poisson`) and imposes the no-flux face by copying
+    each insulator *surface* cell to the average of its adjacent LAr cells.
+    Setting the two nodes straddling an insulator--LAr face equal makes the
+    normal derivative across that face zero (normal E ~ 0) while leaving the
+    transverse variation of phi -- and hence the transverse E -- untouched.
+
+    A cell is an insulator *surface* cell iff it is an insulator cell with at
+    least one LAr (free, non-insulator, non-Dirichlet) neighbour.  Insulator
+    cells buried under a conductor (LAr count 0) and interior insulator cells
+    are left to plain Laplace so they still carry the field into the region
+    below the slab -- no shielding.
+
+    The masks depend only on the geometry, so they are built once and reused
+    every relaxation step; the per-step projection is then branch-free and
+    torch.compile-safe.
+
+    Parameters
+    ----------
+    insulator : N-D bool array (including boundary halo), True on insulator
+                cells.
+    lar       : N-D bool array (same shape), True on free LAr cells
+                (``(~insulator) & (~conductor)``), i.e. the cells whose phi is
+                relaxed and which an insulator face mirrors against.
+
+    Returns
+    -------
+    masks : dict with keys
+            ``'dirs'`` : list of ``(axis, shift, m)`` where ``m`` is the bool
+                         mask of insulator cells whose neighbour along
+                         ``roll(., shift, axis)`` is LAr;
+            ``'cnt'``  : float array, per-cell count of LAr neighbours;
+            ``'surf'`` : bool array, True on insulator surface cells
+                         (``cnt > 0``) -- the only cells the projection writes.
+
+    Raises
+    ------
+    ValueError
+        If ``insulator`` and ``lar`` disagree in shape, or overlap (a cell
+        flagged both insulator and LAr is contradictory).
+    '''
+    if tuple(insulator.shape) != tuple(lar.shape):
+        raise ValueError(
+            f"shape mismatch: insulator {tuple(insulator.shape)} != "
+            f"lar {tuple(lar.shape)}")
+
+    amod = arrays.module(insulator)
+    if bool(amod.any(insulator & lar)):
+        raise ValueError("insulator and lar masks overlap; they must be disjoint")
+
+    if arrays.is_torch(insulator):
+        cnt = amod.zeros(insulator.shape, dtype=amod.float64, device=insulator.device)
+    else:
+        cnt = amod.zeros(insulator.shape, dtype=amod.float64)
+
+    dirs = []
+    for axis in range(insulator.ndim):
+        for shift in (-1, 1):
+            # neighbour along (axis, shift) is LAr?  roll(lar, shift, axis)[i]
+            # is lar[i - shift]; iterating shift in (-1, +1) covers both the
+            # +axis and -axis face neighbours.
+            neigh_is_lar = amod.roll(lar, shift, axis)
+            m = insulator & neigh_is_lar
+            dirs.append((axis, shift, m))
+            if arrays.is_torch(insulator):
+                cnt = cnt + m.to(amod.float64)
+            else:
+                cnt = cnt + m.astype(amod.float64)
+
+    surf = cnt > 0
+    return {'dirs': dirs, 'cnt': cnt, 'surf': surf}
+
+
+def mirror_project(phi, masks):
+    '''
+    Apply the insulator no-flux mirror projection to ``phi`` in one branch-free
+    array pass, using the geometry masks from :func:`mirror_masks`.
+
+    Each insulator *surface* cell is set to the average of its LAr neighbours::
+
+        phi[surf] = ( sum over LAr-neighbour directions of phi_neighbour ) / cnt
+
+    All other cells -- LAr, Dirichlet, buried/interior insulator -- are returned
+    unchanged, so the plain-Laplace relaxation carries the field into the region
+    below the slab and the transverse phi profile (transverse E) is preserved.
+
+    The function is pure (returns a new array; does not mutate ``phi``), so it is
+    torch.compile-safe and composes cleanly with the relaxation sweep.  Apply it
+    each iteration after the plain :func:`stencil_poisson` update and before
+    :func:`edge_condition`.
+
+    Parameters
+    ----------
+    phi   : N-D field array (including boundary halo).
+    masks : dict returned by :func:`mirror_masks` for this geometry.
+
+    Returns
+    -------
+    phi_new : array of the same shape as ``phi`` with insulator surface cells
+              overwritten by the mirror average and every other cell unchanged.
+    '''
+    amod = arrays.module(phi)
+    acc = amod.zeros_like(phi)
+
+    for axis, shift, m in masks['dirs']:
+        if arrays.is_torch(phi):
+            mf = m.to(phi.dtype)
+        else:
+            mf = m.astype(phi.dtype)
+        # value of the LAr neighbour along (axis, shift): roll(phi, shift, axis).
+        acc = acc + amod.roll(phi, shift, axis) * mf
+
+    cnt = masks['cnt']
+    surf = masks['surf']
+    if arrays.is_torch(phi):
+        cnt = cnt.to(phi.dtype)
+    else:
+        cnt = cnt.astype(phi.dtype)
+    # clamp cnt to >= 1 so non-surface cells (cnt == 0) never divide by zero;
+    # their result is discarded by the `surf` select below.
+    denom = cnt + (cnt == 0)
+
+    return amod.where(surf, acc / denom, phi)
