@@ -16,7 +16,8 @@ from torch.profiler import profile, record_function, ProfilerActivity # For prof
 
 from .fdm_generic import (edge_condition, stencil, stencil_poisson,
                           stencil_poisson_harmonic, stencil_poisson_neumann,
-                          neumann_coeff, mirror_masks, mirror_project)
+                          neumann_coeff, mirror_masks, mirror_project,
+                          padplane_noflux_geom, padplane_noflux)
 
 # torch.set_default_dtype(torch.float32)
 # torch.float64 = torch.float32
@@ -30,28 +31,29 @@ def set_core2(dst, src, core):
 @torch.compile
 def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core,
                    core, periodic, spacing=1.0, source=None, epsilon=None,
-                   insulator=None, masks=None):
+                   masks=None):
     # Three-way relaxation step (branch is on None-ness, static per solve run,
     # so torch.compile specialises once with no recompilation blowup):
-    #   - insulator mask present : plain Laplace on the WHOLE volume (insulator
-    #                              cells included, NOT frozen), then the no-flux
-    #                              face is imposed by mirror_project -- each
-    #                              insulator surface cell is set to the average
-    #                              of its LAr neighbours.  NO epsilon.
+    #   - pad-plane no-flux masks present : plain Laplace on the WHOLE volume,
+    #                              then the node-centered no-flux is imposed by
+    #                              padplane_noflux -- the ghost node flanking each
+    #                              gap node on the pad plane is set equal to the
+    #                              drift-side node, so centered E_z = 0 AT the pad
+    #                              node itself.  NO epsilon.
     #   - epsilon present        : harmonic-mean Poisson (dielectric path);
     #   - otherwise              : plain Poisson/Laplace (unchanged default).
-    if insulator is None and epsilon is not None:
+    if masks is None and epsilon is not None:
         stencil_poisson_harmonic(iarr_pad, eps=epsilon, res=tmp_core)
     else:
         stencil_poisson(iarr_pad, source=source, spacing=spacing, res=tmp_core)
     iarr_pad[core] = bi_core + mutable_core * tmp_core
-    if insulator is not None:
-        # Mirror projection: enforce ∂φ/∂n=0 across every insulator--LAr face by
-        # copying each insulator surface cell to the average of its LAr
-        # neighbours.  Applied after the relaxation update and before
-        # edge_condition, per plan section 4 P2.  mirror_project is pure, so we
-        # write its result back into iarr_pad in place.
-        iarr_pad[...] = mirror_project(iarr_pad, masks)
+    if masks is not None:
+        # Node-centered pad-plane no-flux: set the ghost (non-drift-side) node of
+        # each gap node equal to its drift-side node so the centered z-derivative
+        # at the pad node is exactly zero.  Applied after the relaxation update
+        # and before edge_condition.  padplane_noflux is pure, so write its result
+        # back into iarr_pad in place.
+        iarr_pad[...] = padplane_noflux(iarr_pad, masks)
     edge_condition(iarr_pad, *periodic, info_msg=None)
 
 
@@ -98,34 +100,38 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
 
     epsilon_pad = torch.tensor(numpy.pad(epsilon, 1), requires_grad=False, dtype=_dtype).to(device) if epsilon is not None else None
 
-    # --- insulating-surface (Neumann no-flux) boundary, NO epsilon ---
-    # When an insulator mask is supplied, the whole volume (insulator cells
-    # included) relaxes with plain Laplace -- the insulator region is NOT frozen,
-    # so the field carries into the region below the slab (no shielding).  The
-    # no-flux face is imposed as an interface mirror projection (mirror_project):
-    # each insulator surface cell (an insulator cell with an LAr neighbour) is set
-    # to the average of its LAr neighbours, so ∂φ/∂n=0 across the face while the
-    # transverse φ profile -- and hence the transverse E -- is untouched.  The
-    # projection masks depend only on the geometry, so they are built once here on
-    # device and reused every step.  NO permittivity enters; the dielectric
-    # (epsilon) path is bypassed.  With insulator=None this whole block is skipped
-    # and the solve stays byte-identical to plain Laplace.
-    insulator_pad = None
+    # --- pad-plane no-flux (node-centered Neumann) boundary, NO epsilon ---
+    # The `insulator` argument is now only an ENABLE signal (its content is
+    # vestigial): when supplied, the whole volume relaxes with plain Laplace and
+    # the no-flux condition is imposed on the pixel/pad plane as a NODE-centered
+    # mirror.  The interface is auto-derived from the Dirichlet geometry
+    # (padplane_noflux_geom(barr): the unique partially-Dirichlet z-plane is the
+    # pad plane; its free cells are the gap nodes; the drift side is toward the
+    # cathode).  Each step the ghost node flanking a gap node is set equal to its
+    # drift-side node, so the centered z-derivative -- and hence E_z -- is exactly
+    # zero AT the pad node the drift integrator samples, while the transverse E is
+    # untouched and the region below the plane is not shielded.  The masks are
+    # geometry-only, so they are built once here (padded to the halo, on device)
+    # and reused every step.  NO permittivity enters; the dielectric (epsilon)
+    # path is bypassed.  With insulator=None this block is skipped and the solve
+    # stays byte-identical to plain Laplace.
     insulator_masks = None
     if insulator is not None:
-        insulator_bool = insulator.astype(numpy.bool)
-        insulator_pad = torch.tensor(numpy.pad(insulator_bool, 1),
-                                     requires_grad=False).to(device)
-        # LAr = free cells that are neither insulator nor Dirichlet boundary.
-        # Padded with False so an edge insulator cell never mirrors against a
-        # halo ghost; the halo is fixed by edge_condition after the projection.
-        lar_bool = numpy.invert(insulator_bool) & numpy.invert(barr.astype(numpy.bool))
-        lar_pad = torch.tensor(numpy.pad(lar_bool, 1),
-                               requires_grad=False).to(device)
-        insulator_masks = mirror_masks(insulator_pad, lar_pad)
+        geom = padplane_noflux_geom(barr.astype(numpy.bool))
+        # Pad the ghost mask with False (halo is never a ghost) and move it to the
+        # device so it conforms to iarr_pad; roll_shift/axis are unchanged by the
+        # padding (the ghost mask localises the roll to interior nodes).
+        ghost_mask_pad = torch.tensor(numpy.pad(geom['ghost_mask'], 1),
+                                      requires_grad=False).to(device)
+        insulator_masks = {'ghost_mask': ghost_mask_pad,
+                           'roll_shift': geom['roll_shift'],
+                           'axis': geom['axis']}
+        info_msg(f"pad-plane no-flux: z_pad={geom['z_pad']} "
+                 f"drift_sign={geom['drift_sign']:+d} "
+                 f"gap_nodes={int(geom['gap2d'].sum())}")
         if epsilon_pad is not None:
-            info_msg('insulator mask supplied: ignoring epsilon (NO dielectric '
-                     'path in the insulating-surface boundary)')
+            info_msg('insulator enable supplied: ignoring epsilon (NO dielectric '
+                     'path in the pad-plane no-flux boundary)')
             epsilon_pad = None
     # iarr_pad_source = iarr_pad.clone().detach().requires_grad_(False).to(device)
     source = None ## Variable to hold the source term for poisson equation, if phi0 is provided
@@ -211,7 +217,7 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
                 prev = iarr_pad.clone().detach().requires_grad_(False)
 
             # _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic)
-            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, spacing=1.0, source=source, epsilon=epsilon_pad, insulator=insulator_pad, masks=insulator_masks)
+            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, spacing=1.0, source=source, epsilon=epsilon_pad, masks=insulator_masks)
             # stencil(iarr_pad, tmp_core)
             # iarr_pad[core] = bi_core + mutable_core * tmp_core
             # edge_condition(iarr_pad, *periodic, info_msg=None)
