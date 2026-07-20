@@ -178,11 +178,12 @@ want velocity/drift3d \
      --velocity velocity/drift3d
 
 echo "=== Paths ==="
-## 10x10 grid of 100 launch points straddling the 0.6mm inter-pixel gap
-## (x,y in [1.5,3.0]mm), launched at z=29.9mm -- the last full-velocity node
-## before the cathode (z=30mm, node 300).
-dist=(1.5000 1.6667 1.8333 2.0000 2.1667 2.3333 2.5000 2.6667 2.8333 3.0000)
-dist=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0 2.1 2.2 2.3 2.4 2.5 2.6 2.7 2.8 2.9 3.0 3.1 3.2 3.3 3.4 3.5 3.6 3.7 3.8 3.9 4.0 4.1 4.2)
+## 10x10 grid of 100 launch points spanning ONE pixel tile (x,y equally spaced
+## 0..4.3mm, the full 4.4mm pitch), launched at z=29.9mm -- the last full-velocity
+## node before the cathode (z=30mm, node 300).  This 10x10-per-pixel layout is
+## what induce-pixel's tiler (_shift_paths_pixel_grid, npaths=10) expects: it
+## replicates these single-pixel paths across the weighting field's pixel grid.
+dist=(0.0000 0.4778 0.9556 1.4333 1.9111 2.3889 2.8667 3.3444 3.8222 4.3000)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
