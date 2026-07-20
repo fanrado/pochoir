@@ -487,3 +487,152 @@ def mirror_project(phi, masks):
     denom = cnt + (cnt == 0)
 
     return amod.where(surf, acc / denom, phi)
+
+
+def padplane_noflux_geom(barr):
+    '''
+    Locate the pad-plane no-flux (Neumann) interface for the *node-centered*
+    mirror and pre-compute the geometry-only masks used by
+    :func:`padplane_noflux`.
+
+    This SUPERSEDES the face-centered :func:`mirror_masks` / :func:`mirror_project`
+    pair for the pixel-plane case.  The face-centered mirror equates an insulator
+    *body* cell to its LAr neighbour (phi[i] = phi[i+1]); that only zeros the
+    normal field at the virtual half-node *between* two grid nodes -- a location
+    the nodal central-difference E never samples -- so the field the drift
+    integrator sees at the node is unchanged.  Here the interface is placed *on* a
+    node (the pixel/pad plane): the two nodes flanking it along the normal are set
+    equal (phi[z_pad-1] = phi[z_pad+1] on the gap columns), so the centered
+    derivative ``-(phi[z_pad+1]-phi[z_pad-1])/(2*dz)`` is exactly zero AT the pad
+    node itself.
+
+    The interface is auto-derived from the Dirichlet geometry (no hand-crafted
+    mask):
+
+    - ``z_pad`` is the unique *partially* Dirichlet plane along the last axis
+      (mix of fixed pad/grid cells and free gap cells).  A fully-Dirichlet plane
+      (the cathode) or a fully-free plane is not an interface.
+    - ``gap2d`` are the free (gap) nodes on that plane -- the nodes made no-flux.
+    - ``drift_sign`` (+1/-1) points from the pad plane toward the LAr drift
+      volume, taken as the side of the fully-Dirichlet (cathode) plane.  The node
+      on the *opposite* (non-drift) side is the ghost that gets overwritten, so
+      the drift-side field is never corrupted.
+
+    Parameters
+    ----------
+    barr : N-D bool array (UNPADDED), True on Dirichlet (fixed) cells.  The normal
+           to the pad plane is the last axis.
+
+    Returns
+    -------
+    masks : dict with keys
+            ``'z_pad'``      : int, pad-plane index on the last axis;
+            ``'gap2d'``      : bool array over the transverse axes, gap nodes;
+            ``'drift_sign'`` : int, +1/-1 toward the drift (cathode) side;
+            ``'ghost_mask'`` : full-shape bool, True on the ghost plane
+                               (``z_pad - drift_sign``) at gap nodes -- the only
+                               cells :func:`padplane_noflux` overwrites;
+            ``'roll_shift'`` : int (``-2*drift_sign``); rolling phi by this along
+                               ``axis`` brings the drift-side plane
+                               (``z_pad + drift_sign``) onto the ghost plane;
+            ``'axis'``       : int, the normal axis (last).
+
+    Raises
+    ------
+    ValueError
+        If there is not exactly one partially-Dirichlet plane, or the pad plane
+        is on the domain edge (ghost/drift neighbour out of range).
+    '''
+    amod = arrays.module(barr)
+    axis = barr.ndim - 1
+    plane_size = 1
+    for d in range(barr.ndim - 1):
+        plane_size *= barr.shape[d]
+
+    # Dirichlet count per index along the normal axis (as a plain python list so
+    # comparisons below are backend-agnostic).
+    counts = barr.sum(axis=tuple(range(barr.ndim - 1)))
+    counts = [int(c) for c in counts.tolist()]
+
+    partial = [z for z in range(barr.shape[axis])
+               if 0 < counts[z] < plane_size]
+    if len(partial) != 1:
+        raise ValueError(
+            f"padplane_noflux_geom: expected exactly one partially-Dirichlet "
+            f"plane (the pad plane); found {partial} with per-plane Dirichlet "
+            f"counts {counts} (plane_size={plane_size})")
+    z_pad = partial[0]
+
+    full = [int(z) for z in range(barr.shape[axis]) if counts[z] == plane_size]
+    above = [z for z in full if z > z_pad]
+    below = [z for z in full if z < z_pad]
+    if above and not below:
+        drift_sign = 1
+    elif below and not above:
+        drift_sign = -1
+    elif above and below:
+        # both sides bounded by a Dirichlet plane: drift is the larger free gap.
+        drift_sign = 1 if (min(above) - z_pad) >= (z_pad - max(below)) else -1
+    else:
+        # no fully-Dirichlet plane found; assume the drift volume is toward +z.
+        drift_sign = 1
+
+    ghost_z = z_pad - drift_sign
+    src_z = z_pad + drift_sign
+    if not (0 <= ghost_z < barr.shape[axis]) or not (0 <= src_z < barr.shape[axis]):
+        raise ValueError(
+            f"padplane_noflux_geom: pad plane z_pad={z_pad} too close to the "
+            f"domain edge for a node-centered mirror (ghost={ghost_z}, "
+            f"src={src_z}, n={barr.shape[axis]})")
+
+    # gap nodes = free (non-Dirichlet) cells on the pad plane.
+    pad_idx = [slice(None)] * barr.ndim
+    pad_idx[axis] = z_pad
+    gap2d = ~barr[tuple(pad_idx)]
+
+    # full-shape ghost mask: True only on the ghost plane at gap nodes.
+    ghost_mask = amod.zeros_like(barr)
+    ghost_idx = [slice(None)] * barr.ndim
+    ghost_idx[axis] = ghost_z
+    ghost_mask[tuple(ghost_idx)] = gap2d
+
+    return {'z_pad': z_pad, 'gap2d': gap2d, 'drift_sign': drift_sign,
+            'ghost_mask': ghost_mask, 'roll_shift': -2 * drift_sign, 'axis': axis}
+
+
+def padplane_noflux(phi, masks):
+    '''
+    Apply the node-centered pad-plane no-flux mirror to ``phi`` in one branch-free
+    array pass, using the geometry from :func:`padplane_noflux_geom`.
+
+    Each ghost node (the non-drift-side neighbour of a gap node on the pad plane)
+    is overwritten with the drift-side neighbour's value::
+
+        phi[.., z_pad - drift_sign] = phi[.., z_pad + drift_sign]   (on gap nodes)
+
+    so the centered z-derivative at the pad node is exactly zero (E_z = 0 at the
+    node the drift integrator samples) while the transverse phi profile -- and
+    hence the transverse E -- is untouched.  All other cells are unchanged, so the
+    plain-Laplace relaxation carries the field into the region below the plane (no
+    shielding).
+
+    The function is pure (returns a new array; does not mutate ``phi``) and so is
+    torch.compile-safe.  ``masks['ghost_mask']`` must match ``phi`` in shape,
+    backend and device (the solver pads/moves it once at set-up); the drift-side
+    value is fetched by rolling ``phi`` along the normal axis by
+    ``masks['roll_shift']``.
+
+    Parameters
+    ----------
+    phi   : N-D field array (including boundary halo).
+    masks : dict returned by :func:`padplane_noflux_geom` (with ``ghost_mask``
+            conformed to ``phi``).
+
+    Returns
+    -------
+    phi_new : array of the same shape as ``phi`` with the ghost plane's gap nodes
+              overwritten by the drift-side value and every other cell unchanged.
+    '''
+    amod = arrays.module(phi)
+    rolled = amod.roll(phi, masks['roll_shift'], masks['axis'])
+    return amod.where(masks['ghost_mask'], rolled, phi)
