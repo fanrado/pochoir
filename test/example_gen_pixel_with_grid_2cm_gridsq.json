@@ -1,0 +1,18 @@
+{
+    "HoleRadius" : 1.9,
+    "PcbWidth" : 1.6,
+    "GridHoleShape" : "square",
+    "pixelPlaneLowEdgePosition" : 9.9,
+    "pixelPlaneWidth" : 0.1,
+    "padThickness" : 0.05,
+    "FR4Thickness" : 0.1,
+    "pixelSize" : 3.8,
+    "pixelGap" : 0.6,
+    "chamfer_r": 0.4,
+    "Npixels" : 5,
+    "LArPermittivity": 1.5,
+    "FR4Permittivity": 4.5,
+    "enableInsulatorFR4": false,
+    "driftZDepth": 30,
+    "nGridPoints": 10
+}
