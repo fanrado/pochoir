@@ -117,7 +117,14 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
     # stays byte-identical to plain Laplace.
     insulator_masks = None
     if insulator is not None:
-        geom = padplane_noflux_geom(barr.astype(numpy.bool))
+        # Pass the insulator (FR4 slab) mask so a shield grid -- a second,
+        # detached partially-Dirichlet plane -- is disambiguated from the pad
+        # electrode; the no-flux interface stays on the pad/FR4 plane and the
+        # grid is treated as an ordinary Dirichlet electrode.  Without a shield
+        # grid this does not change the derived geometry.
+        geom = padplane_noflux_geom(barr.astype(numpy.bool),
+                                    insulator=insulator.astype(numpy.bool)
+                                    if insulator is not None else None)
         # Pad the ghost mask with False (halo is never a ghost) and move it to the
         # device so it conforms to iarr_pad; roll_shift/axis are unchanged by the
         # padding (the ghost mask localises the roll to interior nodes).

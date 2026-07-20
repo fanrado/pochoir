@@ -489,7 +489,7 @@ def mirror_project(phi, masks):
     return amod.where(surf, acc / denom, phi)
 
 
-def padplane_noflux_geom(barr):
+def padplane_noflux_geom(barr, insulator=None):
     '''
     Locate the pad-plane no-flux (Neumann) interface for the *node-centered*
     mirror and pre-compute the geometry-only masks used by
@@ -522,6 +522,16 @@ def padplane_noflux_geom(barr):
     ----------
     barr : N-D bool array (UNPADDED), True on Dirichlet (fixed) cells.  The normal
            to the pad plane is the last axis.
+    insulator : N-D bool array (UNPADDED) or None.  The FR4 no-flux slab mask
+           (the same array supplied to the solver).  Used ONLY to disambiguate
+           the pad electrode when a shield grid is present: a shield grid is a
+           SECOND, detached partially-Dirichlet plane (its apertures leave free
+           cells), so the partial planes are no longer a single contiguous block.
+           The no-flux interface belongs to the pad/FR4, so ``partial`` is
+           restricted to the contiguous block carrying the FR4 slab; any other
+           partial plane (the shield grid) is left as an ordinary Dirichlet
+           electrode, untouched by the mirror.  ``None`` (no shield-grid path) is
+           byte-identical to the original single-electrode behaviour.
 
     Returns
     -------
@@ -567,6 +577,38 @@ def padplane_noflux_geom(barr):
         raise ValueError(
             f"padplane_noflux_geom: no partially-Dirichlet plane (the pad plane) "
             f"found; per-plane Dirichlet counts {counts} (plane_size={plane_size})")
+
+    # Shield-grid disambiguation.  A shield grid (GridHoleShape square/circular)
+    # is drawn as a solid plane with apertures well ABOVE the pad, so it appears
+    # as a second partially-Dirichlet plane detached from the pad block -- the
+    # partial planes are then non-contiguous.  The no-flux interface is the
+    # pad/FR4, so when an insulator mask is supplied keep only the contiguous
+    # run of `partial` that carries the FR4 slab (the insulator's z-plane(s),
+    # which are bonded to the pad); every other partial plane (the shield grid)
+    # is left out of the interface derivation and stays an ordinary Dirichlet
+    # electrode fixed at its own potential, untouched by the mirror.  With
+    # insulator=None, or when `partial` is already one block, this is a no-op so
+    # non-shield-grid runs are byte-identical.
+    if insulator is not None and partial != list(range(partial[0], partial[-1] + 1)):
+        icounts = insulator.sum(axis=tuple(range(barr.ndim - 1)))
+        insul_z = [z for z in range(barr.shape[axis]) if int(icounts[z]) > 0]
+        if insul_z:
+            # split `partial` into maximal contiguous runs
+            runs, run = [], [partial[0]]
+            for z in partial[1:]:
+                if z == run[-1] + 1:
+                    run.append(z)
+                else:
+                    runs.append(run); run = [z]
+            runs.append(run)
+            # the pad block is the run overlapping the FR4 slab (or, if the slab
+            # sits on a fully-free plane, the run immediately adjacent to it).
+            pad_runs = [r for r in runs
+                        if any((iz in r) or (iz + 1 in r) or (iz - 1 in r)
+                               for iz in insul_z)]
+            if len(pad_runs) == 1:
+                partial = pad_runs[0]
+
     if partial != list(range(partial[0], partial[-1] + 1)):
         raise ValueError(
             f"padplane_noflux_geom: partially-Dirichlet planes {partial} are not "
