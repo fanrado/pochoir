@@ -1151,8 +1151,9 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
     # sys.exit()
     if npixels>1:
         geom = _load_pixel_geometry(configs)
+        print(f'geom: {geom}')
         shifted_paths = _shift_paths_pixel_grid(
-            the_paths=the_paths, npaths=10,
+            the_paths=the_paths, npaths=10, # change back to 10 after checking the many paths
             npixels=geom["npixels"],
             pixel_pitch=geom["pixel_pitch"],
             pixel_gap=geom["pixel_gap"],
