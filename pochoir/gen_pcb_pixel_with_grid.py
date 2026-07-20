@@ -259,6 +259,37 @@ def generator(dom, cfg):
 
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width, chamfer_r=chamfer_r, fr4_bottom=fr4_bottom, n_fr4=n_fr4)
 
+    # --- optional thick pad conductor (pochoir-h88o) ---------------------------
+    # Give the weighting pads the SAME z-thickness as the drift generator's
+    # grounded pad (padThicknessCells, pochoir-dl3n) so the two fields see an
+    # identical electrode geometry.  A 1-cell pad is an infinitely-thin sheet;
+    # drift charges terminate ~mid-conductor (z~9.95mm) INSIDE the 3-cell pad, so
+    # the weighting field must hold its Dirichlet value through that whole depth
+    # or W sampled at the path endpoint is interpolated below the electrode
+    # (W != 1) and the collected charge comes out wrong.  Unlike the drift pad
+    # (all grounded, phi=0), each weighting pad keeps its OWN surface value -- 1
+    # on the collecting pixel, 0 on the neighbours -- copied DOWNWARD under its
+    # footprint (the weighting analogue of "grounding the pixel").  Guarded by
+    # 'padThicknessCells' (default 1 -> byte-unchanged for every existing config).
+    n_pad_cells = int(cfg.get('padThicknessCells', 1))
+    if n_pad_cells > 1:
+        z_top = pp_loweredge + pp_width            # drift-facing pad surface
+        pad_foot = barr[:, :, z_top] != 0          # (Nx, Ny) pad footprint
+        surf_val = arr[:, :, z_top].copy()         # weighting value (1 target / 0 else)
+        for k in range(1, n_pad_cells):
+            z = z_top - k
+            if z < 0:
+                raise ValueError(
+                    f'padThicknessCells={n_pad_cells} extends the pad below z=0')
+            barr[:, :, z][pad_foot] = 1                    # fixed conductor node
+            arr[:, :, z][pad_foot] = surf_val[pad_foot]    # preserve per-pad W value
+        # keep the no-flux insulator mask disjoint from the (now thicker) pad;
+        # the mask is only an enable signal for the solver's node-centered BC.
+        if insulator is not None:
+            insulator[barr != 0] = False
+        log.info('thick weighting pad: %d cells, top surface z=%d, extended down to z=%d',
+                 n_pad_cells, z_top, z_top - n_pad_cells + 1)
+
     log.debug('p_size=%s, p_gap=%s, n_pix=%s, pp_width=%s, pp_loweredge=%s',
               p_size, p_gap, n_pix, pp_width, pp_loweredge)
 
