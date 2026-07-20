@@ -570,6 +570,36 @@ def generator(dom, cfg, info_msg=None):
 
     draw_pixel_plane(arr,barr,p_size,p_gap,n_pix,pp_loweredge,pp_width,cathodePotential,gridPotential, epsilon=epsilon, chamfer_r=chamfer_r, chamferMode=chamferMode, fr4_bottom=fr4_bottom, n_fr4=n_fr4)
 
+    # --- optional thick pad conductor (pochoir-dl3n) ---------------------------
+    # A 1-cell pad is an infinitely-thin sheet: its stored value is grounded but
+    # the central-difference field STRADDLES it, so E != 0 "inside" the metal and
+    # field lines leak through to the region below -- drift charges then slip past
+    # the pad instead of terminating on it.  Give the pad a real z-thickness so it
+    # has a field-free interior node: field lines terminate mid-conductor and
+    # charges stop at the pad.  The pad TOP surface stays at the pixel plane; the
+    # conductor is extended DOWNWARD under its own footprint, with EVERY pad node
+    # held at the same ground (phi = 0, the pixel grounding condition:
+    # phi[i]=phi[i-1]=phi[i-2]=0).  Guarded by 'padThicknessCells' (default 1 ->
+    # byte-unchanged for every existing config).
+    n_pad_cells = int(cfg.get('padThicknessCells', 1))
+    if n_pad_cells > 1:
+        z_top = pp_loweredge + pp_width            # drift-facing pad surface
+        pad_foot = barr[:, :, z_top] != 0          # (Nx, Ny) pad footprint
+        for k in range(1, n_pad_cells):
+            z = z_top - k
+            if z < 0:
+                raise ValueError(
+                    f'padThicknessCells={n_pad_cells} extends the pad below z=0')
+            barr[:, :, z][pad_foot] = 1            # grounded conductor node
+            arr[:, :, z][pad_foot] = 0.0           # phi = 0 (pixel grounding)
+        # keep the no-flux insulator mask disjoint from the (now thicker) pad;
+        # the mask is only an enable signal for the solver's node-centered BC.
+        if insulator is not None:
+            insulator[barr != 0] = False
+        if info_msg is not None:
+            info_msg(f'thick pad: {n_pad_cells} cells (phi=0), top surface '
+                     f'z={z_top}, extended down to z={z_top - n_pad_cells + 1}')
+
     # The no-flux insulator slab must be disjoint from every conductor (barr):
     # the pad sits on TOP of the laminate (fr4_bottom) so the bottom n_fr4 slab
     # cells never coincide with a Cu pad or the cathode plane.  Assert it here,

@@ -7,6 +7,7 @@
     "pixelPlaneLowEdgePosition" : 9.9,
     "pixelPlaneWidth" : 0.1,
     "padThickness" : 0.05,
+    "padThicknessCells" : 3,
     "FR4Thickness" : 0.1,
     "pixelSize" : 3.8,
     "pixelGap" : 0.6,

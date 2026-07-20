@@ -540,8 +540,9 @@ def padplane_noflux_geom(barr):
     Raises
     ------
     ValueError
-        If there is not exactly one partially-Dirichlet plane, or the pad plane
-        is on the domain edge (ghost/drift neighbour out of range).
+        If there is no partially-Dirichlet plane, if the partial planes are not
+        a contiguous block (a single electrode structure), or if the drift-facing
+        pad plane is on the domain edge (ghost/drift neighbour out of range).
     '''
     amod = arrays.module(barr)
     axis = barr.ndim - 1
@@ -554,28 +555,41 @@ def padplane_noflux_geom(barr):
     counts = barr.sum(axis=tuple(range(barr.ndim - 1)))
     counts = [int(c) for c in counts.tolist()]
 
-    partial = [z for z in range(barr.shape[axis])
-               if 0 < counts[z] < plane_size]
-    if len(partial) != 1:
+    # Partially-Dirichlet planes = the electrode plane(s) mixing fixed pad/grid
+    # cells with free gap cells.  A single-cell pad gives one such plane; a pad
+    # given real thickness (>=2 cells) gives a CONTIGUOUS block of them.  Require
+    # the block to be contiguous (one electrode structure) and take the no-flux
+    # interface to be its DRIFT-FACING face -- the gap cells there sit next to the
+    # drift volume, so that is where E_z must vanish.
+    partial = sorted(z for z in range(barr.shape[axis])
+                     if 0 < counts[z] < plane_size)
+    if not partial:
         raise ValueError(
-            f"padplane_noflux_geom: expected exactly one partially-Dirichlet "
-            f"plane (the pad plane); found {partial} with per-plane Dirichlet "
-            f"counts {counts} (plane_size={plane_size})")
-    z_pad = partial[0]
+            f"padplane_noflux_geom: no partially-Dirichlet plane (the pad plane) "
+            f"found; per-plane Dirichlet counts {counts} (plane_size={plane_size})")
+    if partial != list(range(partial[0], partial[-1] + 1)):
+        raise ValueError(
+            f"padplane_noflux_geom: partially-Dirichlet planes {partial} are not "
+            f"contiguous; expected a single electrode block (per-plane counts "
+            f"{counts})")
+    zlo, zhi = partial[0], partial[-1]
 
     full = [int(z) for z in range(barr.shape[axis]) if counts[z] == plane_size]
-    above = [z for z in full if z > z_pad]
-    below = [z for z in full if z < z_pad]
+    above = [z for z in full if z > zhi]
+    below = [z for z in full if z < zlo]
     if above and not below:
         drift_sign = 1
     elif below and not above:
         drift_sign = -1
     elif above and below:
         # both sides bounded by a Dirichlet plane: drift is the larger free gap.
-        drift_sign = 1 if (min(above) - z_pad) >= (z_pad - max(below)) else -1
+        drift_sign = 1 if (min(above) - zhi) >= (zlo - max(below)) else -1
     else:
         # no fully-Dirichlet plane found; assume the drift volume is toward +z.
         drift_sign = 1
+
+    # drift-facing face of the electrode block: its high-z end if drift is +z.
+    z_pad = zhi if drift_sign > 0 else zlo
 
     ghost_z = z_pad - drift_sign
     src_z = z_pad + drift_sign
