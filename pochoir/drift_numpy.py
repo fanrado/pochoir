@@ -21,9 +21,6 @@ from pochoir import lar
 
 # Drift-path ending classification (P4 insul-bc, EPIC pochoir-ktj0):
 DRIFT_NONE = 0      # still drifting / uncollected at the end of the time window
-DRIFT_PAD = 1       # parked on a conductor pad -> normal charge collection
-DRIFT_SURFACE = 2   # terminated at the FR4 insulator surface -> SURFACE CHARGE
-                    # (terminal, but NOT counted as a pad collection)
 
 class Simple:
     '''
