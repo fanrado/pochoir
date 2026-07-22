@@ -968,7 +968,7 @@ def induce(ctx, charge, weighting, paths, average,nstrips, output):
                 charge = charge,
                 domain=domain, paths=paths,average=average,nsteps=nsteps, weighting=weighting)
 
-def _shift_paths_pixel_grid(the_paths, npaths=10, npixels=5, pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8):
+def _shift_paths_pixel_grid(the_paths, npaths=10, npixels=5, pixel_pitch=4.4, pixel_gap=0.6, pixel_size=3.8, pad_center=None):
     """Replicate drift paths across a 2D pixel grid by applying spatial offsets.
 
     Takes a set of drift paths defined relative to a single pixel and tiles them
@@ -985,6 +985,12 @@ def _shift_paths_pixel_grid(the_paths, npaths=10, npixels=5, pixel_pitch=4.4, pi
         pixel_pitch: Center-to-center distance between adjacent pixels (mm).
         pixel_gap: Gap between adjacent pixel edges (mm).
         pixel_size: Size of a single pixel (mm).
+        pad_center: Optional (x, y) physical center of the collecting pad in the
+            weighting domain.  When given, the tiled base pixel is aligned to it
+            so on-metal endpoints sample the pinned W=1 cells exactly.  When None,
+            the center is derived from the pitch formula (legacy behaviour), which
+            can be off by up to one cell from where the generator rasterized the
+            pad.
 
     Returns:
         List of shifted paths covering the full pixel grid, each path being a
@@ -992,8 +998,11 @@ def _shift_paths_pixel_grid(the_paths, npaths=10, npixels=5, pixel_pitch=4.4, pi
     """
     npix = int(npixels/2)
     nedge = npaths // 2  # scales with npaths; averaging by (npaths//10) gives same output as npaths=10
-    center_pos_x = npix*pixel_pitch + pixel_gap/2 + pixel_size/2
-    center_pos_y = npix*pixel_pitch + pixel_gap/2 + pixel_size/2
+    if pad_center is None:
+        center_pos_x = npix*pixel_pitch + pixel_gap/2 + pixel_size/2
+        center_pos_y = npix*pixel_pitch + pixel_gap/2 + pixel_size/2
+    else:
+        center_pos_x, center_pos_y = pad_center
     new_shifted_paths = []
     for ix_pix in range(npix):
         for lvl in range(npaths):
@@ -1152,12 +1161,27 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
     if npixels>1:
         geom = _load_pixel_geometry(configs)
         print(f'geom: {geom}')
+        # Align the tiled collecting pixel to where the weighting generator
+        # actually pinned the collecting pad (the only electrode held at W=1),
+        # read from the solved weighting potential via the domain axes.  This
+        # removes the sub-cell offset between the pitch formula and the pinned
+        # pad that otherwise samples on-metal edge/corner endpoints just past
+        # the W=1 edge (Ramo requires W=1 for any charge on the collecting pad).
+        _on = numpy.isclose(wpot, 1.0).any(axis=2)
+        _ix, _iy = numpy.where(_on)
+        pad_center = None
+        if _ix.size:
+            _xs, _ys = dom.linspaces[0], dom.linspaces[1]
+            pad_center = (0.5*(_xs[_ix.min()] + _xs[_ix.max()]),
+                          0.5*(_ys[_iy.min()] + _ys[_iy.max()]))
+            print(f'collecting-pad center (aligned to pinned W=1 mask): {pad_center}')
         shifted_paths = _shift_paths_pixel_grid(
             the_paths=the_paths, npaths=10, # change back to 10 after checking the many paths
             npixels=geom["npixels"],
             pixel_pitch=geom["pixel_pitch"],
             pixel_gap=geom["pixel_gap"],
             pixel_size=geom["pixel_size"],
+            pad_center=pad_center,
         )
     # numpy.save('store/shifted_paths.npy', shifted_paths)
     # numpy.save('store/old_paths.npy', the_paths)
