@@ -50,12 +50,31 @@ class Simple:
             #print ("interp dim:", dim, rang.shape, vfield[dim].shape)
             points.append(rang)
 
+        # --- periodic transverse wrap (per,per,fix drift tile), pochoir-9rjv ---
+        # The drift tile is periodic in x,y with period shape*spacing (e.g. 4.4mm)
+        # and the pixel pad is centered ON the seam (x=4.4 == x=0).  Append the
+        # 0-slice as a wrap node on the transverse axes so the interpolator is
+        # valid across the seam; positions are wrapped modulo the period in
+        # __call__.  Without this a strong transverse (focusing) field pushes
+        # near-seam electrons past the domain edge, where RGI fill_value=0 freezes
+        # them ~1mm above the pad instead of letting them wrap onto the pad center.
+        self.period = numpy.array([shape[d]*spacing[d]
+                                   for d in range(len(shape))], dtype=float)
+        self.periodic = (0, 1)  # transverse axes of the per,per,fix drift tile
+        vfield = list(vfield)
+        for d in self.periodic:
+            points[d] = numpy.append(points[d], points[d][0] + self.period[d])
+            vfield = [numpy.concatenate([c, numpy.take(c, [0], axis=d)], axis=d)
+                      for c in vfield]
+
         self.interp = [
             RGI(points, component, fill_value=0.0)
             for component in vfield]
 
     def inside(self, point):
         for i,p in enumerate(point):
+            if i in self.periodic:   # wrapped into [0,period) in __call__; always in range
+                continue
             if p < self.bb[0][i] or p > self.bb[1][i]:
                 return False
         return True
@@ -82,6 +101,12 @@ class Simple:
         '''
         self.calls += 1
         speed_unit = units.mm/units.us
+        # wrap transverse coords onto the periodic tile before field lookup so an
+        # electron crossing the seam (pad center) re-enters and reaches the pad
+        # instead of freezing at the domain edge (pochoir-9rjv).
+        pos = numpy.array(pos, dtype=float)
+        for d in self.periodic:
+            pos[d] = pos[d] % self.period[d]
         if self.inside(pos):
             velo = self.interpolate(pos)
             what = "interp"
@@ -167,9 +192,24 @@ class PotentialField:
 
         # Use the exact grid coordinate axes (shape-length) so the axes
         # match the potential array shape exactly.
-        points = domain.linspaces
+        points = list(domain.linspaces)
 
         potential = numpy.asarray(potential)
+        # --- periodic transverse wrap (per,per,fix drift tile), pochoir-9rjv ---
+        # The drift tile is periodic in x,y with period shape*spacing (e.g. 4.4mm)
+        # and the pixel pad is centered ON the seam (x=4.4 == x=0).  Append the
+        # 0-slice as a wrap node on the transverse axes so phi (and its gradient)
+        # are correct ACROSS the seam; positions and finite-difference samples are
+        # wrapped modulo the period below.  Without this, an electron pushed past
+        # the transverse edge by a strong (focusing) field freezes ~1mm above the
+        # pad instead of wrapping onto the pad center.
+        self.period = numpy.array([domain.shape[d]*domain.spacing[d]
+                                   for d in range(len(domain.shape))], dtype=float)
+        self.periodic = (0, 1)  # transverse axes of the per,per,fix drift tile
+        for d in self.periodic:
+            points[d] = numpy.append(points[d], points[d][0] + self.period[d])
+            potential = numpy.concatenate(
+                [potential, numpy.take(potential, [0], axis=d)], axis=d)
         # fill_value=None + bounds_error=False -> extrapolate/clamp instead
         # of injecting a spurious 0 that would create a huge false gradient
         # at the (periodic) transverse edges.
@@ -178,6 +218,8 @@ class PotentialField:
 
     def inside(self, point):
         for i, p in enumerate(point):
+            if i in self.periodic:   # wrapped into [0,period) in __call__; always in range
+                continue
             if p < self.bb[0][i] or p > self.bb[1][i]:
                 return False
         return True
@@ -201,12 +243,20 @@ class PotentialField:
             h = 0.5 * self.spacing[dim]
             pp = pos.copy()
             pm = pos.copy()
-            # clamp the +/- sample points inside the domain
-            phigh = min(pos[dim] + h, hi[dim])
-            plow = max(pos[dim] - h, lo[dim])
-            pp[dim] = phigh
-            pm[dim] = plow
-            denom = phigh - plow
+            if dim in self.periodic:
+                # periodic central difference across the seam (pochoir-9rjv):
+                # wrap the +/- samples so the gradient at the pad center (seam)
+                # uses the true neighbour, not a clamped one-sided value.
+                pp[dim] = (pos[dim] + h) % self.period[dim]
+                pm[dim] = (pos[dim] - h) % self.period[dim]
+                denom = 2.0 * h
+            else:
+                # clamp the +/- sample points inside the domain
+                phigh = min(pos[dim] + h, hi[dim])
+                plow = max(pos[dim] - h, lo[dim])
+                pp[dim] = phigh
+                pm[dim] = plow
+                denom = phigh - plow
             if denom <= 0.0:
                 efield[dim] = 0.0
                 continue
@@ -218,6 +268,12 @@ class PotentialField:
         Return the drift velocity vector at location (time independent).
         '''
         self.calls += 1
+        # wrap transverse coords onto the periodic tile before field lookup so an
+        # electron crossing the seam (pad center) re-enters and reaches the pad
+        # instead of freezing at the domain edge (pochoir-9rjv).
+        pos = numpy.asarray(pos, dtype=float).copy()
+        for d in self.periodic:
+            pos[d] = pos[d] % self.period[d]
         if not self.inside(pos):
             # Outside the solved domain there is simply no field data; this is a
             # data-availability limit, NOT an imposed physics condition.
