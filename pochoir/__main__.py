@@ -1214,7 +1214,6 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
 
     dQ = Q[:, 1:] - Q[:, :-1]
     if plot:
-        import os
         import matplotlib.pyplot as plt
         os.makedirs(STORE_DIR, exist_ok=True)
         plt.figure(figsize=(10,6))
