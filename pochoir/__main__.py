@@ -2352,21 +2352,31 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
               help="Convergence tolerance on max|phi_k - phi_(k-1)| in volts")
 @click.option("--max-iters", type=int, default=20,
               help="Maximum outer iterations before reporting the achieved delta")
+@click.option("--field", type=click.Choice(["drift", "weighting"]),
+              default="drift",
+              help="Which field to solve (def: drift)")
 @click.pass_context
-def hybrid_iterate(ctx, coarse_config, fine_config, interface, tol, max_iters):
+def hybrid_iterate(ctx, coarse_config, fine_config, interface, tol, max_iters,
+                   field):
     '''
-    Task13 iterative hybrid near/far drift-field solve (drift field + paths).
+    Task13 iterative hybrid near/far field solve.
 
     Alternates a 0.05mm near solve with a full-volume 0.4mm re-solve in which
     the near region FLOATS (stitched values are initial values only), then
-    refines the converged field onto the 0.1mm full grid and runs
-    velo/starts/drift on it.  Unlike `near-far-solve` the near region is never
-    pinned inside the volume; only the z=interface plane is.
+    refines the converged field onto the 0.1mm full grid.  Unlike
+    `near-far-solve` the near region is never pinned inside the volume; only the
+    z=interface plane is.
+
+    --field drift (default) solves the periodic single-pixel drift tile ->
+    potential/drift3d; --field weighting solves the non-periodic 5x5 unit probe
+    -> potential/weight3d.  Both share the store, which is what lets
+    `induce-pixel` see paths/drift3d and potential/weight3d together.  The
+    velo/starts/drift/induce-pixel chain is run from the shell script, not here.
     '''
     import pochoir.hybrid_iterate
     pochoir.hybrid_iterate.hybrid_iterate(
         ctx, coarse_config, fine_config,
-        interface=interface, tol=tol, max_iters=max_iters)
+        interface=interface, tol=tol, max_iters=max_iters, field=field)
 
 
 def main():
