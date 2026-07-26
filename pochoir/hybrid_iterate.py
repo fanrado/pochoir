@@ -142,13 +142,47 @@ def _solve(ctx, initial, boundary, insulator, potential, increment, precision,
           log)
 
 
+def _near_interface():
+    '''
+    The near/far split plane implied by GRIDS' `domain/near`, in pochoir units.
+
+    `near_bc` derives the pinned plane itself as the near domain's LAST plane
+    (top = ndom.shape[axis]-1) and `stitch_near` takes no interface argument, so
+    the split is fixed entirely by the near grid's z extent -- NOT by the
+    --interface option.
+    '''
+    from pochoir.util import unitify
+
+    for key, shape, spacing in GRIDS:
+        if key != 'domain/near':
+            continue
+        nz = int(shape.split(',')[2])
+        return (nz - 1) * unitify(spacing)
+    raise ValueError('GRIDS has no domain/near entry')
+
+
 def _outer_iteration(ctx, k, far_potential, interface, precision, log):
     '''
     Plan steps 2-7 for one pass.  `far_potential` is the current full-volume
     coarse field (potential/coarse for k=0, the previous potential/full_k* after
     that).  Returns the new full-volume potential key.
+
+    `interface` is checked against the split the near grid actually implies
+    rather than being used to place it: the plane comes from `domain/near`'s z
+    extent (see `_near_interface`).  A mismatch used to be silently ignored, so
+    `--interface 30*mm` ran happily and still split at 20mm.
     '''
     from pochoir.__main__ import refine, near_bc, coarsen, stitch_near
+    from pochoir.util import unitify
+
+    want = unitify(interface)
+    have = _near_interface()
+    if want != have:
+        raise ValueError(
+            f'--interface {interface} ({want}) disagrees with the split implied '
+            f'by domain/near ({have}).  The near/far plane is set by the near '
+            f'grid z extent in GRIDS, not by this option; re-shape domain/near '
+            f'to move it.')
 
     kk = _kk(k)
     near_refined = f'initial/near_refined{kk}'
@@ -316,10 +350,17 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
 
         prev = cur
 
-    log(f'hybrid-iterate: {len(history)} iterations, '
-        f'final delta {history[-1]:.6e} V, stopped on {criterion}')
-    log('hybrid-iterate: delta history = '
-        + ', '.join(f'{d:.6e}' for d in history))
+    # --max-iters 0 is reachable from the CLI (click applies no minimum), and
+    # then the loop body never runs and history is empty -- guard the summary
+    # rather than raising IndexError on history[-1].
+    if history:
+        log(f'hybrid-iterate: {len(history)} iterations, '
+            f'final delta {history[-1]:.6e} V, stopped on {criterion}')
+        log('hybrid-iterate: delta history = '
+            + ', '.join(f'{d:.6e}' for d in history))
+    else:
+        log(f'hybrid-iterate: no iterations run ({criterion}); '
+            f'proceeding from the coarse seed {prev}')
 
     _final_stage(ctx, prev, fine_config, tol, log)
 
