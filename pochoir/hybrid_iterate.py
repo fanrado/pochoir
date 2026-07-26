@@ -131,6 +131,14 @@ FIELDS = {
 # supplies them via --coarse-spacing / --fine-spacing / --full-spacing.
 DEFAULT_SPACINGS = dict(coarse=0.4, fine=0.05, full=0.1)
 
+# Minimum physical clearance, in mm, between the electron launch node
+# (driftZDepth) and the cathode on the domain's last plane.  Deliberately a
+# fixed physical length rather than a multiple of the run's spacings: it is the
+# margin the validated 59.9mm/60.0mm geometry actually has, and keeping it
+# resolution-independent is what lets the cathode stay at 60.0mm for every
+# spacing (see _extents).
+MIN_CATHODE_CLEARANCE = 0.1
+
 # The four grids and which of the three user spacings each one uses.  `near_coarse`
 # shares the COARSE spacing (it is the coarsen target the near solve is strided
 # down onto), which is why three spacings cover four grids.
@@ -168,6 +176,16 @@ def _extents(prof, cfg, coarse_spacing, interface_mm):
                  coarse cell (not adding one FULL cell) keeps the cathode at a
                  fixed PHYSICAL depth: the electrode must not move when the run's
                  resolution changes.  59.9mm -> 60.0mm for every sane spacing.
+
+                 The rounding target is driftZDepth + MIN_CATHODE_CLEARANCE, not
+                 driftZDepth itself: math.ceil leaves an ALREADY-EXACT quotient
+                 alone, so rounding the launch node directly put the cathode ON
+                 it whenever driftZDepth was a whole multiple of the coarse
+                 spacing (0.1 -> 599 cells -> 59.9mm, clearance 0; likewise 0.05
+                 and 0.02).  Electrons then launch on the cathode's Dirichlet
+                 plane instead of the last full-velocity node below it.  Harmless
+                 at the validated 0.4 default (149.75 -> 150 -> 60.0mm) but
+                 reachable now that --coarse-spacing is user-settable.
     near depth : the near/far interface coordinate.
     '''
     import math
@@ -178,7 +196,8 @@ def _extents(prof, cfg, coarse_spacing, interface_mm):
         npix = int(cfg['Npixels'])
 
     coarse = coarse_spacing
-    ncoarse = math.ceil(cfg['driftZDepth'] / coarse - 1e-9)
+    launch = cfg['driftZDepth']
+    ncoarse = math.ceil((launch + MIN_CATHODE_CLEARANCE) / coarse - 1e-9)
     full_depth = ncoarse * coarse
 
     return dict(transverse=pitch * npix,
