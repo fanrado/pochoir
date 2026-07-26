@@ -2341,6 +2341,34 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
     ctx.obj.put(far_out, far_pot, taxon="potential", **fparams)
 
 
+@cli.command("hybrid-iterate")
+@click.option("--coarse-config", type=click.Path(exists=True), required=True,
+              help="JSON config for the 0.4mm coarse grid transcription")
+@click.option("--fine-config", type=click.Path(exists=True), required=True,
+              help="JSON config for the 0.05mm near and 0.1mm final grids")
+@click.option("--interface", type=str, default='20*mm',
+              help="Near/far interface coordinate on axis 2 (def: '20*mm')")
+@click.option("--tol", type=float, default=2e-8,
+              help="Convergence tolerance on max|phi_k - phi_(k-1)| in volts")
+@click.option("--max-iters", type=int, default=20,
+              help="Maximum outer iterations before reporting the achieved delta")
+@click.pass_context
+def hybrid_iterate(ctx, coarse_config, fine_config, interface, tol, max_iters):
+    '''
+    Task13 iterative hybrid near/far drift-field solve (drift field + paths).
+
+    Alternates a 0.05mm near solve with a full-volume 0.4mm re-solve in which
+    the near region FLOATS (stitched values are initial values only), then
+    refines the converged field onto the 0.1mm full grid and runs
+    velo/starts/drift on it.  Unlike `near-far-solve` the near region is never
+    pinned inside the volume; only the z=interface plane is.
+    '''
+    import pochoir.hybrid_iterate
+    pochoir.hybrid_iterate.hybrid_iterate(
+        ctx, coarse_config, fine_config,
+        interface=interface, tol=tol, max_iters=max_iters)
+
+
 def main():
     cli(obj=None)
 
