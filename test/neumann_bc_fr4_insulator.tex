@@ -67,9 +67,10 @@ cells are frozen and excluded from the solve. In the code this is
 \code{neumann\_coeff}/\code{stencil\_poisson\_neumann}
 (\code{pochoir/fdm\_generic.py}), routed to whenever an insulator mask is supplied
 (\code{pochoir/fdm\_torch.py}), with any supplied \code{epsilon} explicitly nulled.
-On the drift side the velocity is set to zero inside the FR4 and a terminal event
-stops a path at the FR4 top face (tagged \code{DRIFT\_SURFACE}); that tag is a
-bookkeeping label, not a term in the field equation.
+On the drift side no enforcement is imposed: paths follow the field of the solved
+potential, whose no-flux boundary is the only condition, and the drift endtag is
+always \code{DRIFT\_NONE} --- a bookkeeping label kept for call-site
+compatibility, not a term in the field equation.
 
 \section{Why $\En = 0$ is the correct physics}
 
