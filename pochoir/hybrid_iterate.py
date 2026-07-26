@@ -106,6 +106,7 @@ FIELDS = {
         edges='per,per,fix',
         prefix='',                       # drift keys are unprefixed (unchanged)
         output='potential/drift3d',
+        unit='V',                        # drift potential is in volts
         grids=(
             # key,                 shape,        spacing,   extent
             ('domain/coarse',      '11,11,151',  '0.4*mm'),   # coarse full  0..60mm
@@ -119,6 +120,9 @@ FIELDS = {
         edges='fix,fix,fix',
         prefix='w_',
         output='potential/weight3d',
+        # the weighting potential is a DIMENSIONLESS unit probe in [0,1], so the
+        # convergence delta is not in volts -- do not label it 'V'.
+        unit='(dimensionless)',
         grids=(
             ('domain/w_coarse',      '55,55,151',    '0.4*mm'),
             ('domain/w_near',        '440,440,401',  '0.05*mm'),
@@ -407,6 +411,7 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
            _key(prof, 'initial', 'coarse') + '_insulator',
            coarse_pot, _key(prof, 'increment', 'coarse'), tol, log)
 
+    unit = prof.get('unit', '')
     prev = coarse_pot
     history = []
     criterion = f'max_iters={max_iters}'
@@ -416,7 +421,7 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
         cur = _outer_iteration(ctx, prof, k, prev, interface, tol, log)
         delta = _max_abs_delta(ctx, cur, prev)
         history.append(delta)
-        log(f'iter {k}: max|dphi| = {delta:.6e} V (tol {tol:.1e})')
+        log(f'iter {k}: max|dphi| = {delta:.6e} {unit} (tol {tol:.1e})')
 
         if delta < tol:
             criterion = f'converged (delta {delta:.6e} < tol {tol:.1e})'
@@ -442,7 +447,7 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
     # rather than raising IndexError on history[-1].
     if history:
         log(f'hybrid-iterate: {len(history)} iterations, '
-            f'final delta {history[-1]:.6e} V, stopped on {criterion}')
+            f'final delta {history[-1]:.6e} {unit}, stopped on {criterion}')
         log('hybrid-iterate: delta history = '
             + ', '.join(f'{d:.6e}' for d in history))
     else:
