@@ -526,8 +526,10 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
 
       * True  (`--domain yes`) -- computed from the config geometry: transverse
         extent = (pixelSize + pixelGap) x Npixels-for-this-field, full depth =
-        driftZDepth + one full cell, near depth = the interface.  At the default
-        spacings this reproduces the validated shapes exactly.
+        driftZDepth + MIN_CATHODE_CLEARANCE rounded up to a whole coarse cell
+        (see `_extents` -- 59.9mm -> 60.0mm at every spacing), near depth = the
+        interface.  At the default spacings this reproduces the validated shapes
+        exactly.
       * False (`--domain no`)  -- taken from `shapes`, a dict of "nx,ny,nz"
         strings keyed by leaf ('coarse', 'near', 'near_coarse', 'fine01').  All
         four are required.
