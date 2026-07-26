@@ -1,0 +1,23 @@
+{
+    "HoleRadius" : 1.9,
+    "PcbWidth" : 1.6,
+    "GridHoleShape" : "None",
+    "GridPotential" :  -2500,
+    "CathodePotential" : -2500,
+    "pixelPlaneLowEdgePosition" : 10.0,
+    "pixelPlaneWidth" : 0.4,
+    "padThickness" : 0.4,
+    "padThicknessCells" : 3,
+    "FR4Thickness" : 0.4,
+    "pixelSize" : 3.6,
+    "pixelGap" : 0.8,
+    "chamfer_r": 0.8,
+    "chamferMode": "dynamic",
+    "Npixels" : 5,
+    "LArPermittivity": 1.5,
+    "FR4Permittivity": 4.5,
+    "enableFR4": false,
+    "enableInsulatorFR4": true,
+    "driftZDepth": 59.9,
+    "nGridPoints": 10
+}
