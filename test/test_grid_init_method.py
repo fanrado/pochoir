@@ -25,6 +25,9 @@ def _cfg(n_pix=3):
         "GridHoleShape": "square",   # avoids the 'circular' branch's epsilon plotting
         "pixelSize": 8.0,
         "pixelGap": 2.0,
+        # chamfer_r became a required generator key in commit 72f832a; supply a
+        # small corner radius so trimCorner only rounds the pad corners.
+        "chamfer_r": 2.0,
         "Npixels": n_pix,
         "pixelPlaneWidth": 1.0,
         "pixelPlaneLowEdgePosition": 2.0,

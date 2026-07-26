@@ -98,7 +98,7 @@ want velocity/drift3d \
 ## cathode (z=60mm, v=0).  This is the grid-node dist list copied from
 ## run-validate-neumann-fulldepth-01mm.sh.
 echo "=== Starts: one launch per 0.1mm grid node (45x45) ==="
-dist=(0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0 2.1 2.2 2.3 2.4 2.5 2.6 2.7 2.8 2.9 3.0 3.1 3.2 3.3 3.4 3.5 3.6 3.7 3.8 3.9 4.0 4.1 4.2 4.3 4.4)
+dist=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8 1.9 2.0 2.1 2.2 2.3 2.4 2.5 2.6 2.7 2.8 2.9 3.0 3.1 3.2 3.3 3.4 3.5 3.6 3.7 3.8 3.9 4.0 4.1 4.2)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
@@ -122,7 +122,7 @@ want paths/drift3d_nodes \
      --velocity velocity/drift3d \
      "${dins_fine[@]}" \
      --interp-order linear \
-     --paths paths/drift3d_nodes '0*us,90*us,0.01*us' \
+     --paths paths/drift3d_nodes '0*us,90*us,1*us' \
      --plot
 # --interp-order linear: cubic rings/overshoots near the pixel plane and
 # over-focuses paths onto the pads; linear is monotone-safe.

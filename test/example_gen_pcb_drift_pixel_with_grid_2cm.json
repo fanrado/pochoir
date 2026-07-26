@@ -13,5 +13,5 @@
     "LArPermittivity": 1.5,
     "FR4Permittivity": 4.5,
     "driftZDepth": 30,
-    "nGridPoints": 10
+    "nGridPoints": 90
 }

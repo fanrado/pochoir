@@ -193,7 +193,7 @@ done
 
 want starts/drift3d \
      pochoir starts --starts starts/drift3d \
-     -m no \
+     -m yes \
      -c example_gen_pcb_drift_pixel_with_grid_2cm.json \
      "${points[@]}" \
      --plot

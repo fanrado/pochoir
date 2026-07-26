@@ -114,7 +114,7 @@ for d in "${dist[@]}"; do
 done
 
 want starts/near2cm \
-     pochoir starts --starts starts/near2cm -m no \
+     pochoir starts --starts starts/near2cm -m yes \
      -c $cfg "${points[@]}" --plot
 
 ## Step 5: drift paths (linear interp on the 0.05mm field)

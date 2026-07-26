@@ -133,7 +133,12 @@ date
 ## domain (interface pinned to the far), the near re-solve carrying the same
 ## no-flux FR4 insulator mask (--insulator, pochoir-oz2l; the coarse far never
 ## sees it -- FR4 unresolved at 0.4mm).  Updates potential/near + writes
-## potential/far.  edges/precision match Step 4; drift tol '1*V'.
+## potential/far.  edges/precision match Step 4.  tol '0.001*V' (matches the
+## weighting near-far-solve): the first Schwarz sweep changes the near solution
+## by ~0.6 V, so the original '1*V' tol declared convergence after ONE sweep and
+## never reconciled the interface gradient (near E_z stayed 48.3 vs far 49.8 ->
+## v_z step persisted).  A sub-0.6 V tol forces multiple sweeps until the near
+## and far fields actually agree across z=20 mm.  max-iters raised 6 -> 12.
 want "potential/near potential/far" \
      pochoir near-far-solve \
      --coarse-potential potential/coarse \
@@ -142,11 +147,17 @@ want "potential/near potential/far" \
      --near-potential potential/near \
      --insulator initial/near_insulator \
      --interface '20*mm' --axis 2 \
+     --overlap 15 \
      --edges per,per,fix --engine torch \
      --epoch 130000000 --nepochs 10 \
      --near-precision 2e-11 --far-precision 2e-7 \
-     --tol '1*V' --max-iters 6 \
+     --tol '0.001*V' --max-iters 12 \
      --near-out potential/near --far-out potential/far
+## --overlap 15 (pochoir-2t9m): pins the coarse-far Dirichlet plane 15 coarse
+## cells (6 mm) below the z=20 mm interface, at z=14 mm -- inside the uniform-field
+## band (z>=14 mm) that the fine near already covers.  A 6 mm overlap (vs the old
+## single 0.4 mm cell) converges the Schwarz in a few sweeps AND makes the stitched
+## drift potential C1 (gradient-continuous), removing the v_z seam step.
 date
 
 ## Step 5: fine full domain gen (stores initial/fine_insulator on the 1201-cell
@@ -172,13 +183,19 @@ want velocity/drift3d \
      --insulator initial/fine_insulator \
      --velocity velocity/drift3d
 
-## 10x10 launch grid per pixel, near the cathode plane (z=59.5mm).  Spread across
-## the full 4.4 mm pitch so charges launch over BOTH the pad and the wide gap.
+## 10x10 launch grid per pixel, as close to the cathode plane as the drift field
+## allows (z=59.95mm).  The weighting potential is exactly zero on the grounded
+## cathode plane (z=60.0mm) but the drift velocity is zeroed there (conductor
+## cell); z=59.95mm is the last node carrying the full drift velocity, where the
+## weighting potential is only ~3.4e-5 (vs 3.4e-4 at the old 59.5mm) -> the Ramo
+## start-point baseline deficit drops 10x so a pad-lander collects ~0.99997 e-
+## (pochoir-mi2u).  Spread across the full 4.4 mm pitch so charges launch over
+## BOTH the pad and the wide gap.
 dist=(0.22 0.66 1.1 1.54 1.98 2.42 2.86 3.3 3.74 4.18)
 points=()
 for d in "${dist[@]}"; do
      for d2 in "${dist[@]}"; do
-         points+=("${d}*mm,${d2}*mm,59.5*mm")
+         points+=("${d}*mm,${d2}*mm,59.95*mm")
      done
 done
 want starts/drift3d \

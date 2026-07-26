@@ -16,7 +16,10 @@ PIPELINE_MODULES = [
     "pochoir/gen_pcb_drift_pixel_with_grid.py",
 ]
 
-MARKER = re.compile(r"TO ?DO|FIXME", re.IGNORECASE)
+# Word-boundaried so the marker words are matched as whole tokens; without the
+# \b anchors "TO ?DO" also matches "to do" embedded in ordinary prose such as
+# "...array to downsample" (a false positive at __main__.py's downsample help).
+MARKER = re.compile(r"\bTO ?DO\b|\bFIXME\b", re.IGNORECASE)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
