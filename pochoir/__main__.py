@@ -2355,9 +2355,30 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
 @click.option("--field", type=click.Choice(["drift", "weighting"]),
               default="drift",
               help="Which field to solve (def: drift)")
+@click.option("--coarse-spacing", type=float, default=0.4,
+              help="Coarse far-field grid spacing in mm (def: 0.4). Also used "
+                   "for the coarsen target grid.")
+@click.option("--fine-spacing", type=float, default=0.05,
+              help="Fine near-field grid spacing in mm (def: 0.05)")
+@click.option("--full-spacing", type=float, default=0.1,
+              help="Final full-volume grid spacing in mm (def: 0.1)")
+@click.option("--domain", type=click.Choice(["yes", "no"]), default="yes",
+              help="yes: derive the four grid SHAPES from the config geometry "
+                   "and the spacings above (def). no: take them from "
+                   "--coarse-shape/--near-shape/--near-coarse-shape/"
+                   "--full-shape. The spacings are always supplied by you.")
+@click.option("--coarse-shape", type=str, default=None,
+              help="'nx,ny,nz' for the coarse far-field grid (--domain no only)")
+@click.option("--near-shape", type=str, default=None,
+              help="'nx,ny,nz' for the fine near-field grid (--domain no only)")
+@click.option("--near-coarse-shape", type=str, default=None,
+              help="'nx,ny,nz' for the coarsen target grid (--domain no only)")
+@click.option("--full-shape", type=str, default=None,
+              help="'nx,ny,nz' for the final full-volume grid (--domain no only)")
 @click.pass_context
 def hybrid_iterate(ctx, coarse_config, fine_config, interface, tol, max_iters,
-                   field):
+                   field, coarse_spacing, fine_spacing, full_spacing, domain,
+                   coarse_shape, near_shape, near_coarse_shape, full_shape):
     '''
     Task13 iterative hybrid near/far field solve.
 
@@ -2372,11 +2393,24 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface, tol, max_iters,
     -> potential/weight3d.  Both share the store, which is what lets
     `induce-pixel` see paths/drift3d and potential/weight3d together.  The
     velo/starts/drift/induce-pixel chain is run from the shell script, not here.
+
+    The three grid spacings are always yours to set (--coarse-spacing,
+    --fine-spacing, --full-spacing; the coarse one also drives the coarsen target
+    grid).  --domain then says where the four grid SHAPES come from: "yes"
+    derives them from the config geometry -- transverse extent
+    (pixelSize+pixelGap, times Npixels for the weighting probe), full depth
+    (driftZDepth plus one full cell) and near depth (the interface) -- while "no"
+    takes them verbatim from the four --*-shape options.
     '''
     import pochoir.hybrid_iterate
     pochoir.hybrid_iterate.hybrid_iterate(
         ctx, coarse_config, fine_config,
-        interface=interface, tol=tol, max_iters=max_iters, field=field)
+        interface=interface, tol=tol, max_iters=max_iters, field=field,
+        coarse_spacing=coarse_spacing, fine_spacing=fine_spacing,
+        full_spacing=full_spacing,
+        derive_domain=(domain == "yes"),
+        shapes=dict(coarse=coarse_shape, near=near_shape,
+                    near_coarse=near_coarse_shape, fine01=full_shape))
 
 
 def main():

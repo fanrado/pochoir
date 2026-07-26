@@ -34,6 +34,9 @@ Every step runs the existing click command in-process via `ctx.invoke`, so it
 takes the same code path as the bash scripts and shares one store object.
 '''
 
+import json
+from pathlib import Path
+
 import numpy
 
 
@@ -107,13 +110,8 @@ FIELDS = {
         prefix='',                       # drift keys are unprefixed (unchanged)
         output='potential/drift3d',
         unit='V',                        # drift potential is in volts
-        grids=(
-            # key,                 shape,        spacing,   extent
-            ('domain/coarse',      '11,11,151',  '0.4*mm'),   # coarse full  0..60mm
-            ('domain/near',        '88,88,401',  '0.05*mm'),  # near fine    0..20mm
-            ('domain/near_coarse', '11,11,51',   '0.4*mm'),   # coarsen tgt  0..20mm
-            ('domain/fine01',      '44,44,601',  '0.1*mm'),   # final full   0..60mm
-        ),
+        # transverse extent = ONE pixel pitch (a single periodic tile)
+        npixels=1,
     ),
     'weighting': dict(
         generator='pcb_pixel_with_grid',
@@ -123,14 +121,140 @@ FIELDS = {
         # the weighting potential is a DIMENSIONLESS unit probe in [0,1], so the
         # convergence delta is not in volts -- do not label it 'V'.
         unit='(dimensionless)',
-        grids=(
-            ('domain/w_coarse',      '55,55,151',    '0.4*mm'),
-            ('domain/w_near',        '440,440,401',  '0.05*mm'),
-            ('domain/w_near_coarse', '55,55,51',     '0.4*mm'),
-            ('domain/w_fine01',      '220,220,601',  '0.1*mm'),
-        ),
+        # transverse extent = Npixels pitches from the config (5x5 = 22mm), so
+        # phi_w has room to decay to ~0 at the edges
+        npixels=None,                    # None -> take Npixels from the config
     ),
 }
+
+# Default spacings, in mm.  These are the validated Task13 values; the user
+# supplies them via --coarse-spacing / --fine-spacing / --full-spacing.
+DEFAULT_SPACINGS = dict(coarse=0.4, fine=0.05, full=0.1)
+
+# The four grids and which of the three user spacings each one uses.  `near_coarse`
+# shares the COARSE spacing (it is the coarsen target the near solve is strided
+# down onto), which is why three spacings cover four grids.
+GRID_SPEC = (
+    # leaf,          spacing name,  depth
+    ('coarse',       'coarse',      'full'),   # coarse far field, full depth
+    ('near',         'fine',        'near'),   # fine near field, to the interface
+    ('near_coarse',  'coarse',      'near'),   # coarsen target, to the interface
+    ('fine01',       'full',        'full'),   # final full-volume grid
+)
+
+
+def _interface_mm(interface):
+    '''
+    The interface coordinate as plain mm.
+
+    `interface` arrives as a pochoir units string ('20*mm'); pochoir's internal
+    length unit is mm, so unitify gives the number directly.
+    '''
+    from pochoir.util import unitify
+    return float(unitify(interface))
+
+
+def _extents(prof, cfg, coarse_spacing, interface_mm):
+    '''
+    Physical extents of the problem, in mm, read off the config.
+
+    transverse : pixel pitch (pixelSize + pixelGap), times Npixels for the
+                 multi-pixel weighting probe.
+    full depth : the cathode plane -- driftZDepth rounded UP to the next whole
+                 coarse cell.  driftZDepth is the electron launch node, defined
+                 as the last full-velocity node BELOW the cathode, and the
+                 cathode sits on the domain's last plane, so the domain must be
+                 at least one cell deeper than the launch node.  Rounding to the
+                 coarse cell (not adding one FULL cell) keeps the cathode at a
+                 fixed PHYSICAL depth: the electrode must not move when the run's
+                 resolution changes.  59.9mm -> 60.0mm for every sane spacing.
+    near depth : the near/far interface coordinate.
+    '''
+    import math
+
+    pitch = cfg['pixelSize'] + cfg['pixelGap']
+    npix = prof['npixels']
+    if npix is None:
+        npix = int(cfg['Npixels'])
+
+    coarse = coarse_spacing
+    ncoarse = math.ceil(cfg['driftZDepth'] / coarse - 1e-9)
+    full_depth = ncoarse * coarse
+
+    return dict(transverse=pitch * npix,
+                full=full_depth,
+                near=interface_mm)
+
+
+def _cells(extent_mm, spacing_mm, what, closed):
+    '''
+    Node count spanning `extent_mm` at `spacing_mm`.
+
+    `closed` distinguishes the two conventions pochoir uses:
+      * transverse (periodic or not): N = extent/spacing -- the far node is the
+        wrap of the near one, so it is not duplicated;
+      * z (fixed edges): N = extent/spacing + 1 -- both faces are real planes
+        (pad side and cathode side), so the endpoint is counted.
+
+    The division must be exact: a fractional cell count means the geometry and
+    the spacing disagree, which would silently shift electrodes onto the wrong
+    plane, so raise rather than round.
+    '''
+    n = extent_mm / spacing_mm
+    if abs(n - round(n)) > 1e-9:
+        raise ValueError(
+            f'{what}: extent {extent_mm}mm is not a whole number of '
+            f'{spacing_mm}mm cells ({n:.6f}) -- adjust the spacing or the '
+            f'config geometry so they divide exactly')
+    return int(round(n)) + (1 if closed else 0)
+
+
+def _derive_grids(prof, cfg, spacings, interface_mm):
+    '''
+    Build the four (key, shape, spacing) triples from the config geometry and the
+    user's three spacings -- `--domain yes`.
+
+    Reproduces the validated Task13 grids exactly at the default spacings:
+      drift     11,11,151@0.4  88,88,401@0.05  11,11,51@0.4   44,44,601@0.1
+      weighting 55,55,151@0.4  440,440,401@0.05 55,55,51@0.4  220,220,601@0.1
+    '''
+    ext = _extents(prof, cfg, spacings['coarse'], interface_mm)
+    grids = []
+    for leaf, sp_name, depth_name in GRID_SPEC:
+        sp = spacings[sp_name]
+        nt = _cells(ext['transverse'], sp, f'{leaf} transverse', closed=False)
+        nz = _cells(ext[depth_name], sp, f'{leaf} z', closed=True)
+        grids.append((f'domain/{prof["prefix"]}{leaf}',
+                      f'{nt},{nt},{nz}', f'{sp}*mm'))
+    return tuple(grids)
+
+
+def _manual_grids(prof, shapes, spacings):
+    '''
+    Build the four triples from shapes the user typed in -- `--domain no`.
+
+    `shapes` maps each leaf ('coarse', 'near', 'near_coarse', 'fine01') to a
+    "nx,ny,nz" string.  Every leaf must be supplied: a missing one cannot be
+    guessed without falling back to derivation, which would silently mix the two
+    modes.
+    '''
+    missing = [leaf for leaf, _, _ in GRID_SPEC if not shapes.get(leaf)]
+    if missing:
+        raise ValueError(
+            f'--domain no requires an explicit shape for every grid; missing: '
+            f'{", ".join(missing)}')
+
+    grids = []
+    for leaf, sp_name, _ in GRID_SPEC:
+        shape = str(shapes[leaf]).strip()
+        parts = shape.split(',')
+        if len(parts) != 3 or not all(p.strip().isdigit() for p in parts):
+            raise ValueError(
+                f'--domain no: shape for {leaf} must be "nx,ny,nz" integers, '
+                f'got {shape!r}')
+        grids.append((f'domain/{prof["prefix"]}{leaf}',
+                      shape, f'{spacings[sp_name]}*mm'))
+    return tuple(grids)
 
 # task10b's fdm flags, applied to every solve here for both fields.
 ENGINE = 'torch'
@@ -156,11 +280,11 @@ def _key(prof, taxon, leaf):
     return f'{taxon}/{prof["prefix"]}{leaf}'
 
 
-def _domains(ctx, prof, log):
+def _domains(ctx, grids, log):
     '''The four `domain` invocations for this field.'''
     from pochoir.__main__ import domain
 
-    for key, shape, spacing in prof['grids']:
+    for key, shape, spacing in grids:
         _want(ctx, key,
               lambda key=key, shape=shape, spacing=spacing: ctx.invoke(
                   domain, domain=key, shape=shape, spacing=spacing),
@@ -209,10 +333,9 @@ def _solve(ctx, prof, initial, boundary, insulator, potential, increment,
           log)
 
 
-def _near_interface(prof):
+def _near_interface(prof, grids):
     '''
-    The near/far split plane implied by this profile's near grid, in pochoir
-    units.
+    The near/far split plane implied by the resolved near grid, in pochoir units.
 
     `near_bc` derives the pinned plane itself as the near domain's LAST plane
     (top = ndom.shape[axis]-1) and `stitch_near` takes no interface argument, so
@@ -222,7 +345,7 @@ def _near_interface(prof):
     from pochoir.util import unitify
 
     near_key = _key(prof, 'domain', 'near')
-    for key, shape, spacing in prof['grids']:
+    for key, shape, spacing in grids:
         if key != near_key:
             continue
         nz = int(shape.split(',')[2])
@@ -230,7 +353,8 @@ def _near_interface(prof):
     raise ValueError(f'field profile has no {near_key} entry')
 
 
-def _outer_iteration(ctx, prof, k, far_potential, interface, precision, log):
+def _outer_iteration(ctx, prof, grids, k, far_potential, interface, precision,
+                     log):
     '''
     Plan steps 2-7 for one pass.  `far_potential` is the current full-volume
     coarse field (the coarse seed for k=0, the previous full_k* after that).
@@ -245,7 +369,7 @@ def _outer_iteration(ctx, prof, k, far_potential, interface, precision, log):
     from pochoir.util import unitify
 
     want = unitify(interface)
-    have = _near_interface(prof)
+    have = _near_interface(prof, grids)
     if want != have:
         raise ValueError(
             f'--interface {interface} ({want}) disagrees with the split implied '
@@ -364,7 +488,9 @@ def _final_stage(ctx, prof, converged, precision, log):
 
 
 def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
-                   tol=2e-8, max_iters=20, field='drift', log=None):
+                   tol=2e-8, max_iters=20, field='drift',
+                   coarse_spacing=None, fine_spacing=None, full_spacing=None,
+                   derive_domain=True, shapes=None, log=None):
     '''
     Drive the Task13 hybrid FIELD solve: grids, gens, the outer iteration and
     the final 0.1mm refine+solve -> the field's output key.
@@ -373,6 +499,19 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
     potential/drift3d) or 'weighting' (non-periodic 5x5 unit probe ->
     potential/weight3d).  Both run the identical scheme, tolerances and final
     0.1mm grid; only grids, generator, edges and store-key names differ.
+
+    GRIDS.  The three spacings are always supplied by the caller
+    (`coarse_spacing` / `fine_spacing` / `full_spacing`, in mm, defaulting to the
+    validated 0.4 / 0.05 / 0.1).  `derive_domain` then chooses where the four grid
+    SHAPES come from:
+
+      * True  (`--domain yes`) -- computed from the config geometry: transverse
+        extent = (pixelSize + pixelGap) x Npixels-for-this-field, full depth =
+        driftZDepth + one full cell, near depth = the interface.  At the default
+        spacings this reproduces the validated shapes exactly.
+      * False (`--domain no`)  -- taken from `shapes`, a dict of "nx,ny,nz"
+        strings keyed by leaf ('coarse', 'near', 'near_coarse', 'fine01').  All
+        four are required.
 
     The chain after the field (velo / starts / drift / induce-pixel) is NOT part
     of this driver -- see `_final_stage`.  It runs as explicit `pochoir` commands
@@ -401,7 +540,30 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
     log(f'hybrid-iterate: field={field} generator={prof["generator"]} '
         f'edges={prof["edges"]} output={prof["output"]}')
 
-    _domains(ctx, prof, log)
+    spacings = dict(
+        coarse=DEFAULT_SPACINGS['coarse'] if coarse_spacing is None else float(coarse_spacing),
+        fine=DEFAULT_SPACINGS['fine'] if fine_spacing is None else float(fine_spacing),
+        full=DEFAULT_SPACINGS['full'] if full_spacing is None else float(full_spacing),
+    )
+
+    if derive_domain:
+        # The FINE config carries the geometry both the near and final grids use;
+        # the coarse config is only the 0.4mm transcription of the same physical
+        # object, so extents must come from the fine one.
+        cfg = json.loads(Path(fine_config).read_text())
+        grids = _derive_grids(prof, cfg, spacings, _interface_mm(interface))
+        log(f'hybrid-iterate: domain=yes -- shapes derived from '
+            f'{Path(fine_config).name} at spacings coarse={spacings["coarse"]} '
+            f'fine={spacings["fine"]} full={spacings["full"]} mm')
+    else:
+        grids = _manual_grids(prof, shapes or {}, spacings)
+        log(f'hybrid-iterate: domain=no -- shapes supplied by the user at '
+            f'spacings coarse={spacings["coarse"]} fine={spacings["fine"]} '
+            f'full={spacings["full"]} mm')
+    for key, shape, spacing in grids:
+        log(f'    {key:24s} {shape:16s} {spacing}')
+
+    _domains(ctx, grids, log)
     _generate(ctx, prof, coarse_config, fine_config, log)
 
     # step 1: the coarse full-volume solve that seeds iteration 0.
@@ -418,7 +580,7 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
     stagnant = 0
 
     for k in range(max_iters):
-        cur = _outer_iteration(ctx, prof, k, prev, interface, tol, log)
+        cur = _outer_iteration(ctx, prof, grids, k, prev, interface, tol, log)
         delta = _max_abs_delta(ctx, cur, prev)
         history.append(delta)
         log(f'iter {k}: max|dphi| = {delta:.6e} {unit} (tol {tol:.1e})')
