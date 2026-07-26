@@ -249,15 +249,24 @@ def _max_abs_delta(ctx, key_a, key_b):
     return float(numpy.max(numpy.abs(a - b)))
 
 
-def _final_stage(ctx, converged, fine_config, precision, log):
+def _final_stage(ctx, converged, precision, log):
     '''
-    Final refinement onto the 0.1mm full grid, then task10b's PART C verbatim.
+    Final refinement of the converged coarse field onto the 0.1mm full grid,
+    then one solve there -> potential/drift3d.
 
-    velo/starts/drift are ENFORCEMENT-FREE: velo gets neither --boundary nor
-    --insulator (velocity is pure mu*grad(phi)) and drift gets no --insulator
-    (paths are never clamped or terminated at a surface).
+    This is where the driver STOPS.  velo / starts / drift are deliberately NOT
+    run here: they live in test/run-task13-hybrid.sh as explicit `pochoir velo`,
+    `pochoir starts` and `pochoir drift` invocations, copied from task10b PART C,
+    so their parameters (temperature, starts mode/config, --interp-order, the
+    drift time window, --plot) can be supplied and tuned by hand on the command
+    line instead of being frozen in Python.
+
+    The enforcement-free contract therefore also lives in the shell script:
+    velo gets neither --boundary nor --insulator (velocity is pure mu*grad(phi))
+    and drift gets no --insulator (paths are never clamped or terminated at a
+    surface).  --insulator belongs only to the fdm solves this module runs.
     '''
-    from pochoir.__main__ import refine, velo, starts, drift
+    from pochoir.__main__ import refine
 
     # 0.4mm -> 0.1mm upsample + exact boundary values in one call.
     _want(ctx, 'initial/fine01_seed',
@@ -270,29 +279,16 @@ def _final_stage(ctx, converged, fine_config, precision, log):
            'initial/fine01_insulator',
            'potential/drift3d', 'increment/fine01', precision, log)
 
-    _want(ctx, 'velocity/drift3d',
-          lambda: ctx.invoke(velo, temperature='87.0*K',
-                             potential='potential/drift3d',
-                             velocity='velocity/drift3d'), log)
-
-    _want(ctx, 'starts/drift3d',
-          lambda: ctx.invoke(starts, starts='starts/drift3d', mode='yes',
-                             configs=(fine_config,), plot=True), log)
-
-    # ~1.5us/mm at 50 V/mm over ~50mm -> ~75us transit; 120us leaves margin.
-    _want(ctx, 'paths/drift3d',
-          lambda: ctx.invoke(drift, starts='starts/drift3d',
-                             velocity='velocity/drift3d',
-                             interp_order='linear',
-                             paths='paths/drift3d',
-                             steps=('0*us,120*us,0.05*us',), plot=True), log)
-
 
 def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
                    tol=2e-8, max_iters=20, log=None):
     '''
-    Drive the whole Task13 hybrid: grids, gens, the outer iteration, the final
-    0.1mm solve and the drift chain.
+    Drive the Task13 hybrid FIELD solve: grids, gens, the outer iteration and
+    the final 0.1mm refine+solve -> potential/drift3d.
+
+    The drift chain (velo / starts / drift) is NOT part of this driver -- see
+    `_final_stage`.  It runs as explicit `pochoir` commands in
+    test/run-task13-hybrid.sh so its parameters stay hand-settable.
 
     Convergence is on max|phi_k - phi_(k-1)| over the whole coarse volume.  Two
     guards besides `tol`:
@@ -362,7 +358,8 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
         log(f'hybrid-iterate: no iterations run ({criterion}); '
             f'proceeding from the coarse seed {prev}')
 
-    _final_stage(ctx, prev, fine_config, tol, log)
+    _final_stage(ctx, prev, tol, log)
 
-    log(f'hybrid-iterate: done, converged field {prev} -> potential/drift3d')
+    log(f'hybrid-iterate: done, converged field {prev} -> potential/drift3d '
+        f'(run velo/starts/drift from the shell script)')
     return prev, history, criterion
