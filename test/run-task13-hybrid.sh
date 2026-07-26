@@ -1,8 +1,10 @@
 #!/bin/bash
 #
-# Task13: reorganized ITERATIVE hybrid drift solver -- 5 cm drift, Python-driven,
+# Task13: reorganized ITERATIVE hybrid solver -- 5 cm drift, Python-driven,
 #         node-centered Neumann (no-flux) PCB insulator BC.
-#         Drift field + drift paths ONLY: NO weighting field, NO induced current.
+#         PART A drift field | PART B velocity + paths |
+#         PART C weighting field (same scheme, --field weighting) |
+#         PART D induced current (Ramo).
 # ---------------------------------------------------------------------------
 # STRUCTURE.  The near/far ITERATION lives in Python (pochoir/hybrid_iterate.py,
 # driven by `pochoir hybrid-iterate`) -- PART A below is a one-line call to it.
@@ -66,7 +68,8 @@
 # fdm flags (--nepochs 10 --epoch 130000000 --edges per,per,fix --engine torch),
 # same enforcement-free velo/starts/drift wiring.  Task13 changes only what the
 # hybrid scheme and the 5 cm gap require.  Task10b's PART B (weighting field) and
-# PART C's induce-pixel are dropped -- drift field and drift paths only.
+# PART C's induce-pixel are carried through here as PART C and PART D, both put
+# on the same iterative hybrid footing as the drift field.
 #
 # The ONE number not inherited directly is the drift window: task10b used
 # '0*us,40*us,0.05*us' for 20 mm, so 50 mm at the same 50 V/mm needs ~2.5x that.
@@ -169,4 +172,69 @@ want paths/drift3d \
      --plot
 
 date
-echo "=== DONE: Task13 drift field + paths -> $POCHOIR_STORE (potential/drift3d, paths/drift3d) ==="
+
+############################################################################
+## PART C: WEIGHTING FIELD  (same iterative hybrid, --field weighting)
+##
+## Identical scheme, tolerance and final 0.1mm grid as PART A -- only the grids,
+## generator, edges and store-key names differ, all carried by the 'weighting'
+## profile in pochoir/hybrid_iterate.py:
+##
+##   grid                     shape             spacing   config
+##   coarse full              55 x 55 x 151     0.4 mm    w coarse
+##   near fine                440 x 440 x 401   0.05 mm   w fine
+##   near coarse (coarsen)    55 x 55 x 51      0.4 mm    --
+##   final full               220 x 220 x 601   0.1 mm    w fine
+##
+## 5x5 pixels = 22mm transverse and NON-periodic edges (fix,fix,fix) so the unit
+## probe phi_w decays to ~0 at the tile edges instead of wrapping -- a weighting
+## field cannot be solved on the single periodic 4.4mm tile PART A uses.
+##
+## The weighting config is a UNIT PROBE: collecting pixel = 1, every other
+## electrode (including the cathode) = 0.  It therefore carries no
+## GridPotential/CathodePotential -- the -2500V drift scaling does not apply.
+##
+## SAME STORE, on purpose: PART D's induce-pixel needs paths/drift3d (PART B) and
+## potential/weight3d (here) together.  The weighting keys are w_-prefixed so they
+## cannot collide with the drift keys -- a collision would make `_want` skip every
+## grid/gen step as "have" and silently solve the weighting field on the DRIFT
+## geometry.
+##
+## RUNTIME: the near grid is 77.6M nodes (25x the drift near grid, ~0.62 GB per
+## f64 array) and is re-solved once per outer iteration, and the final 0.1mm
+## weighting solve is 29.1M nodes against the drift's 1.2M.  Expect this PART to
+## take substantially longer than PART A's ~17 minutes.
+############################################################################
+echo "=== Task13 PART C: iterative hybrid weighting field (5x5 unit probe, fix,fix,fix) ==="
+
+wcfg=example_gen_pixel_with_grid_task13_fine.json
+wccfg=example_gen_pixel_with_grid_task13_coarse.json
+
+pochoir hybrid-iterate \
+    --field weighting \
+    --coarse-config "$wccfg" \
+    --fine-config   "$wcfg"
+
+date
+
+############################################################################
+## PART D: INDUCED CURRENT   (task10b's final step, copied)
+##
+## Ramo: i(t) = q * v(x(t)) . E_w(x(t)), using the PART B drift paths and the
+## PART C weighting field.  Run here rather than in the Python driver so
+## --npixels and --config stay hand-settable.
+############################################################################
+echo "=== Induced currents ==="
+## --npixels 2 sums the target pixel + its first ring; --config supplies the
+## pixel geometry for the pad-collection map (same geometry as $wcfg).
+want current/induced_current \
+     pochoir induce-pixel --weighting potential/weight3d \
+     --paths paths/drift3d \
+     --output current/induced_current \
+     --npixels 2 \
+     --config "$wcfg" \
+     --plot
+
+date
+echo "=== DONE: Task13 drift + weighting + induced current -> $POCHOIR_STORE"
+echo "         (potential/drift3d, paths/drift3d, potential/weight3d, current/induced_current) ==="
