@@ -63,6 +63,31 @@
 #     gap cells -- padplane_noflux_geom raises unless the plane is only
 #     partially Dirichlet.
 #
+#     EXCEPTION to that transcription rule: pixelPlaneLowEdgePosition is NOT
+#     snapped to a 0.4 mm multiple.  It stays 9.9, byte-identical to the fine
+#     config and to task10b, because the generator TRUNCATES it
+#     (gen_pcb_drift_pixel_with_grid.py:474, int(9.9/0.4) = 24) rather than
+#     rounding.  Do not "fix" it to 10.0: that truncates to 25 and pushes the
+#     coarse pad top to 10.4 mm, a 0.4 mm offset against both fine grids.  Nor
+#     to 9.6, which looks exact but is not -- 9.6/0.4 = 23.999999999999996 in
+#     binary float, so int() gives 23 and the pad top lands at 9.6 mm.
+#
+#   PAD-PLANE INDICES.  Two different indices get conflated here; both are
+#   listed deliberately.  pp_loweredge is the derived FR4-slab low edge, and is
+#   NOT what the solver uses.  With padThicknessCells=3 the pad is a 3-cell
+#   grounded block and padplane_noflux_geom (fdm_generic.py:634) takes its
+#   DRIFT-FACING FACE, z_pad = z_top = pp_loweredge + pp_width, for drift_sign
+#   > 0.  The no-flux mirror is applied at z_pad, never at pp_loweredge:
+#
+#     grid                spacing    pp_loweredge   z_pad   pad top
+#     coarse full         0.4 mm         24          25     10.0 mm
+#     near fine           0.05 mm       198         200     10.0 mm
+#     final full          0.1 mm         99         100     10.0 mm
+#
+#   The pad top is 10.0 mm on all three grids, matching the validated task10b
+#   reference.  Quote z_pad (25/200/100) when talking about the solver's
+#   interface; quote pp_loweredge (24/198/99) only about the FR4 slab.
+#
 # THE DRIFT STEPS ARE TASK10b's, COPIED VERBATIM.  run-task10b-drift-2cm-gap09-
 # chamf07.sh is the validated reference: same generator, same config values, same
 # fdm flags (--nepochs 10 --epoch 130000000 --edges per,per,fix --engine torch),
