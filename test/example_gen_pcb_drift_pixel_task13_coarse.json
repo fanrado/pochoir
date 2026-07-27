@@ -4,7 +4,7 @@
     "GridHoleShape" : "None",
     "GridPotential" :  -2500,
     "CathodePotential" : -2500,
-    "pixelPlaneLowEdgePosition" : 10.0,
+    "pixelPlaneLowEdgePosition" : 9.9,
     "pixelPlaneWidth" : 0.4,
     "padThickness" : 0.4,
     "padThicknessCells" : 3,
