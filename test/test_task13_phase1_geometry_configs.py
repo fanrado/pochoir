@@ -3,18 +3,30 @@
 Tests for Task 13 Phase 1 (commit 99fbd00): the fine + coarse geometry configs
 that supersede the reverted fdb1d91.
 
-  * example_gen_pcb_drift_pixel_task13_fine.json -- claimed to be a verbatim
-    copy of example_gen_pcb_drift_pixel_task10b_insul.json with exactly three
-    values changed (GridPotential/CathodePotential -1000 -> -2500, driftZDepth
-    29.9 -> 59.9).  Drives the 0.05 mm near solve and the 0.1 mm final solve.
+  * example_gen_pcb_drift_pixel_task13_fine.json -- a copy of
+    example_gen_pcb_drift_pixel_task10b_insul.json with exactly four values
+    changed (GridPotential/CathodePotential -1000 -> -2500, driftZDepth
+    29.9 -> 59.9, pixelPlaneLowEdgePosition 9.9 -> 10.0).  Drives the 0.05 mm
+    near solve and the 0.1 mm final solve.
   * example_gen_pcb_drift_pixel_task13_coarse.json -- the same geometry
     transcribed onto the 0.4 mm coarse grid.
 
+The low edge is 10.0 mm on every grid (commit 0426813, pochoir-jg3r), which is a
+whole number of cells at every spacing in use -- 10.0/0.4 = 25.0, /0.1 = 100.0,
+/0.05 = 200.0, all exact in binary float -- so the int() truncation at
+gen_pcb_drift_pixel_with_grid.py:474 is unreachable rather than worked around.
+This supersedes the 9.9 coarse workaround of 46a6d69/6a6da92.
+
+Two accepted consequences (user decision 2026-07-27), asserted here as
+by-design, not tolerated: the coarse pad top sits 0.3 mm high at 10.4 mm (the
+coarse laminate cannot be thinner than one 0.4 mm cell), and both fine pad tops
+move to 10.1 mm.
+
 Two layers of testing:
 
-  1. Config-level: the fine config really is task10b plus exactly those three
-     values, the field stays -50 V/mm, and every coarse length is an exact
-     multiple of 0.4 mm with the 4.4 mm pitch preserved.
+  1. Config-level: the fine config really is task10b plus exactly those four
+     values, and every coarse length is an exact multiple of 0.4 mm with the
+     4.4 mm pitch preserved.
   2. Derived-geometry: the real generator is run on all three grids the runner
      will use (coarse 11x11x151 @0.4, near 88x88x401 @0.05, final 44x44x601
      @0.1) and the numbers the commit message claims are checked against the
@@ -70,17 +82,21 @@ def test_both_configs_are_valid_json(fine, coarse):
     assert isinstance(fine, dict) and isinstance(coarse, dict)
 
 
-def test_fine_differs_from_task10b_in_exactly_three_values(fine, task10b):
+def test_fine_differs_from_task10b_in_exactly_four_values(fine, task10b):
+    # pixelPlaneLowEdgePosition joined the original three in commit 0426813.
     assert set(fine) == set(task10b), "key set drifted from task10b"
     changed = {k for k in task10b if fine[k] != task10b[k]}
-    assert changed == {"GridPotential", "CathodePotential", "driftZDepth"}
+    assert changed == {"GridPotential", "CathodePotential", "driftZDepth",
+                       "pixelPlaneLowEdgePosition"}
 
 
 def test_fine_new_values_are_the_5cm_ones(fine, task10b):
     assert (task10b["GridPotential"], task10b["CathodePotential"],
-            task10b["driftZDepth"]) == (-1000, -1000, 29.9)
+            task10b["driftZDepth"], task10b["pixelPlaneLowEdgePosition"]) \
+        == (-1000, -1000, 29.9, 9.9)
     assert (fine["GridPotential"], fine["CathodePotential"],
-            fine["driftZDepth"]) == (-2500, -2500, 59.9)
+            fine["driftZDepth"], fine["pixelPlaneLowEdgePosition"]) \
+        == (-2500, -2500, 59.9, 10.0)
 
 
 def _drift_gap(cfg, spacing):
@@ -89,12 +105,23 @@ def _drift_gap(cfg, spacing):
     return (cfg["driftZDepth"] + spacing) - pad_top
 
 
-def test_fine_keeps_task10b_field_of_minus_50V_per_mm(fine, task10b):
-    # task10b: -1000 V over a 20 mm gap.  task13: -2500 V over 50 mm.
+def test_fine_field_is_minus_50V_per_mm_to_within_the_padtop_shift(fine, task10b):
+    '''task10b: -1000 V over 20.0 mm = exactly -50 V/mm.
+
+    task13 fine: -2500 V over 49.9 mm = -50.1 V/mm.  The gap is 49.9 rather than
+    50.0 because raising the low edge 9.9 -> 10.0 (commit 0426813) also raises the
+    pad TOP surface 10.0 -> 10.1 mm, shortening the drift gap by one 0.1 mm cell.
+    That 0.2% field excess is a consequence of the accepted pad-top shift, not an
+    independent choice -- pinned here so a future change to either the depth or
+    the low edge cannot move the field silently.
+    '''
     assert _drift_gap(task10b, 0.1) == pytest.approx(20.0)
-    assert _drift_gap(fine, 0.1) == pytest.approx(50.0)
     assert task10b["CathodePotential"] / 20.0 == pytest.approx(-50.0)
-    assert fine["CathodePotential"] / 50.0 == pytest.approx(-50.0)
+
+    assert _drift_gap(fine, 0.1) == pytest.approx(49.9)
+    field = fine["CathodePotential"] / 49.9
+    assert field == pytest.approx(-50.1, abs=0.01)
+    assert field == pytest.approx(-50.0, rel=0.005)
 
 
 def test_fine_launch_plane_is_one_final_cell_below_the_cathode(fine):
@@ -146,45 +173,43 @@ def test_coarse_gap_snaps_down_not_up(fine, coarse):
 
 
 def test_coarse_lengths_are_all_whole_04mm_cells(coarse):
-    # pixelPlaneLowEdgePosition is deliberately excluded: it is 9.9 mm, copied
-    # verbatim from the fine config, and the generator truncates it with int()
-    # rather than rounding -- see
-    # test_coarse_plane_position_matches_fine_and_truncates_to_24.
-    for key in ("pixelPlaneWidth", "padThickness",
+    for key in ("pixelPlaneLowEdgePosition", "pixelPlaneWidth", "padThickness",
                 "FR4Thickness", "pixelSize", "pixelGap", "chamfer_r"):
         cells = coarse[key] / 0.4
         assert cells == pytest.approx(round(cells)), \
             f"{key}={coarse[key]} is not a whole number of 0.4 mm cells"
 
 
-def test_coarse_low_edge_is_sub_cell_by_design(coarse):
-    # Not a whole 0.4 mm cell -- 24.75 cells -- and that is intentional: int()
-    # truncation puts the low edge on plane 24, matching the fine grids.
-    cells = coarse["pixelPlaneLowEdgePosition"] / 0.4
-    assert cells != pytest.approx(round(cells))
-    assert int(cells) == 24
-
-
-def test_coarse_plane_position_matches_fine_and_truncates_to_24(fine, coarse):
-    # The generator does int(pixelPlaneLowEdgePosition/spacing).  The target low
-    # edge is plane 24, and 9.9 hits it: 9.9/0.4 = 24.75 -> 24.  This is also
-    # exactly the fine config's (and task10b's) value -- the coarse config is a
-    # verbatim transcription, not a nearby value.
-    assert coarse["pixelPlaneLowEdgePosition"] == 9.9
+def test_low_edge_is_100_and_identical_on_both_configs(fine, coarse):
+    # Equality across configs is the property that makes the int() truncation
+    # trap unreachable: one value, exact at every spacing, no per-grid workaround.
+    assert coarse["pixelPlaneLowEdgePosition"] == 10.0
+    assert fine["pixelPlaneLowEdgePosition"] == 10.0
     assert coarse["pixelPlaneLowEdgePosition"] == fine["pixelPlaneLowEdgePosition"]
-    assert int(coarse["pixelPlaneLowEdgePosition"] / 0.4) == 24
 
 
-def test_coarse_plane_position_is_neither_of_the_two_wrong_values(coarse):
-    '''Regression guard on both previously-tried values.
+def test_low_edge_is_an_exact_cell_count_at_every_spacing(coarse):
+    # int() truncation at gen_pcb_drift_pixel_with_grid.py:474 is only a trap when
+    # the quotient is not exact.  10.0 is exact at all three spacings.
+    expected = {0.4: 25, 0.05: 200, 0.1: 100}
+    for sp, plane in expected.items():
+        q = coarse["pixelPlaneLowEdgePosition"] / sp
+        assert q == float(int(q)), f"{sp}: {q} is not an exact cell count"
+        assert int(q) == plane, f"{sp}: plane {int(q)}"
 
-    10.0 -> int(10.0/0.4) = 25, one coarse cell high (pad top 10.4 mm).
-    9.6  -> 9.6/0.4 = 23.999999999999996 in binary float, so int() truncates to
-            23, one coarse cell LOW (pad top 9.6 mm).  Both are off-by-one.
+
+def test_low_edge_is_neither_of_the_two_stale_values(fine, coarse):
+    '''Regression guard on both superseded values.
+
+    9.9 -> 9.9/0.4 = 24.75, truncating to coarse plane 24 (the 46a6d69 workaround,
+           superseded by 0426813).
+    9.6 -> 9.6/0.4 = 23.999999999999996 in binary float, so int() truncates to 23,
+           one coarse cell LOW -- the float trap that motivated all of this.
     '''
-    assert coarse["pixelPlaneLowEdgePosition"] != 10.0
-    assert coarse["pixelPlaneLowEdgePosition"] != 9.6
-    assert int(10.0 / 0.4) == 25
+    for cfg in (fine, coarse):
+        assert cfg["pixelPlaneLowEdgePosition"] != 9.9
+        assert cfg["pixelPlaneLowEdgePosition"] != 9.6
+    assert int(9.9 / 0.4) == 24
     assert int(9.6 / 0.4) == 23
 
 
@@ -263,9 +288,9 @@ def test_insulator_low_edge_plane_index(all_grids):
     # pp_lower is the low edge of the pixel-plane layer / the no-flux FR4 slab.
     # It is NOT the drift-facing pad face -- that is z_pad, guarded separately in
     # test_derived_z_pad_is_the_drift_facing_pad_face.
-    assert all_grids["coarse"]["pp_lower"] == 24
-    assert all_grids["near"]["pp_lower"] == 198
-    assert all_grids["final01"]["pp_lower"] == 99
+    assert all_grids["coarse"]["pp_lower"] == 25
+    assert all_grids["near"]["pp_lower"] == 200
+    assert all_grids["final01"]["pp_lower"] == 100
 
 
 def test_epsilon_is_none_on_every_grid(all_grids):
@@ -283,8 +308,8 @@ def test_cathode_potential_on_the_last_plane_of_every_grid(all_grids):
 
 def test_pad_block_plane_indices(all_grids):
     # The 3-cell pad block is z_top, z_top-1, z_top-2.
-    expected = {"coarse": [23, 24, 25], "near": [198, 199, 200],
-                "final01": [98, 99, 100]}
+    expected = {"coarse": [24, 25, 26], "near": [200, 201, 202],
+                "final01": [99, 100, 101]}
     for name, g in all_grids.items():
         z_top = g["z_top"]
         assert [z_top - 2, z_top - 1, z_top] == expected[name], name
@@ -345,24 +370,37 @@ def test_insulator_mask_is_disjoint_from_the_thick_pad(all_grids):
         assert not (g["insulator"] & (g["barr"] != 0)).any(), name
 
 
-def test_coarse_pad_top_matches_the_fine_grids(all_grids):
-    '''All three grids put the pad TOP surface at exactly 10.0 mm.
+def test_fine_grids_put_the_pad_top_surface_at_101mm(gnear, gfinal):
+    # 10.0 mm low edge + one pad thickness.  task10b put this surface at 10.0 mm;
+    # the 0.1 mm rise is the accepted consequence of the 9.9 -> 10.0 low edge, so
+    # landed z_final becomes ~10.05 mm against task10b's 9.95 mm.  Transverse
+    # landing radii are what must still match task10b.
+    for g in (gnear, gfinal):
+        assert g["z_top"] * g["spacing"] == pytest.approx(10.1)
 
-    The previously pinned 0.4 mm coarse offset (pad top at 10.4 mm, from
-    pixelPlaneLowEdgePosition=10.0) is CLOSED: 9.9 truncates to plane 24, so
-    z_top = 25 and 25*0.4 = 10.0 mm, the same physical surface as the 0.05 mm and
-    0.1 mm grids and as the validated task10b reference.
+
+def test_coarse_pad_top_sits_03mm_high_by_construction(gcoarse, gnear):
+    '''ACCEPTED BY DESIGN, not a tolerated defect (user decision 2026-07-27).
+
+    The coarse pad top is at 26*0.4 = 10.4 mm against the fine grids' 10.1 mm.
+    This offset CANNOT be closed: the coarse laminate cannot be thinner than one
+    0.4 mm cell, so pad top = low edge + 0.4 mm is forced once the low edge is
+    10.0 mm on every grid.  It is harmless because the coarse solve is only the
+    far-field seed and the whole z < 20 mm near region is re-solved at 0.05 mm.
     '''
-    for name, g in all_grids.items():
-        assert g["z_top"] * g["spacing"] == pytest.approx(10.0), \
-            f"{name}: pad top at {g['z_top'] * g['spacing']} mm"
+    assert gcoarse["z_top"] * gcoarse["spacing"] == pytest.approx(10.4)
+    offset = (gcoarse["z_top"] * gcoarse["spacing"]
+              - gnear["z_top"] * gnear["spacing"])
+    assert offset == pytest.approx(0.3)
+    # Forced, not chosen: the laminate is exactly one coarse cell.
+    assert gcoarse["z_top"] - gcoarse["pp_lower"] == 1
 
 
 def test_insulator_plane_ranges_are_the_expected_indices(all_grids):
     # One slab plane per FR4Thickness/spacing cell: coarse 0.4/0.4 = 1,
     # near 0.1/0.05 = 2, final01 0.1/0.1 = 1.
-    expected = {"coarse": range(24, 25), "near": range(198, 200),
-                "final01": range(99, 100)}
+    expected = {"coarse": range(25, 26), "near": range(200, 202),
+                "final01": range(100, 101)}
     for name, g in all_grids.items():
         zs = [z for z in range(g["shape"][2]) if g["insulator"][:, :, z].any()]
         assert zs == list(expected[name]), f"{name}: mask planes {zs}"
@@ -371,16 +409,16 @@ def test_insulator_plane_ranges_are_the_expected_indices(all_grids):
 def test_derived_z_pad_is_the_drift_facing_pad_face(all_grids):
     '''Structural guard against the pp_lower/z_pad conflation.
 
-    pp_loweredge is the LOW edge of the pixel-plane layer (24 / 198 / 99); the
+    pp_loweredge is the LOW edge of the pixel-plane layer (25 / 200 / 100); the
     solver's no-flux interface z_pad is the DRIFT-FACING face of the 3-cell pad
-    block, one pad thickness higher (25 / 200 / 100).  Deriving it through the
+    block, one pixel-plane width higher (26 / 202 / 101).  Deriving it through the
     real padplane_noflux_geom means a future off-by-one in either quantity cannot
     hide behind the other.
     '''
     from pochoir.fdm_generic import padplane_noflux_geom
 
-    expected = {"coarse": (24, 25, 40), "near": (198, 200, 2964),
-                "final01": (99, 100, 735)}
+    expected = {"coarse": (25, 26, 40), "near": (200, 202, 2964),
+                "final01": (100, 101, 735)}
     for name, g in all_grids.items():
         pp_lower, z_pad, gap_nodes = expected[name]
         assert g["pp_lower"] == pp_lower, f"{name}: pp_loweredge"
