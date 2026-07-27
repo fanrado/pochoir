@@ -2,7 +2,7 @@
     "HoleRadius" : 1.9,
     "PcbWidth" : 1.6,
     "GridHoleShape" : "None",
-    "pixelPlaneLowEdgePosition" : 9.9,
+    "pixelPlaneLowEdgePosition" : 10.0,
     "pixelPlaneWidth" : 0.4,
     "padThickness" : 0.4,
     "padThicknessCells" : 3,
