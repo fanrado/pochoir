@@ -33,7 +33,7 @@
 
 set -e
 
-export POCHOIR_STORE="${1:-store_task12c_gridsq_15cm_strongerfield}"
+export POCHOIR_STORE="${1:-store_task12e_gridsq_15cm_strongerfield}"
 
 source helpers.sh
 
