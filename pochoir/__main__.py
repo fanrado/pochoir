@@ -416,7 +416,7 @@ def fdm(ctx, initial, boundary,
         if ins is not None:
             extra['insulator'] = ins
         phi_0, err_phi0 = solve(iarr, barr, bool_edges,
-                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64, epsilon=eps, **extra) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+                                precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64, epsilon=eps, **extra) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
         ctx.obj.put(potential, phi_0, taxon="potential", **params)
         ctx.obj.put(increment, err_phi0, taxon="increment", **params)
 
