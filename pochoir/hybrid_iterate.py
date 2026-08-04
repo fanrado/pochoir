@@ -145,7 +145,7 @@ DEFAULT_SPACINGS = dict(coarse=0.4, fine=0.1)
 # margin the validated 59.9mm/60.0mm geometry actually has, and keeping it
 # resolution-independent is what lets the cathode stay at 60.0mm for every
 # spacing (see _extents).
-MIN_CATHODE_CLEARANCE = 0.1
+MIN_CATHODE_CLEARANCE = 0.0#0.1
 
 # The GRID_SPEC leaf that denotes the FULL-VOLUME grid.  It is a SPEC-side
 # identifier only -- the `--domain no` shapes-dict key and the GRID_SPEC row
