@@ -2345,48 +2345,48 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
 @click.option("--coarse-config", type=click.Path(exists=True), required=True,
               help="JSON config for the 0.4mm coarse grid transcription")
 @click.option("--fine-config", type=click.Path(exists=True), required=True,
-              help="JSON config for the 0.05mm near and 0.1mm final grids")
+              help="JSON config for the 0.1mm near and full grids")
 @click.option("--interface", type=str, default='20*mm',
               help="Near/far interface coordinate on axis 2 (def: '20*mm')")
-@click.option("--tol", type=float, default=2e-8,
-              help="Convergence tolerance on max|phi_k - phi_(k-1)| in volts")
-@click.option("--max-iters", type=int, default=20,
-              help="Maximum outer iterations before reporting the achieved delta")
+@click.option("--precision", type=float, default=2e-8,
+              help="Per-solve fdm convergence precision (def: 2e-8)")
 @click.option("--field", type=click.Choice(["drift", "weighting"]),
               default="drift",
               help="Which field to solve (def: drift)")
 @click.option("--coarse-spacing", type=float, default=0.4,
-              help="Coarse far-field grid spacing in mm (def: 0.4). Also used "
-                   "for the coarsen target grid.")
-@click.option("--fine-spacing", type=float, default=0.05,
-              help="Fine near-field grid spacing in mm (def: 0.05)")
-@click.option("--full-spacing", type=float, default=0.1,
-              help="Final full-volume grid spacing in mm (def: 0.1)")
+              help="Coarse far-field grid spacing in mm (def: 0.4)")
+@click.option("--fine-spacing", type=float, default=0.1,
+              help="Fine grid spacing in mm, used by BOTH the near solve and "
+                   "the final stitched full volume (def: 0.1)")
 @click.option("--domain", type=click.Choice(["yes", "no"]), default="yes",
-              help="yes: derive the four grid SHAPES from the config geometry "
+              help="yes: derive the three grid SHAPES from the config geometry "
                    "and the spacings above (def). no: take them from "
-                   "--coarse-shape/--near-shape/--near-coarse-shape/"
-                   "--full-shape. The spacings are always supplied by you.")
+                   "--coarse-shape/--near-shape/--fine-shape. The spacings are "
+                   "always supplied by you.")
 @click.option("--coarse-shape", type=str, default=None,
               help="'nx,ny,nz' for the coarse far-field grid (--domain no only)")
 @click.option("--near-shape", type=str, default=None,
               help="'nx,ny,nz' for the fine near-field grid (--domain no only)")
-@click.option("--near-coarse-shape", type=str, default=None,
-              help="'nx,ny,nz' for the coarsen target grid (--domain no only)")
-@click.option("--full-shape", type=str, default=None,
-              help="'nx,ny,nz' for the final full-volume grid (--domain no only)")
+@click.option("--fine-shape", type=str, default=None,
+              help="'nx,ny,nz' for the final full fine grid (--domain no only)")
 @click.pass_context
-def hybrid_iterate(ctx, coarse_config, fine_config, interface, tol, max_iters,
-                   field, coarse_spacing, fine_spacing, full_spacing, domain,
-                   coarse_shape, near_shape, near_coarse_shape, full_shape):
+def hybrid_iterate(ctx, coarse_config, fine_config, interface, precision,
+                   field, coarse_spacing, fine_spacing, domain,
+                   coarse_shape, near_shape, fine_shape):
     '''
-    Task13 iterative hybrid near/far field solve.
+    Task13 one-shot hybrid near/far field solve.
 
-    Alternates a 0.05mm near solve with a full-volume 0.4mm re-solve in which
-    the near region FLOATS (stitched values are initial values only), then
-    refines the converged field onto the 0.1mm full grid.  Unlike
-    `near-far-solve` the near region is never pinned inside the volume; only the
-    z=interface plane is.
+    A SINGLE pass, no iteration: a 0.4mm coarse full-volume solve; the coarse
+    potential on the interface plane pinned as a FIXED Dirichlet BC for the near
+    grid; one 0.1mm near solve over z = 0..interface; then `stitch-near`
+    upsamples the coarse far field onto the full 0.1mm grid and overwrites the
+    near planes with the fine solution.  That stitched array IS the final field
+    -- there is no full-volume re-solve, no coarsen-back and no convergence
+    loop.
+
+    Two spacings only (--coarse-spacing, --fine-spacing).  Because the far field
+    is never re-solved at the fine spacing, phi has a derivative kink at the
+    seam: drift must use --interp-order linear.
 
     --field drift (default) solves the periodic single-pixel drift tile ->
     potential/drift3d; --field weighting solves the non-periodic 5x5 unit probe
@@ -2394,23 +2394,19 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface, tol, max_iters,
     `induce-pixel` see paths/drift3d and potential/weight3d together.  The
     velo/starts/drift/induce-pixel chain is run from the shell script, not here.
 
-    The three grid spacings are always yours to set (--coarse-spacing,
-    --fine-spacing, --full-spacing; the coarse one also drives the coarsen target
-    grid).  --domain then says where the four grid SHAPES come from: "yes"
-    derives them from the config geometry -- transverse extent
-    (pixelSize+pixelGap, times Npixels for the weighting probe), full depth
-    (driftZDepth plus one full cell) and near depth (the interface) -- while "no"
-    takes them verbatim from the four --*-shape options.
+    --domain says where the three grid SHAPES come from: "yes" derives them from
+    the config geometry -- transverse extent (pixelSize+pixelGap, times Npixels
+    for the weighting probe), full depth (driftZDepth rounded up to a whole
+    coarse cell) and near depth (the interface) -- while "no" takes them
+    verbatim from the three --*-shape options.
     '''
     import pochoir.hybrid_iterate
     pochoir.hybrid_iterate.hybrid_iterate(
         ctx, coarse_config, fine_config,
-        interface=interface, tol=tol, max_iters=max_iters, field=field,
+        interface=interface, precision=precision, field=field,
         coarse_spacing=coarse_spacing, fine_spacing=fine_spacing,
-        full_spacing=full_spacing,
         derive_domain=(domain == "yes"),
-        shapes=dict(coarse=coarse_shape, near=near_shape,
-                    near_coarse=near_coarse_shape, fine01=full_shape))
+        shapes=dict(coarse=coarse_shape, near=near_shape, fine01=fine_shape))
 
 
 def main():

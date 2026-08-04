@@ -1,34 +1,35 @@
 #!/usr/bin/env python3
 '''
-Task13 iterative hybrid near/far drift-field solver (beads pochoir-nm59).
+Task13 one-shot hybrid near/far drift-field solver (beads pochoir-uy3c).
 
 The bash hybrid runners (run-hybrid-30cm-drift.sh and friends) hard-code a fixed
-near/far sequence, so the iteration structure is invisible from the script and
-the near->far coupling is one-way.  This module drives the same steps from
-Python as an explicit outer iteration, reducing bash to supplying configs and
-the store path.
+near/far sequence, so the structure is invisible from the script.  This module
+drives the same steps from Python, reducing bash to supplying configs and the
+store path.
 
-Method (near/far separation at z=20mm, axis 2):
+Method -- a SINGLE pass, no iteration (near/far separation at z=20mm, axis 2):
 
   1. coarse full-volume solve at 0.4mm
-  2. `refine` the coarse potential onto the 0.05mm near grid
-  3. `near-bc` pins the z=20mm plane to the coarse value
-  4. near fine solve at 0.05mm
-  5. `coarsen` the near solution back to 0.4mm (stride 8)
-  6. `stitch-near` the coarsened near field onto the coarse far field
-  7. re-impose exact coarse boundary values, then re-solve the FULL coarse
-     volume with the stitched array as INITIAL VALUES ONLY -- the near region
-     floats freely
-  8. converged when max|phi_k - phi_(k-1)| over the whole coarse volume < tol;
-     otherwise back to 2
+  2. `refine` the coarse potential onto the 0.1mm near grid, then `near-bc`
+     pins the near grid's last z plane (z=20mm) to the coarse value there --
+     a FIXED Dirichlet condition for the near solve
+  3. near solve at 0.1mm on z = 0..20mm, no-flux FR4 insulator BC active
+  4. `stitch-near` multi-linearly upsamples the coarse far field onto the full
+     0.1mm grid and overwrites the near planes with the fine near solution.
+     Continuous at the seam because step 2 pinned the near top plane to the
+     same coarse values.
+  5. that stitched array IS the final field -- it is written straight to the
+     profile's output key (potential/drift3d, potential/weight3d).  No full
+     re-solve, no coarsen-back, no convergence loop.
 
-then a final refinement onto the 0.1mm full grid, a re-solve, and velo/starts/
-drift on that 0.1mm field.  The 0.05mm near solve exists only to sharpen the
-coarse iteration; it is NOT stitched into the final field.
+Two spacings only: coarse 0.4mm and fine 0.1mm.  The far field is therefore a
+piecewise-linear upsample of the 0.4mm solve and is never re-solved at 0.1mm,
+so phi has a derivative kink at the seam; drift must use --interp-order linear
+(cubic overshoots at a kink).
 
-The floating near region in step 7 is what distinguishes this from
-`nearfar.schwarz_solve`, which PINS the near region at the interface.  That
-module and the `near-far-solve` command are deliberately untouched by this work.
+Unlike `nearfar.schwarz_solve` there is no sweep at all here -- one near solve
+against a fixed interface BC.  That module and the `near-far-solve` command are
+deliberately untouched by this work.
 
 Every step runs the existing click command in-process via `ctx.invoke`, so it
 takes the same code path as the bash scripts and shares one store object.
@@ -36,13 +37,6 @@ takes the same code path as the bash scripts and shares one store object.
 
 import json
 from pathlib import Path
-
-import numpy
-
-
-def _kk(k):
-    '''Iteration suffix: 0 -> "_k00".'''
-    return f'_k{k:02d}'
 
 
 def _have(ctx, key):
@@ -78,18 +72,16 @@ def _want(ctx, targets, thunk, log=None):
 # ---------------------------------------------------------------------------
 # Field profiles.
 #
-# Both fields run the SAME hybrid scheme, the same tolerances and the same final
-# 0.1mm grid; only the grids, generator, edges and store-key names differ.
-# `--field` selects between them.
+# Both fields run the SAME one-shot hybrid scheme, the same precision and the
+# same final 0.1mm grid; only the grids, generator, edges and store-key names
+# differ.  `--field` selects between them.
 #
 # DRIFT: one 4.4mm PERIODIC pixel tile (per,per,fix), z = 0..60mm (10mm of
-# PCB/pad region below the plane + 50mm drift, cathode at z=60mm).  The 8:1
-# coarse/near stride is exact on every axis: 88->11, 401->51.
+# PCB/pad region below the plane + 50mm drift, cathode at z=60mm).
 #
 # WEIGHTING: 5x5 pixels = 22mm transverse, NON-periodic (fix,fix,fix) so phi_w
 # decays to ~0 at the tile edges rather than wrapping -- a unit probe cannot be
-# solved on a single periodic tile.  Strides are exact too: 440/8=55, 401->51,
-# 220/4=55, 601->151.
+# solved on a single periodic tile.
 #
 # KEY NAMESPACING -- this is load-bearing, not cosmetic.  `_want` skips any step
 # whose outputs already exist, and BOTH fields must write into the SAME store so
@@ -127,9 +119,10 @@ FIELDS = {
     ),
 }
 
-# Default spacings, in mm.  These are the validated Task13 values; the user
-# supplies them via --coarse-spacing / --fine-spacing / --full-spacing.
-DEFAULT_SPACINGS = dict(coarse=0.4, fine=0.05, full=0.1)
+# Default spacings, in mm.  TWO spacings only: the coarse full-volume solve and
+# the fine grid used by BOTH the near solve and the final stitched full volume.
+# The user supplies them via --coarse-spacing / --fine-spacing.
+DEFAULT_SPACINGS = dict(coarse=0.4, fine=0.1)
 
 # Minimum physical clearance, in mm, between the electron launch node
 # (driftZDepth) and the cathode on the domain's last plane.  Deliberately a
@@ -139,15 +132,16 @@ DEFAULT_SPACINGS = dict(coarse=0.4, fine=0.05, full=0.1)
 # spacing (see _extents).
 MIN_CATHODE_CLEARANCE = 0.1
 
-# The four grids and which of the three user spacings each one uses.  `near_coarse`
-# shares the COARSE spacing (it is the coarsen target the near solve is strided
-# down onto), which is why three spacings cover four grids.
+# The three grids and which of the two user spacings each one uses.  `near` and
+# `fine01` share the FINE spacing: the near solve and the final stitched volume
+# live on the same 0.1mm lattice, which is what makes the stitch an exact
+# plane-for-plane overwrite rather than a resample.  There is no coarsen-back
+# target grid any more (no iteration to feed).
 GRID_SPEC = (
-    # leaf,          spacing name,  depth
-    ('coarse',       'coarse',      'full'),   # coarse far field, full depth
-    ('near',         'fine',        'near'),   # fine near field, to the interface
-    ('near_coarse',  'coarse',      'near'),   # coarsen target, to the interface
-    ('fine01',       'full',        'full'),   # final full-volume grid
+    # leaf,      spacing name,  depth
+    ('coarse',   'coarse',      'full'),   # coarse far field, full depth
+    ('near',     'fine',        'near'),   # fine near field, to the interface
+    ('fine01',   'fine',        'full'),   # final full-volume stitch target
 )
 
 
@@ -230,12 +224,12 @@ def _cells(extent_mm, spacing_mm, what, closed):
 
 def _derive_grids(prof, cfg, spacings, interface_mm):
     '''
-    Build the four (key, shape, spacing) triples from the config geometry and the
-    user's three spacings -- `--domain yes`.
+    Build the three (key, shape, spacing) triples from the config geometry and
+    the user's two spacings -- `--domain yes`.
 
-    Reproduces the validated Task13 grids exactly at the default spacings:
-      drift     11,11,151@0.4  88,88,401@0.05  11,11,51@0.4   44,44,601@0.1
-      weighting 55,55,151@0.4  440,440,401@0.05 55,55,51@0.4  220,220,601@0.1
+    At the default 0.4 / 0.1 mm spacings:
+      drift     11,11,151@0.4   44,44,201@0.1    44,44,601@0.1
+      weighting 55,55,151@0.4  220,220,201@0.1  220,220,601@0.1
     '''
     ext = _extents(prof, cfg, spacings['coarse'], interface_mm)
     grids = []
@@ -250,12 +244,11 @@ def _derive_grids(prof, cfg, spacings, interface_mm):
 
 def _manual_grids(prof, shapes, spacings):
     '''
-    Build the four triples from shapes the user typed in -- `--domain no`.
+    Build the three triples from shapes the user typed in -- `--domain no`.
 
-    `shapes` maps each leaf ('coarse', 'near', 'near_coarse', 'fine01') to a
-    "nx,ny,nz" string.  Every leaf must be supplied: a missing one cannot be
-    guessed without falling back to derivation, which would silently mix the two
-    modes.
+    `shapes` maps each leaf ('coarse', 'near', 'fine01') to a "nx,ny,nz" string.
+    Every leaf must be supplied: a missing one cannot be guessed without falling
+    back to derivation, which would silently mix the two modes.
     '''
     missing = [leaf for leaf, _, _ in GRID_SPEC if not shapes.get(leaf)]
     if missing:
@@ -294,13 +287,14 @@ def _key(prof, taxon, leaf):
     '''
     Store key for `leaf` in `taxon`, namespaced by the field profile.
 
-    e.g. drift -> "potential/near_k00", weighting -> "potential/w_near_k00".
+    e.g. drift -> "potential/near", weighting -> "potential/w_near".  There is
+    no iteration index in the names any more: each step runs exactly once.
     '''
     return f'{taxon}/{prof["prefix"]}{leaf}'
 
 
 def _domains(ctx, grids, log):
-    '''The four `domain` invocations for this field.'''
+    '''The three `domain` invocations for this field.'''
     from pochoir.__main__ import domain
 
     for key, shape, spacing in grids:
@@ -314,6 +308,9 @@ def _generate(ctx, prof, coarse_config, fine_config, log):
     '''
     `gen` per domain with the matching config: the coarse 0.4mm transcription
     for the coarse grid, the fine config for both the near and final grids.
+    The final grid is generated even though nothing is solved on it, so its
+    boundary/insulator arrays are in the store for inspection alongside the
+    stitched field.
 
     `gen` also writes the no-flux insulator mask under "<initial>_insulator";
     --insulator is an enable signal only, the interface itself is derived from
@@ -372,19 +369,15 @@ def _near_interface(prof, grids):
     raise ValueError(f'field profile has no {near_key} entry')
 
 
-def _outer_iteration(ctx, prof, grids, k, far_potential, interface, precision,
-                     log):
+def _check_interface(prof, grids, interface):
     '''
-    Plan steps 2-7 for one pass.  `far_potential` is the current full-volume
-    coarse field (the coarse seed for k=0, the previous full_k* after that).
-    Returns the new full-volume potential key.
+    Fail loudly when `--interface` disagrees with the split the near grid
+    actually implies.
 
-    `interface` is checked against the split the near grid actually implies
-    rather than being used to place it: the plane comes from the near grid's z
-    extent (see `_near_interface`).  A mismatch used to be silently ignored, so
+    The plane comes from the near grid's z extent (see `_near_interface`), not
+    from this option.  A mismatch used to be silently ignored, so
     `--interface 30*mm` ran happily and still split at 20mm.
     '''
-    from pochoir.__main__ import refine, near_bc, coarsen, stitch_near
     from pochoir.util import unitify
 
     want = unitify(interface)
@@ -396,87 +389,57 @@ def _outer_iteration(ctx, prof, grids, k, far_potential, interface, precision,
             f'set by the near grid z extent in the field profile, not by this '
             f'option; re-shape the near grid to move it.')
 
-    kk = _kk(k)
-    near_refined = _key(prof, 'initial', f'near_refined{kk}')
-    near_bc_i = _key(prof, 'initial', f'near_bc{kk}')
-    near_bc_b = _key(prof, 'boundary', f'near_bc{kk}')
-    near_pot = _key(prof, 'potential', f'near{kk}')
-    near_inc = _key(prof, 'increment', f'near{kk}')
-    near_coarse = _key(prof, 'potential', f'near_coarse{kk}')
-    stitched = _key(prof, 'potential', f'stitched{kk}')
-    full_init = _key(prof, 'initial', f'full{kk}')
-    full_pot = _key(prof, 'potential', f'full{kk}')
-    full_inc = _key(prof, 'increment', f'full{kk}')
 
-    d_near = _key(prof, 'domain', 'near_coarse')
-    d_coarse = _key(prof, 'domain', 'coarse')
-    i_near, b_near = _key(prof, 'initial', 'near'), _key(prof, 'boundary', 'near')
-    i_coarse = _key(prof, 'initial', 'coarse')
-    b_coarse = _key(prof, 'boundary', 'coarse')
+def _near_solve(ctx, prof, precision, log):
+    '''
+    Steps 2-3: seed the near grid from the coarse far field, pin its top plane
+    Dirichlet, and solve there once.  Returns the near potential key.
+    '''
+    from pochoir.__main__ import refine, near_bc
 
-    # step 2: upsample the current far field onto the 0.05mm near grid
-    # (refine also re-imposes the exact fine boundary values).
+    coarse_pot = _key(prof, 'potential', 'coarse')
+    near_refined = _key(prof, 'initial', 'near_refined')
+    near_bc_i = _key(prof, 'initial', 'near_bc')
+    near_bc_b = _key(prof, 'boundary', 'near_bc')
+    near_pot = _key(prof, 'potential', 'near')
+    near_inc = _key(prof, 'increment', 'near')
+    i_near = _key(prof, 'initial', 'near')
+    b_near = _key(prof, 'boundary', 'near')
+
+    # step 2a: upsample the coarse far field onto the fine near grid (refine
+    # also re-imposes the exact fine boundary values).
     _want(ctx, near_refined,
-          lambda: ctx.invoke(refine, coarse=far_potential,
+          lambda: ctx.invoke(refine, coarse=coarse_pot,
                              initial=i_near, boundary=b_near,
                              output=near_refined), log)
 
-    # step 3: pin the z=interface plane Dirichlet from the far field.
+    # step 2b: pin the near grid's last z plane (the interface) Dirichlet from
+    # the coarse field.  This BC is FIXED -- it is never revisited.
     _want(ctx, [near_bc_i, near_bc_b],
           lambda: ctx.invoke(near_bc, initial=near_refined,
-                             boundary=b_near, coarse=far_potential,
+                             boundary=b_near, coarse=coarse_pot,
                              initial_out=near_bc_i, boundary_out=near_bc_b,
                              axis=2), log)
 
-    # step 4: near fine solve, no-flux FR4 BC active.
+    # step 3: the one near solve, no-flux FR4 BC active.
     _solve(ctx, prof, near_bc_i, near_bc_b, i_near + '_insulator',
            near_pot, near_inc, precision, log)
 
-    # step 5: coarsen the near solution back to 0.4mm (exact stride 8).
-    _want(ctx, near_coarse,
-          lambda: ctx.invoke(coarsen, input_=near_pot,
-                             domain=d_near,
-                             output=near_coarse), log)
-
-    # step 6: stitch the coarsened near field onto the coarse far field.
-    _want(ctx, stitched,
-          lambda: ctx.invoke(stitch_near, near=near_coarse,
-                             coarse=far_potential, domain=d_coarse,
-                             output=stitched, axis=2), log)
-
-    # step 7a: stitch-near emits a raw potential whose conductor cells now hold
-    # coarsened near-field values.  Re-run refine on the SAME domain -- the
-    # interpolation is the identity there and it merges the true boundary values
-    # back in (refined[bmask] = fi[bmask]) -- rather than writing new code.
-    _want(ctx, full_init,
-          lambda: ctx.invoke(refine, coarse=stitched,
-                             initial=i_coarse,
-                             boundary=b_coarse,
-                             output=full_init), log)
-
-    # step 7b: full-volume coarse re-solve.  The stitched array is INITIAL
-    # VALUES ONLY -- the near region floats freely, which is the whole point of
-    # this scheme versus a pinned Schwarz sweep.
-    _solve(ctx, prof, full_init, b_coarse, i_coarse + '_insulator',
-           full_pot, full_inc, precision, log)
-
-    return full_pot
+    return near_pot
 
 
-def _max_abs_delta(ctx, key_a, key_b):
-    '''max|a - b| over the whole volume, in volts.'''
-    a = numpy.asarray(ctx.obj.get(key_a), dtype=float)
-    b = numpy.asarray(ctx.obj.get(key_b), dtype=float)
-    return float(numpy.max(numpy.abs(a - b)))
-
-
-def _final_stage(ctx, prof, converged, precision, log):
+def _stitch(ctx, prof, near_pot, log):
     '''
-    Final refinement of the converged coarse field onto the 0.1mm full grid,
-    then one solve there -> the profile's output key (potential/drift3d for the
-    drift field, potential/weight3d for the weighting field -- exactly task10b's
-    names, because `velo` and `induce-pixel` are invoked with them from the
-    shell script).
+    Steps 4-5: upsample the coarse far field onto the full fine grid, overwrite
+    the near planes with the fine near solution, and write the result STRAIGHT
+    to the profile's output key.
+
+    That stitched array is the final field: no full-volume re-solve follows.
+    The seam is continuous because `near_bc` pinned the near top plane to the
+    same coarse values the upsample produces there.
+
+    `stitch-near` stamps `domain = domain/<prefix>fine01` into the output
+    metadata, which is what lets `velo` resolve the grid downstream.
 
     This is where the driver STOPS.  velo / starts / drift / induce-pixel are
     deliberately NOT run here: they live in test/run-task13-hybrid.sh as explicit
@@ -490,63 +453,52 @@ def _final_stage(ctx, prof, converged, precision, log):
     and drift gets no --insulator (paths are never clamped or terminated at a
     surface).  --insulator belongs only to the fdm solves this module runs.
     '''
-    from pochoir.__main__ import refine
+    from pochoir.__main__ import stitch_near
 
-    seed = _key(prof, 'initial', 'fine01_seed')
-    i_fine, b_fine = _key(prof, 'initial', 'fine01'), _key(prof, 'boundary', 'fine01')
-
-    # 0.4mm -> 0.1mm upsample + exact boundary values in one call.
-    _want(ctx, seed,
-          lambda: ctx.invoke(refine, coarse=converged,
-                             initial=i_fine,
-                             boundary=b_fine,
-                             output=seed), log)
-
-    _solve(ctx, prof, seed, b_fine, i_fine + '_insulator',
-           prof['output'], _key(prof, 'increment', 'fine01'), precision, log)
+    out = prof['output']
+    _want(ctx, out,
+          lambda: ctx.invoke(stitch_near, near=near_pot,
+                             coarse=_key(prof, 'potential', 'coarse'),
+                             domain=_key(prof, 'domain', 'fine01'),
+                             output=out, axis=2), log)
+    return out
 
 
 def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
-                   tol=2e-8, max_iters=20, field='drift',
-                   coarse_spacing=None, fine_spacing=None, full_spacing=None,
+                   precision=2e-8, field='drift',
+                   coarse_spacing=None, fine_spacing=None,
                    derive_domain=True, shapes=None, log=None):
     '''
-    Drive the Task13 hybrid FIELD solve: grids, gens, the outer iteration and
-    the final 0.1mm refine+solve -> the field's output key.
+    Drive the Task13 one-shot hybrid FIELD solve: grids, gens, the coarse solve,
+    the fine near solve against a fixed interface BC, and the stitch that IS the
+    final field -> the field's output key.
 
     `field` selects the profile in FIELDS: 'drift' (periodic single pixel tile ->
     potential/drift3d) or 'weighting' (non-periodic 5x5 unit probe ->
-    potential/weight3d).  Both run the identical scheme, tolerances and final
-    0.1mm grid; only grids, generator, edges and store-key names differ.
+    potential/weight3d).  Both run the identical scheme and precision; only
+    grids, generator, edges and store-key names differ.
 
-    GRIDS.  The three spacings are always supplied by the caller
-    (`coarse_spacing` / `fine_spacing` / `full_spacing`, in mm, defaulting to the
-    validated 0.4 / 0.05 / 0.1).  `derive_domain` then chooses where the four grid
-    SHAPES come from:
+    GRIDS.  The two spacings are always supplied by the caller
+    (`coarse_spacing` / `fine_spacing`, in mm, defaulting to 0.4 / 0.1).
+    `derive_domain` then chooses where the three grid SHAPES come from:
 
       * True  (`--domain yes`) -- computed from the config geometry: transverse
         extent = (pixelSize + pixelGap) x Npixels-for-this-field, full depth =
         driftZDepth + MIN_CATHODE_CLEARANCE rounded up to a whole coarse cell
         (see `_extents` -- 59.9mm -> 60.0mm at every spacing), near depth = the
-        interface.  At the default spacings this reproduces the validated shapes
-        exactly.
+        interface.
       * False (`--domain no`)  -- taken from `shapes`, a dict of "nx,ny,nz"
-        strings keyed by leaf ('coarse', 'near', 'near_coarse', 'fine01').  All
-        four are required.
+        strings keyed by leaf ('coarse', 'near', 'fine01').  All three required.
+
+    There is no convergence machinery: no tol, no max-iters, no stagnation
+    check.  `precision` is the per-solve fdm convergence precision, nothing to
+    do with an outer loop.
 
     The chain after the field (velo / starts / drift / induce-pixel) is NOT part
-    of this driver -- see `_final_stage`.  It runs as explicit `pochoir` commands
-    in test/run-task13-hybrid.sh so its parameters stay hand-settable.
+    of this driver -- see `_stitch`.  It runs as explicit `pochoir` commands in
+    test/run-task13-hybrid.sh so its parameters stay hand-settable.
 
-    Convergence is on max|phi_k - phi_(k-1)| over the whole coarse volume.  Two
-    guards besides `tol`:
-
-      * iteration cap -- 2e-8 V absolute against a -2500 V bulk is ~1e-11
-        relative, near the float64 noise floor of a 151-deep sweep, so stop at
-        `max_iters` and report the achieved delta rather than spin;
-      * stagnation -- if the delta fails to improve by more than 10% for two
-        consecutive iterations the far field has stopped responding to the near
-        correction, so log and stop.
+    Returns `(final_key, grids)`.
     '''
     from pochoir.__main__ import info_msg
 
@@ -564,7 +516,6 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
     spacings = dict(
         coarse=DEFAULT_SPACINGS['coarse'] if coarse_spacing is None else float(coarse_spacing),
         fine=DEFAULT_SPACINGS['fine'] if fine_spacing is None else float(fine_spacing),
-        full=DEFAULT_SPACINGS['full'] if full_spacing is None else float(full_spacing),
     )
 
     if derive_domain:
@@ -575,70 +526,32 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
         grids = _derive_grids(prof, cfg, spacings, _interface_mm(interface))
         log(f'hybrid-iterate: domain=yes -- shapes derived from '
             f'{Path(fine_config).name} at spacings coarse={spacings["coarse"]} '
-            f'fine={spacings["fine"]} full={spacings["full"]} mm')
+            f'fine={spacings["fine"]} mm')
     else:
         grids = _manual_grids(prof, shapes or {}, spacings)
         log(f'hybrid-iterate: domain=no -- shapes supplied by the user at '
-            f'spacings coarse={spacings["coarse"]} fine={spacings["fine"]} '
-            f'full={spacings["full"]} mm')
+            f'spacings coarse={spacings["coarse"]} fine={spacings["fine"]} mm')
     for key, shape, spacing in grids:
         log(f'    {key:24s} {shape:16s} {spacing}')
+
+    _check_interface(prof, grids, interface)
 
     _domains(ctx, grids, log)
     _generate(ctx, prof, coarse_config, fine_config, log)
 
-    # step 1: the coarse full-volume solve that seeds iteration 0.
+    # step 1: the coarse full-volume solve.
     coarse_pot = _key(prof, 'potential', 'coarse')
     _solve(ctx, prof, _key(prof, 'initial', 'coarse'),
            _key(prof, 'boundary', 'coarse'),
            _key(prof, 'initial', 'coarse') + '_insulator',
-           coarse_pot, _key(prof, 'increment', 'coarse'), tol, log)
+           coarse_pot, _key(prof, 'increment', 'coarse'), precision, log)
 
-    unit = prof.get('unit', '')
-    prev = coarse_pot
-    history = []
-    criterion = f'max_iters={max_iters}'
-    stagnant = 0
+    # steps 2-3: the fine near solve against the fixed interface BC.
+    near_pot = _near_solve(ctx, prof, precision, log)
 
-    for k in range(max_iters):
-        cur = _outer_iteration(ctx, prof, grids, k, prev, interface, tol, log)
-        delta = _max_abs_delta(ctx, cur, prev)
-        history.append(delta)
-        log(f'iter {k}: max|dphi| = {delta:.6e} {unit} (tol {tol:.1e})')
+    # steps 4-5: the stitch, which is the final field.
+    final = _stitch(ctx, prof, near_pot, log)
 
-        if delta < tol:
-            criterion = f'converged (delta {delta:.6e} < tol {tol:.1e})'
-            prev = cur
-            break
-
-        # stagnation: less than 10% improvement two iterations running.
-        if len(history) >= 2:
-            if history[-1] > 0.9 * history[-2]:
-                stagnant += 1
-            else:
-                stagnant = 0
-            if stagnant >= 2:
-                criterion = (f'stagnated (delta {delta:.6e}, '
-                             f'<10% improvement for 2 iterations)')
-                prev = cur
-                break
-
-        prev = cur
-
-    # --max-iters 0 is reachable from the CLI (click applies no minimum), and
-    # then the loop body never runs and history is empty -- guard the summary
-    # rather than raising IndexError on history[-1].
-    if history:
-        log(f'hybrid-iterate: {len(history)} iterations, '
-            f'final delta {history[-1]:.6e} {unit}, stopped on {criterion}')
-        log('hybrid-iterate: delta history = '
-            + ', '.join(f'{d:.6e}' for d in history))
-    else:
-        log(f'hybrid-iterate: no iterations run ({criterion}); '
-            f'proceeding from the coarse seed {prev}')
-
-    _final_stage(ctx, prof, prev, tol, log)
-
-    log(f'hybrid-iterate: done, {field} field {prev} -> {prof["output"]} '
+    log(f'hybrid-iterate: done, {field} field stitched to {final} '
         f'(run the velo/starts/drift/induce chain from the shell script)')
-    return prev, history, criterion
+    return final, grids
