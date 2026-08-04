@@ -254,7 +254,7 @@ def _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val, chamfer_r):
 
 
 ## Draw shield plane with square holes, rounded corners
-def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential, chamfer_r):
+def draw_pcb_plane_rounded_sq_drift(arr, barr, hole_w, pcb_width, pp_loweredge, gridPotential, chamfer_r):
     """Draw the PCB shield plane as a solid layer with rounded-square holes.
 
     The shield is modelled as a single z-plane that is initially set to solid
@@ -277,10 +277,11 @@ def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_lowe
         Potential array modified in-place.
     barr          : ndarray, shape (Nx, Ny, Nz)
         Boundary mask array modified in-place (1 = boundary, 0 = free).
-    p_gap         : int
-        Gap between pixel edges in grid-index units.
-    p_size        : int
-        Pixel side length in grid-index units.
+    hole_w        : int
+        Width of the square hole in grid-index units (from cfg
+        ``HoleRadius``).  The solid grid band is derived from the tile width
+        as ``g = Nx - hole_w`` so the tile identity ``2*half + g == Nx`` holds
+        for any hole width; it is NOT the pixel gap.
     pcb_width     : int
         Thickness of the PCB layer in grid-index units.
     pp_loweredge  : int
@@ -299,7 +300,7 @@ def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_lowe
     Called from ``generator`` before ``draw_pixel_plane`` to set the upper
     boundary of the drift volume::
 
-        draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size,
+        draw_pcb_plane_rounded_sq_drift(arr, barr, hole_w,
                                         pcb_width, pp_loweredge,
                                         gridPotential)
     """
@@ -307,12 +308,19 @@ def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_lowe
     z1, z2 = z, z + 1
     barr[:, :, z] = 1
     arr[:, :, z]  = gridPotential
-    half = (p_size + 1) // 2
-    barr[0:half,        0:half,        z] = 0
-    barr[0:half,        half+p_gap:,   z] = 0
-    barr[half+p_gap:,   0:half,        z] = 0
-    barr[half+p_gap:,   half+p_gap:,   z] = 0
-    _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val=1, chamfer_r=chamfer_r)
+    # The hole is centred on the tile corners (four quarter-holes), so the tile
+    # splits as half + g + (hole_w - half) == Nx with g the solid band width.
+    Nx = barr.shape[0]
+    g = Nx - hole_w
+    if g <= 0:
+        raise ValueError(f'square grid hole width {hole_w} cells leaves no '
+                         f'solid band in a {Nx}-cell tile')
+    half = (hole_w + 1) // 2
+    barr[0:half,     0:half,     z] = 0
+    barr[0:half,     half+g:,    z] = 0
+    barr[half+g:,    0:half,     z] = 0
+    barr[half+g:,    half+g:,    z] = 0
+    _apply_rounded_corners(barr, hole_w, g, z1, z2, val=1, chamfer_r=chamfer_r)
 ##----
 
 import sys
@@ -562,7 +570,14 @@ def generator(dom, cfg, info_msg=None):
             epsilon[:, :, pp_loweredge+pp_width+1:pp_loweredge+pp_width+pcb_width-1][mask] = LArPermittivity
 
     elif gridHoleShape == 'square':
-        draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential, chamfer_r=chamfer_r) # Draw the PCB plane with holes rounded square
+        # cfg HoleRadius is the WIDTH of the square hole (not a radius); the
+        # chamfer radius stays the pixel chamfer_r.
+        hole_w = int(round(cfg['HoleRadius']/dom.spacing[0]))
+        if info_msg is not None:
+            info_msg(f"square grid hole: HoleRadius={cfg['HoleRadius']}mm "
+                     f'-> hole width {hole_w} cell(s), solid band '
+                     f'{len(arr) - hole_w} cell(s)')
+        draw_pcb_plane_rounded_sq_drift(arr, barr, hole_w, pcb_width, pp_loweredge, gridPotential, chamfer_r=chamfer_r) # Draw the PCB plane with holes rounded square
         ## We need to use a mask to define the holes in the FR4 and set the permittivity to LAr in those holes
         ## square hole
     barr[arr==0]=0
