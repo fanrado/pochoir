@@ -495,8 +495,8 @@ def generator(dom, cfg, info_msg=None):
     # Pixel-plane laminate FR4 WITHOUT a shield grid (Task7a): the BOTTOM
     # n_fr4 cell(s) of the pixel-plane layer are FR4.  The pad conductor sits
     # on TOP of the layer (see draw_pixel_plane fr4_bottom); the FR4 cell(s)
-    # stay FREE so the no-flux insulator mask can cover them.  Default off ->
-    # insulator stays None for every non-FR4 run (byte-unchanged).
+    # stay FREE so the no-flux insulator mask can cover them.  Both flags off ->
+    # no laminate and insulator stays None (byte-unchanged).
     #
     # Physically-correct laminate geometry: the pad and FR4 thicknesses are
     # given explicitly (in mm) via 'padThickness'/'FR4Thickness' -- e.g. a
@@ -508,19 +508,32 @@ def generator(dom, cfg, info_msg=None):
     # thickness keys are absent, fall back to the legacy half-and-half split
     # (n_fr4 = pp_width // 2) so older FR4 configs are unchanged.
     #
-    # The continuous FR4 slab is expressed ONE way only:
-    #   * enableInsulatorFR4 -> a no-flux (Neumann) insulator MASK over the slab
-    #                           cells, used by the insulating-surface boundary
-    #                           (EPIC pochoir-ktj0).  NO permittivity.
-    # The flag places the pad conductor on TOP of the layer (fr4_bottom) so the
-    # bottom n_fr4 cells form the laminate slab and stay disjoint from the pad.
-    # With the flag off, fr4_bottom stays False and the return is the legacy
+    # TWO SEPARATE THINGS, deliberately decoupled (pochoir-m7rc).  The laminate
+    # Z-LAYOUT above -- n_pad / n_fr4 / pp_width / fr4_bottom -- is pure
+    # geometry and has nothing to do with permittivity, so it must NOT be gated
+    # on a dielectric flag.  It used to live inside the enableFR4 epsilon branch
+    # and was lost when that branch went (pochoir-d4of), silently collapsing a
+    # 1.6mm laminate to pixelPlaneWidth and dropping the pad top ~1.5mm.
+    #
+    #   * enableFR4          -> LAYOUT ONLY.  Retained purely so existing
+    #                           configs keep their pad/FR4 geometry.  It builds
+    #                           NO epsilon: the dielectric path is gone, and a
+    #                           permittivity-carrying config now simply gets the
+    #                           laminate solved as vacuum/LAr throughout.
+    #   * enableInsulatorFR4 -> the same layout PLUS a no-flux (Neumann)
+    #                           insulator MASK over the slab cells, used by the
+    #                           insulating-surface boundary (EPIC pochoir-ktj0).
+    #
+    # Either flag places the pad conductor on TOP of the layer (fr4_bottom) so
+    # the bottom n_fr4 cells form the laminate slab and stay disjoint from the
+    # pad.  With both off, fr4_bottom stays False and the return is the legacy
     # 3-tuple -> every non-laminate run is byte-unchanged.
+    enableFR4 = cfg.get('enableFR4', False)
     enableInsulatorFR4 = cfg.get('enableInsulatorFR4', False)
     fr4_bottom = False
     n_fr4 = 0
     insulator = None
-    if enableInsulatorFR4:
+    if enableFR4 or enableInsulatorFR4:
         # --- shared laminate-slab geometry (pad on top, slab the bottom n_fr4) ---
         fr4_thickness = cfg.get('FR4Thickness', None)
         pad_thickness = cfg.get('padThickness', None)
@@ -535,8 +548,10 @@ def generator(dom, cfg, info_msg=None):
             n_fr4 = max(1, pp_width // 2)
         fr4_bottom = True
         # --- no-flux insulator mask over the continuous slab (NO permittivity) ---
-        insulator = numpy.zeros(dom.shape, dtype=bool)
-        insulator[:, :, pp_loweredge:pp_loweredge + n_fr4] = True
+        # Only the insulator flag produces a mask; enableFR4 is layout-only.
+        if enableInsulatorFR4:
+            insulator = numpy.zeros(dom.shape, dtype=bool)
+            insulator[:, :, pp_loweredge:pp_loweredge + n_fr4] = True
     if gridHoleShape == 'circular':
         draw_pcb_plane((len(arr),len(arr[0])), arr, barr, pp_loweredge+pcb_width, r1, gridPotential) # Draw the PCB plane with holes circular
         # The former per-hole permittivity mask over the FR4 slab is gone with
