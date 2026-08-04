@@ -2368,7 +2368,8 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
 @click.option("--near-shape", type=str, default=None,
               help="'nx,ny,nz' for the fine near-field grid (--domain no only)")
 @click.option("--fine-shape", type=str, default=None,
-              help="'nx,ny,nz' for the final full fine grid (--domain no only)")
+              help="'nx,ny,nz' for the final full fine grid, stored as "
+                   "domain/drift3d resp. domain/weight3d (--domain no only)")
 @click.pass_context
 def hybrid_iterate(ctx, coarse_config, fine_config, interface, precision,
                    field, coarse_spacing, fine_spacing, domain,
@@ -2394,6 +2395,12 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface, precision,
     `induce-pixel` see paths/drift3d and potential/weight3d together.  The
     velo/starts/drift/induce-pixel chain is run from the shell script, not here.
 
+    STORE KEYS.  The final full-volume grid is named by field in every taxon:
+    domain/drift3d, boundary/drift3d, initial/drift3d, potential/drift3d (and
+    the weight3d equivalents).  The intermediates are coarse / near / near_bc /
+    near_refined, w_-prefixed for the weighting field so the two fields cannot
+    collide in the shared store.
+
     --domain says where the three grid SHAPES come from: "yes" derives them from
     the config geometry -- transverse extent (pixelSize+pixelGap, times Npixels
     for the weighting probe), full depth (driftZDepth rounded up to a whole
@@ -2401,12 +2408,17 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface, precision,
     verbatim from the three --*-shape options.
     '''
     import pochoir.hybrid_iterate
+    # The full-volume shape is keyed by the driver's GRID_SPEC leaf identifier
+    # (hybrid_iterate.FULL_LEAF) rather than a literal, so this CLI cannot drift
+    # from the driver.  That leaf RESOLVES to the field-named store keys
+    # domain/drift3d resp. domain/weight3d -- see hybrid_iterate._key.
     pochoir.hybrid_iterate.hybrid_iterate(
         ctx, coarse_config, fine_config,
         interface=interface, precision=precision, field=field,
         coarse_spacing=coarse_spacing, fine_spacing=fine_spacing,
         derive_domain=(domain == "yes"),
-        shapes=dict(coarse=coarse_shape, near=near_shape, fine01=fine_shape))
+        shapes={"coarse": coarse_shape, "near": near_shape,
+                pochoir.hybrid_iterate.FULL_LEAF: fine_shape})
 
 
 def main():
