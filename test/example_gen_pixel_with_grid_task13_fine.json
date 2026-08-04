@@ -14,6 +14,6 @@
     "LArPermittivity": 1.5,
     "FR4Permittivity": 4.5,
     "enableInsulatorFR4": true,
-    "driftZDepth": 59.9,
+    "driftZDepth": 159.9,
     "nGridPoints": 10
 }

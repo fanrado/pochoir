@@ -165,7 +165,10 @@ echo "=== Task13 PART A: one-shot hybrid 5cm drift field (interface z=20mm) -> $
 ## and it STOPS there -- the drift chain is PART B below.
 pochoir hybrid-iterate \
     --coarse-config "$ccfg" \
-    --fine-config   "$dcfg"
+    --fine-config   "$dcfg" \
+    --interface "40*mm" \
+    --coarse-spacing 0.4 \
+    --fine-spacing 0.1
 
 date
 
@@ -209,7 +212,7 @@ want paths/drift3d \
      pochoir drift --starts starts/drift3d \
      --velocity velocity/drift3d \
      --interp-order linear \
-     --paths paths/drift3d '0*us,120*us,0.05*us' \
+     --paths paths/drift3d '0*us,200*us,0.05*us' \
      --plot
 
 date
@@ -253,7 +256,10 @@ wccfg=example_gen_pixel_with_grid_task13_coarse.json
 pochoir hybrid-iterate \
     --field weighting \
     --coarse-config "$wccfg" \
-    --fine-config   "$wcfg"
+    --fine-config   "$wcfg" \
+    --interface "40*mm" \
+    --coarse-spacing 0.4 \
+    --fine-spacing 0.1
 
 date
 

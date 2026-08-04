@@ -3,7 +3,7 @@
     "PcbWidth" : 1.6,
     "GridHoleShape" : "None",
     "GridPotential" :  -2500,
-    "CathodePotential" : -2500,
+    "CathodePotential" : -7500,
     "pixelPlaneLowEdgePosition" : 10.0,
     "pixelPlaneWidth" : 0.4,
     "padThickness" : 0.4,
@@ -18,6 +18,6 @@
     "FR4Permittivity": 4.5,
     "enableFR4": false,
     "enableInsulatorFR4": true,
-    "driftZDepth": 59.9,
+    "driftZDepth": 159.9,
     "nGridPoints": 10
 }
