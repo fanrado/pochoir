@@ -88,19 +88,32 @@ def _want(ctx, targets, thunk, log=None):
 # `induce-pixel` can see `paths/drift3d` and `potential/weight3d` together.  If
 # the weighting profile reused the drift key names, every grid and gen step would
 # be skipped as "have" and the weighting field would be solved on the DRIFT
-# geometry -- silently, with no error.  So weighting keys carry a `w_` prefix on
-# the leaf name, and the drift key names must never change (which also keeps an
-# already-solved drift store valid).
+# geometry -- silently, with no error.  So weighting INTERMEDIATE keys (coarse,
+# near, near_bc, near_refined) carry a `w_` prefix on the leaf name.
 #
-# `potential/drift3d` and `potential/weight3d` keep exactly task10b's names,
-# because `velo` and `induce-pixel` are invoked with them from the shell script.
+# The FULL-VOLUME grid is the exception: it is named by FIELD, not by prefix --
+# `drift3d` and `weight3d` -- in EVERY taxon, so a store folder reads
+# domain/drift3d + boundary/drift3d + initial/drift3d + potential/drift3d.  That
+# is already what `potential/` used (task10b's names, which `velo` and
+# `induce-pixel` are invoked with from the shell script); this extends the same
+# naming to domain/, boundary/ and initial/, which used to say fine01/w_fine01.
+# `weight3d` is why the name comes from the profile's `full_leaf` rather than
+# from prefix + leaf: it does not fit the w_ scheme.
+#
+# NO BACKWARD COMPATIBILITY (pochoir-efgb): nothing reads the old
+# fine01/w_fine01 keys, so existing store_task13_*/store_task14_* folders will
+# stop resuming the full-volume step and re-do it under the new name.  That is
+# accepted -- verification is a fresh-store run.
 # ---------------------------------------------------------------------------
 FIELDS = {
     'drift': dict(
         generator='pcb_drift_pixel_with_grid',
         edges='per,per,fix',
         prefix='',                       # drift keys are unprefixed (unchanged)
-        output='potential/drift3d',
+        # The FULL-VOLUME leaf is named by the profile, NOT prefix+'fine01':
+        # every taxon of the final grid is domain/drift3d, boundary/drift3d,
+        # initial/drift3d, potential/drift3d.
+        full_leaf='drift3d',
         unit='V',                        # drift potential is in volts
         # transverse extent = ONE pixel pitch (a single periodic tile)
         npixels=1,
@@ -109,7 +122,9 @@ FIELDS = {
         generator='pcb_pixel_with_grid',
         edges='fix,fix,fix',
         prefix='w_',
-        output='potential/weight3d',
+        # 'weight3d' deliberately does NOT carry the w_ prefix -- the prefix
+        # scheme namespaces the INTERMEDIATE leaves only.  See full_leaf above.
+        full_leaf='weight3d',
         # the weighting potential is a DIMENSIONLESS unit probe in [0,1], so the
         # convergence delta is not in volts -- do not label it 'V'.
         unit='(dimensionless)',
@@ -132,16 +147,23 @@ DEFAULT_SPACINGS = dict(coarse=0.4, fine=0.1)
 # spacing (see _extents).
 MIN_CATHODE_CLEARANCE = 0.1
 
+# The GRID_SPEC leaf that denotes the FULL-VOLUME grid.  It is a SPEC-side
+# identifier only -- the `--domain no` shapes-dict key and the GRID_SPEC row
+# label.  The STORE key it resolves to is the profile's `full_leaf`
+# (drift3d/weight3d), never prefix+this.  Keep the two ideas separate: renaming
+# the store keys must not force every caller to re-key its shapes dict.
+FULL_LEAF = 'fine01'
+
 # The three grids and which of the two user spacings each one uses.  `near` and
-# `fine01` share the FINE spacing: the near solve and the final stitched volume
-# live on the same 0.1mm lattice, which is what makes the stitch an exact
-# plane-for-plane overwrite rather than a resample.  There is no coarsen-back
-# target grid any more (no iteration to feed).
+# the full-volume leaf share the FINE spacing: the near solve and the final
+# stitched volume live on the same 0.1mm lattice, which is what makes the stitch
+# an exact plane-for-plane overwrite rather than a resample.  There is no
+# coarsen-back target grid any more (no iteration to feed).
 GRID_SPEC = (
     # leaf,      spacing name,  depth
     ('coarse',   'coarse',      'full'),   # coarse far field, full depth
     ('near',     'fine',        'near'),   # fine near field, to the interface
-    ('fine01',   'fine',        'full'),   # final full-volume stitch target
+    (FULL_LEAF,  'fine',        'full'),   # final full-volume stitch target
 )
 
 
@@ -237,7 +259,7 @@ def _derive_grids(prof, cfg, spacings, interface_mm):
         sp = spacings[sp_name]
         nt = _cells(ext['transverse'], sp, f'{leaf} transverse', closed=False)
         nz = _cells(ext[depth_name], sp, f'{leaf} z', closed=True)
-        grids.append((f'domain/{prof["prefix"]}{leaf}',
+        grids.append((_key(prof, 'domain', leaf),
                       f'{nt},{nt},{nz}', f'{sp}*mm'))
     return tuple(grids)
 
@@ -246,7 +268,10 @@ def _manual_grids(prof, shapes, spacings):
     '''
     Build the three triples from shapes the user typed in -- `--domain no`.
 
-    `shapes` maps each leaf ('coarse', 'near', 'fine01') to a "nx,ny,nz" string.
+    `shapes` maps each GRID_SPEC leaf ('coarse', 'near', FULL_LEAF) to a
+    "nx,ny,nz" string.  Note these are the SPEC-side leaf names, not the store
+    key names: the full-volume leaf is keyed 'fine01' here but stored as
+    domain/drift3d resp. domain/weight3d (see `_key`).
     Every leaf must be supplied: a missing one cannot be guessed without falling
     back to derivation, which would silently mix the two modes.
     '''
@@ -264,7 +289,7 @@ def _manual_grids(prof, shapes, spacings):
             raise ValueError(
                 f'--domain no: shape for {leaf} must be "nx,ny,nz" integers, '
                 f'got {shape!r}')
-        grids.append((f'domain/{prof["prefix"]}{leaf}',
+        grids.append((_key(prof, 'domain', leaf),
                       shape, f'{spacings[sp_name]}*mm'))
     return tuple(grids)
 
@@ -287,10 +312,33 @@ def _key(prof, taxon, leaf):
     '''
     Store key for `leaf` in `taxon`, namespaced by the field profile.
 
-    e.g. drift -> "potential/near", weighting -> "potential/w_near".  There is
-    no iteration index in the names any more: each step runs exactly once.
+    INTERMEDIATE leaves (coarse, near, near_bc, near_refined) take the profile's
+    `prefix`: drift -> "potential/near", weighting -> "potential/w_near".
+
+    The FULL-VOLUME leaf instead takes the profile's `full_leaf` verbatim, with
+    NO prefix, so the final grid is named by field in every taxon:
+    domain/drift3d + boundary/drift3d + initial/drift3d + potential/drift3d, and
+    domain/weight3d + ... + potential/weight3d.  'weight3d' does not fit the w_
+    prefix scheme, which is why the name comes from the profile rather than from
+    prefix + FULL_LEAF.
+
+    There is no iteration index in the names any more: each step runs once.
     '''
+    if leaf == FULL_LEAF:
+        return f'{taxon}/{prof["full_leaf"]}'
     return f'{taxon}/{prof["prefix"]}{leaf}'
+
+
+def _output_key(prof):
+    '''
+    The final stitched field's key -- potential/drift3d or potential/weight3d.
+
+    Derived from `full_leaf` rather than stored separately so the output key and
+    the full-volume grid name cannot drift apart.  These are exactly task10b's
+    names, which `velo` and `induce-pixel` are invoked with from the shell
+    script, so they must not change.
+    '''
+    return _key(prof, 'potential', FULL_LEAF)
 
 
 def _domains(ctx, grids, log):
@@ -320,7 +368,7 @@ def _generate(ctx, prof, coarse_config, fine_config, log):
 
     for leaf, cfg in (('coarse', coarse_config),
                       ('near', fine_config),
-                      ('fine01', fine_config)):
+                      (FULL_LEAF, fine_config)):
         dom_key = _key(prof, 'domain', leaf)
         init, bnd = _key(prof, 'initial', leaf), _key(prof, 'boundary', leaf)
         _want(ctx, [init, bnd],
@@ -438,8 +486,8 @@ def _stitch(ctx, prof, near_pot, log):
     The seam is continuous because `near_bc` pinned the near top plane to the
     same coarse values the upsample produces there.
 
-    `stitch-near` stamps `domain = domain/<prefix>fine01` into the output
-    metadata, which is what lets `velo` resolve the grid downstream.
+    `stitch-near` stamps `domain = domain/drift3d` (resp. domain/weight3d) into
+    the output metadata, which is what lets `velo` resolve the grid downstream.
 
     This is where the driver STOPS.  velo / starts / drift / induce-pixel are
     deliberately NOT run here: they live in test/run-task13-hybrid.sh as explicit
@@ -455,11 +503,11 @@ def _stitch(ctx, prof, near_pot, log):
     '''
     from pochoir.__main__ import stitch_near
 
-    out = prof['output']
+    out = _output_key(prof)
     _want(ctx, out,
           lambda: ctx.invoke(stitch_near, near=near_pot,
                              coarse=_key(prof, 'potential', 'coarse'),
-                             domain=_key(prof, 'domain', 'fine01'),
+                             domain=_key(prof, 'domain', FULL_LEAF),
                              output=out, axis=2), log)
     return out
 
@@ -488,7 +536,8 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
         (see `_extents` -- 59.9mm -> 60.0mm at every spacing), near depth = the
         interface.
       * False (`--domain no`)  -- taken from `shapes`, a dict of "nx,ny,nz"
-        strings keyed by leaf ('coarse', 'near', 'fine01').  All three required.
+        strings keyed by GRID_SPEC leaf ('coarse', 'near', 'fine01' =
+        FULL_LEAF).  All three required.
 
     There is no convergence machinery: no tol, no max-iters, no stagnation
     check.  `precision` is the per-solve fdm convergence precision, nothing to
@@ -511,7 +560,7 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
 
     prof = _profile(field)
     log(f'hybrid-iterate: field={field} generator={prof["generator"]} '
-        f'edges={prof["edges"]} output={prof["output"]}')
+        f'edges={prof["edges"]} output={_output_key(prof)}')
 
     spacings = dict(
         coarse=DEFAULT_SPACINGS['coarse'] if coarse_spacing is None else float(coarse_spacing),
