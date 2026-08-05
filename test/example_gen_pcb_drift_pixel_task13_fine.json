@@ -13,7 +13,7 @@
     "pixelGap" : 0.9,
     "chamfer_r": 0.7,
     "chamferMode": "dynamic",
-    "Npixels" : 5,
+    "Npixels" : 17,
     "LArPermittivity": 1.5,
     "FR4Permittivity": 4.5,
     "enableFR4": false,

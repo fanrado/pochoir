@@ -10,7 +10,7 @@
     "pixelSize" : 3.6,
     "pixelGap" : 0.8,
     "chamfer_r": 0.8,
-    "Npixels" : 5,
+    "Npixels" : 17,
     "LArPermittivity": 1.5,
     "FR4Permittivity": 4.5,
     "enableInsulatorFR4": true,
