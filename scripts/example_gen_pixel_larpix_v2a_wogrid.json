@@ -12,6 +12,6 @@
     "chamfer_r": 0.7,
     "Npixels" : 5,
     "enableInsulatorFR4": true,
-    "driftZDepth": 29.9,
+    "driftZDepth": 159.9,
     "nGridPoints": 10
 }

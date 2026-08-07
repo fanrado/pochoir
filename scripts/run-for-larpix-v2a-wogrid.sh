@@ -47,7 +47,7 @@ dcfg="example_gen_pcb_drift_pixel_larpix_v2a_wogrid.json"
 ## Single full-depth drift domain: 44x44 periodic tile (4.4mm pitch @0.1mm),
 want domain/drift \
      pochoir domain --domain domain/drift \
-     --shape=44,44,301 --spacing '0.1*mm'
+     --shape=44,44,1601 --spacing '0.1*mm'
 
 want "initial/drift boundary/drift" \
      pochoir gen --generator $gen --domain domain/drift \
@@ -114,7 +114,7 @@ wcfg="example_gen_pixel_larpix_v2a_wogrid.json"
 ## Weighting domain: 220x220 (5 pixels x 4.4mm pitch @0.1mm
 want domain/weight \
      pochoir domain --domain domain/weight \
-     --shape=220,220,301 --spacing '0.1*mm'
+     --shape=220,220,1601 --spacing '0.1*mm'
 
 want "initial/weight boundary/weight" \
      pochoir gen --generator $wgen --domain domain/weight \
