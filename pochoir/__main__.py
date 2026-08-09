@@ -2376,24 +2376,47 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
 @click.option("--fine-shape", type=str, default=None,
               help="'nx,ny,nz' for the final full fine grid, stored as "
                    "domain/drift3d resp. domain/weight3d (--domain no only)")
+@click.option("--band-cells", type=int, default=2,
+              help="Near/far Schwarz overlap in COARSE cells (def: 2, i.e. a "
+                   "3-coarse-node band at the interface)")
+@click.option("--max-sweeps", type=int, default=1,
+              help="Number of near/far Schwarz sweeps (def: 1). 0 skips the "
+                   "sweep entirely and reproduces the old one-shot path.")
+@click.option("--schwarz-tol", type=str, default='1*V',
+              help="Inter-sweep convergence tolerance (def: '1*V'). Does not "
+                   "bite at the default of a single sweep.")
 @click.pass_context
 def hybrid_iterate(ctx, coarse_config, fine_config, interface, precision,
                    field, coarse_spacing, fine_spacing, domain,
-                   coarse_shape, near_shape, fine_shape):
+                   coarse_shape, near_shape, fine_shape,
+                   band_cells, max_sweeps, schwarz_tol):
     '''
-    Task13 one-shot hybrid near/far field solve.
+    Task13 hybrid near/far field solve with a banded Schwarz sweep.
 
-    A SINGLE pass, no iteration: a 0.4mm coarse full-volume solve; the coarse
-    potential on the interface plane pinned as a FIXED Dirichlet BC for the near
-    grid; one 0.1mm near solve over z = 0..interface; then `stitch-near`
-    upsamples the coarse far field onto the full 0.1mm grid and overwrites the
-    near planes with the fine solution.  That stitched array IS the final field
-    -- there is no full-volume re-solve, no coarsen-back and no convergence
-    loop.
+    Sequence: coarse -> near -> far -> near.  A coarse full-volume solve; the
+    coarse potential on the interface plane pinned Dirichlet for the near grid;
+    a fine near solve over z = 0..interface; then ONE Schwarz sweep over a band
+    of --band-cells coarse cells of overlap (2 cells = a 3-coarse-node band, e.g.
+    40.0 / 39.6 / 39.2mm at --interface 40*mm and --coarse-spacing 0.4).  The far
+    solve pins the INNER band node Dirichlet to the downsampled near solution and
+    leaves the middle and outer nodes free; the near then re-solves against the
+    updated far.  Finally `stitch-near` upsamples the swept far field onto the
+    full fine grid and overwrites the near planes with the swept near solution.
+    That stitched array IS the final field -- there is still no full-volume
+    re-solve and no coarsen-back.
 
-    Two spacings only (--coarse-spacing, --fine-spacing).  Because the far field
-    is never re-solved at the fine spacing, phi has a derivative kink at the
-    seam: drift must use --interp-order linear.
+    The seam is C0 by construction, because the final near solve is pinned to
+    the final far solve.  It is NOT known to be C1: the sweep should shrink the
+    derivative jump there, but that jump has not been measured, so drift must
+    still use --interp-order linear (cubic overshoots at a kink).
+
+    --max-sweeps 0 skips the sweep and restores the old one-shot path exactly:
+    a single pass with the near top plane pinned to the unswept coarse field,
+    no far re-solve and no convergence loop.
+
+    Two spacings only (--coarse-spacing, --fine-spacing).  --precision is a
+    SINGLE per-solve fdm precision covering the coarse, near and both Schwarz
+    solves; --schwarz-tol is the separate inter-sweep tolerance.
 
     --field drift (default) solves the periodic single-pixel drift tile ->
     potential/drift3d; --field weighting solves the non-periodic 5x5 unit probe
@@ -2423,6 +2446,7 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface, precision,
         interface=interface, precision=precision, field=field,
         coarse_spacing=coarse_spacing, fine_spacing=fine_spacing,
         derive_domain=(domain == "yes"),
+        band_cells=band_cells, max_sweeps=max_sweeps, tol=schwarz_tol,
         shapes={"coarse": coarse_shape, "near": near_shape,
                 pochoir.hybrid_iterate.FULL_LEAF: fine_shape})
 
