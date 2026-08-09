@@ -485,9 +485,9 @@ def _near_solve(ctx, prof, precision, log):
     return near_pot
 
 
-def _schwarz(ctx, prof, near_pot, band_cells=DEFAULT_BAND_CELLS,
+def _schwarz(ctx, prof, near_pot, interface, band_cells=DEFAULT_BAND_CELLS,
              max_sweeps=DEFAULT_MAX_SWEEPS, tol=DEFAULT_TOL,
-             precision=2e-8, interface='20*mm', log=None):
+             precision=2e-8, log=None):
     '''
     The banded near/far Schwarz sweep: coarse -> near -> far -> near, ONE sweep.
 
@@ -506,6 +506,11 @@ def _schwarz(ctx, prof, near_pot, band_cells=DEFAULT_BAND_CELLS,
     defaults to its own 2e-11 / 2e-7 near/far split; passing `precision` to both
     deliberately overrides that, so every solve in this module converges to the
     same tolerance.
+
+    `interface` is REQUIRED and positional on purpose: it used to carry a
+    '20*mm' default while the runner passes --interface 40*mm, so a caller that
+    forgot it would have banded the sweep at the wrong plane and silently
+    solved the wrong problem.  There is now no default to fall back to.
 
     Returns (near_out, far_out).
     '''
@@ -534,11 +539,18 @@ def _schwarz(ctx, prof, near_pot, band_cells=DEFAULT_BAND_CELLS,
     return near_out, far_out
 
 
-def _stitch(ctx, prof, near_pot, log):
+def _stitch(ctx, prof, near_pot, coarse_pot, log):
     '''
     Steps 4-5: upsample the coarse far field onto the full fine grid, overwrite
     the near planes with the fine near solution, and write the result STRAIGHT
     to the profile's output key.
+
+    `near_pot` and `coarse_pot` are passed in rather than derived here, because
+    after a Schwarz sweep they are the sweep outputs (potential/near_schwarz,
+    potential/coarse_schwarz) rather than the sweep-0 keys.  `coarse_pot` is a
+    FULL-volume coarse array either way -- near-far-solve solves the whole
+    coarse domain with the inner band node pinned -- so the stitch geometry is
+    identical in both cases.  The output key is unchanged.
 
     That stitched array is the final field: no full-volume re-solve follows.
     The seam is continuous because `near_bc` pinned the near top plane to the
@@ -564,7 +576,7 @@ def _stitch(ctx, prof, near_pot, log):
     out = _output_key(prof)
     _want(ctx, out,
           lambda: ctx.invoke(stitch_near, near=near_pot,
-                             coarse=_key(prof, 'potential', 'coarse'),
+                             coarse=coarse_pot,
                              domain=_key(prof, 'domain', FULL_LEAF),
                              output=out, axis=2), log)
     return out
@@ -573,7 +585,9 @@ def _stitch(ctx, prof, near_pot, log):
 def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
                    precision=2e-8, field='drift',
                    coarse_spacing=None, fine_spacing=None,
-                   derive_domain=True, shapes=None, log=None):
+                   derive_domain=True, shapes=None,
+                   band_cells=DEFAULT_BAND_CELLS,
+                   max_sweeps=DEFAULT_MAX_SWEEPS, tol=DEFAULT_TOL, log=None):
     '''
     Drive the Task13 one-shot hybrid FIELD solve: grids, gens, the coarse solve,
     the fine near solve against a fixed interface BC, and the stitch that IS the
@@ -656,8 +670,19 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
     # steps 2-3: the fine near solve against the fixed interface BC.
     near_pot = _near_solve(ctx, prof, precision, log)
 
+    # step 3b: the banded near/far Schwarz sweep.  max_sweeps == 0 skips it and
+    # falls back to the sweep-0 keys, reproducing the one-shot scheme exactly.
+    if max_sweeps:
+        near_s, far_s = _schwarz(ctx, prof, near_pot, interface,
+                                 band_cells=band_cells, max_sweeps=max_sweeps,
+                                 tol=tol, precision=precision, log=log)
+    else:
+        near_s, far_s = near_pot, coarse_pot
+        log('hybrid-iterate: max_sweeps=0 -- skipping the Schwarz sweep, '
+            'stitching the one-shot near/coarse fields')
+
     # steps 4-5: the stitch, which is the final field.
-    final = _stitch(ctx, prof, near_pot, log)
+    final = _stitch(ctx, prof, near_s, far_s, log)
 
     log(f'hybrid-iterate: done, {field} field stitched to {final} '
         f'(run the velo/starts/drift/induce chain from the shell script)')
