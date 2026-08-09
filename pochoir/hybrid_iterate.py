@@ -1,35 +1,51 @@
 #!/usr/bin/env python3
 '''
-Task13 one-shot hybrid near/far drift-field solver (beads pochoir-uy3c).
+Task13 hybrid near/far drift-field solver (beads pochoir-uy3c).
 
 The bash hybrid runners (run-hybrid-30cm-drift.sh and friends) hard-code a fixed
 near/far sequence, so the structure is invisible from the script.  This module
 drives the same steps from Python, reducing bash to supplying configs and the
 store path.
 
-Method -- a SINGLE pass, no iteration (near/far separation at z=20mm, axis 2):
+Method -- near/far separation at z = --interface (axis 2):
 
-  1. coarse full-volume solve at 0.4mm
-  2. `refine` the coarse potential onto the 0.1mm near grid, then `near-bc`
-     pins the near grid's last z plane (z=20mm) to the coarse value there --
-     a FIXED Dirichlet condition for the near solve
-  3. near solve at 0.1mm on z = 0..20mm, no-flux FR4 insulator BC active
-  4. `stitch-near` multi-linearly upsamples the coarse far field onto the full
-     0.1mm grid and overwrites the near planes with the fine near solution.
-     Continuous at the seam because step 2 pinned the near top plane to the
-     same coarse values.
-  5. that stitched array IS the final field -- it is written straight to the
-     profile's output key (potential/drift3d, potential/weight3d).  No full
-     re-solve, no coarsen-back, no convergence loop.
+  1. coarse full-volume solve at the coarse spacing
+  2. `refine` the coarse potential onto the fine near grid, then `near-bc` pins
+     the near grid's last z plane (z = --interface) to the coarse value there,
+     a Dirichlet condition for the sweep-0 near solve
+  3. near solve at the fine spacing on z = 0..interface, no-flux FR4 insulator
+     BC active
+  4. ONE Schwarz sweep at overlap 2 coarse cells -- a 3-coarse-node band at the
+     interface (40.0 / 39.6 / 39.2mm at --interface 40*mm, coarse 0.4mm).  The
+     far solve pins the INNER band node (39.2mm) Dirichlet to the downsampled
+     near solution and leaves the middle and outer nodes seeded but FREE; the
+     near then re-solves with its outer node (40.0mm) pinned to the updated
+     far.  Sequence: coarse -> near -> far -> near.
 
-Two spacings only: coarse 0.4mm and fine 0.1mm.  The far field is therefore a
-piecewise-linear upsample of the 0.4mm solve and is never re-solved at 0.1mm,
-so phi has a derivative kink at the seam; drift must use --interp-order linear
-(cubic overshoots at a kink).
+     Only the inner node is Dirichlet on purpose.  Pinning all three would push
+     the far problem's real domain up to the outer node and discard the
+     overlap, which is the whole mechanism by which the two solves see each
+     other.
+  5. `stitch-near` multi-linearly upsamples the Schwarz far field onto the full
+     fine grid and overwrites the near planes with the Schwarz near solution.
+     That stitched array IS the final field, written straight to the profile's
+     output key (potential/drift3d, potential/weight3d).
 
-Unlike `nearfar.schwarz_solve` there is no sweep at all here -- one near solve
-against a fixed interface BC.  That module and the `near-far-solve` command are
-deliberately untouched by this work.
+The seam is C0 BY CONSTRUCTION: the final near solve is pinned to the final far
+solve, so the two agree in value where they meet.
+
+That does NOT make it C1, and --interp-order linear is STILL REQUIRED for
+drift.  The sweep is expected to shrink the derivative jump at the seam, but
+that jump has not been measured yet; until it has, assume a kink is present and
+do not let cubic interpolation near it (cubic overshoots at a kink).
+
+--max-sweeps 0 skips the sweep entirely and restores the old one-shot path:
+step 3's near solution and the step-1 coarse field go straight to step 5, with
+the seam continuous only because step 2 pinned the near top plane to the same
+coarse values the upsample produces there.
+
+The sweep is run by `nearfar.schwarz_solve` via the `near-far-solve` command,
+which this module now calls (step 4).  Neither is modified here.
 
 Every step runs the existing click command in-process via `ctx.invoke`, so it
 takes the same code path as the bash scripts and shares one store object.
@@ -72,7 +88,8 @@ def _want(ctx, targets, thunk, log=None):
 # ---------------------------------------------------------------------------
 # Field profiles.
 #
-# Both fields run the SAME one-shot hybrid scheme, the same precision and the
+# Both fields run the SAME hybrid scheme (including the sweep), the same
+# precision and the
 # same final 0.1mm grid; only the grids, generator, edges and store-key names
 # differ.  `--field` selects between them.
 #
@@ -553,8 +570,13 @@ def _stitch(ctx, prof, near_pot, coarse_pot, log):
     identical in both cases.  The output key is unchanged.
 
     That stitched array is the final field: no full-volume re-solve follows.
-    The seam is continuous because `near_bc` pinned the near top plane to the
-    same coarse values the upsample produces there.
+
+    The seam is continuous, but for a different reason in each mode.  After a
+    Schwarz sweep (the default) it is because the FINAL near solve was pinned
+    to the FINAL far solve at the outer band node, so the two fields being
+    stitched already agree there.  With max_sweeps=0 it is the original reason:
+    `near_bc` pinned the near top plane to the same coarse values the upsample
+    produces at that plane.
 
     `stitch-near` stamps `domain = domain/drift3d` (resp. domain/weight3d) into
     the output metadata, which is what lets `velo` resolve the grid downstream.
@@ -589,9 +611,9 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
                    band_cells=DEFAULT_BAND_CELLS,
                    max_sweeps=DEFAULT_MAX_SWEEPS, tol=DEFAULT_TOL, log=None):
     '''
-    Drive the Task13 one-shot hybrid FIELD solve: grids, gens, the coarse solve,
-    the fine near solve against a fixed interface BC, and the stitch that IS the
-    final field -> the field's output key.
+    Drive the Task13 hybrid FIELD solve: grids, gens, the coarse solve, the fine
+    near solve against a fixed interface BC, one banded near/far Schwarz sweep,
+    and the stitch that IS the final field -> the field's output key.
 
     `field` selects the profile in FIELDS: 'drift' (periodic single pixel tile ->
     potential/drift3d) or 'weighting' (non-periodic 5x5 unit probe ->
@@ -611,9 +633,20 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
         strings keyed by GRID_SPEC leaf ('coarse', 'near', 'fine01' =
         FULL_LEAF).  All three required.
 
-    There is no convergence machinery: no tol, no max-iters, no stagnation
-    check.  `precision` is the per-solve fdm convergence precision, nothing to
-    do with an outer loop.
+    THE SWEEP.  `band_cells` (default 2) is the near/far overlap in COARSE
+    cells, so the band spans band_cells+1 coarse nodes at the interface.
+    `max_sweeps` (default 1) caps the sweep count and `tol` (default '1*V') is
+    the inter-sweep convergence tolerance handed to near-far-solve; at the
+    default of a single sweep neither ever bites, and both exist so a longer
+    iteration can be asked for without touching this module.
+
+    `max_sweeps=0` SKIPS the sweep and stitches the sweep-0 near solution
+    against the step-1 coarse field, reproducing the old one-shot scheme
+    exactly.
+
+    `precision` is the per-solve fdm convergence precision -- a different thing
+    from `tol`, and applied identically to every solve here including both
+    sides of the sweep.
 
     The chain after the field (velo / starts / drift / induce-pixel) is NOT part
     of this driver -- see `_stitch`.  It runs as explicit `pochoir` commands in
