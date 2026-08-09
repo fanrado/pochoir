@@ -298,6 +298,15 @@ ENGINE = 'torch'
 EPOCH = 130000000
 NEPOCHS = 10
 
+# Banded near/far Schwarz sweep (see `_schwarz`).  The band is
+# DEFAULT_BAND_CELLS coarse cells of overlap, i.e. 3 coarse nodes: at
+# --interface 40*mm with coarse 0.4mm those are nodes 100/99/98 = z
+# 40.0/39.6/39.2mm.  The innermost, 39.2mm, still falls inside the near grid's
+# 0..40mm range, so the band needs NO grid reshaping.
+DEFAULT_BAND_CELLS = 2
+DEFAULT_MAX_SWEEPS = 1
+DEFAULT_TOL = '1*V'
+
 
 def _profile(field):
     '''Look up a field profile, failing loudly on an unknown name.'''
@@ -474,6 +483,55 @@ def _near_solve(ctx, prof, precision, log):
            near_pot, near_inc, precision, log)
 
     return near_pot
+
+
+def _schwarz(ctx, prof, near_pot, band_cells=DEFAULT_BAND_CELLS,
+             max_sweeps=DEFAULT_MAX_SWEEPS, tol=DEFAULT_TOL,
+             precision=2e-8, interface='20*mm', log=None):
+    '''
+    The banded near/far Schwarz sweep: coarse -> near -> far -> near, ONE sweep.
+
+    `near_bc` pins the near top plane to the coarse field once and never
+    revisits it, so the single-shot scheme leaves a derivative kink at the seam.
+    This re-solves the two domains against each other across a band of
+    `band_cells` coarse cells of overlap, which makes the stitched field
+    continuous in gradient as well as in value.
+
+    `near_pot` -- the sweep-0 near solution from `_near_solve` -- is handed over
+    as --near-potential, i.e. a WARM START.  The sweep therefore writes its
+    results to new keys (near_schwarz / coarse_schwarz) and the existing
+    near_refined / near_bc / near store files are left intact for inspection.
+
+    Precision is the driver's SINGLE precision for both sides.  near-far-solve
+    defaults to its own 2e-11 / 2e-7 near/far split; passing `precision` to both
+    deliberately overrides that, so every solve in this module converges to the
+    same tolerance.
+
+    Returns (near_out, far_out).
+    '''
+    from pochoir.__main__ import near_far_solve
+
+    near_out = _key(prof, 'potential', 'near_schwarz')
+    far_out = _key(prof, 'potential', 'coarse_schwarz')
+
+    _want(ctx, [near_out, far_out],
+          lambda: ctx.invoke(
+              near_far_solve,
+              coarse_potential=_key(prof, 'potential', 'coarse'),
+              coarse_initial=_key(prof, 'initial', 'coarse'),
+              coarse_boundary=_key(prof, 'boundary', 'coarse'),
+              near_initial=_key(prof, 'initial', 'near'),
+              near_boundary=_key(prof, 'boundary', 'near'),
+              near_potential=near_pot,
+              insulator=_key(prof, 'initial', 'near') + '_insulator',
+              interface=interface, axis=2, edges=prof['edges'],
+              engine=ENGINE, epoch=EPOCH, nepochs=NEPOCHS,
+              near_precision=precision, far_precision=precision,
+              tol=tol, max_iters=max_sweeps, overlap=band_cells,
+              near_out=near_out, far_out=far_out),
+          log)
+
+    return near_out, far_out
 
 
 def _stitch(ctx, prof, near_pot, log):
