@@ -2296,7 +2296,13 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
     # express the Schwarz tolerance in volts too: '1*V' -> 1.0, '0.05*V' -> 0.05.
     tol_v = float(pochoir.arrays.fromstr1(tol)[0]) / units.V
 
-    def _make_solver(prec, insulator=None):
+    def _make_solver(prec, ckpt_key, insulator=None):
+        # ckpt_key names the torch checkpoint slot this solver writes into.
+        # It must be the key this solver's own result ends up under (near_out
+        # for the near solve, far_out for the far solve): sharing one key made
+        # the far solve stomp the near checkpoints and create
+        # potential/<near_out>.npz before the Schwarz step had finished, so a
+        # resume would skip a half-done sweep.
         def _solve(iarr, barr):
             if engine == "torch":
                 # Pass the insulator mask only when present so the no-mask path
@@ -2307,7 +2313,7 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
                     numpy.asarray(barr).astype(bool),
                     bool_edges, prec, epoch, nepochs,
                     info_msg=info_msg, _dtype=torch.float64,
-                    ctx=ctx, potential=near_out, increment=near_out + "/inc",
+                    ctx=ctx, potential=ckpt_key, increment=ckpt_key + "/inc",
                     params=dict(command="near-far-solve"), epsilon=None, **extra)
             else:
                 arr, _err = solve(
@@ -2320,8 +2326,8 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
     near_pot, far_pot, n_iters, delta = nearfar.schwarz_solve(
         cpot, cinit, cbnd, coarse_dom,
         ninit, nbnd, near_dom,
-        _make_solver(near_precision, insulator=near_insulator),
-        _make_solver(far_precision),
+        _make_solver(near_precision, near_out, insulator=near_insulator),
+        _make_solver(far_precision, far_out),
         axis=axis, interface_z=interface_z,
         tol=tol_v, max_iters=max_iters, log=info_msg,
         near_start=near_start, overlap=overlap)
