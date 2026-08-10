@@ -19,15 +19,18 @@
 # Therefore: RETARGETING A GEOMETRY MEANS EDITING BOTH COPIES.  Change only
 # scripts/ and run-task13-hybrid.sh over there keeps solving the old geometry;
 # change only that side and this script does.  Either way both runners still
-# call themselves "task13" and neither one errors at run time.
+# call themselves "task13" and neither one errors at run time -- the
+# divergence is SILENT, and surfaces only as two sets of results that will
+# not reconcile.
 #
-# A GUARD TEST CATCHES THIS -- do not delete it as redundant:
-#   test_run_pixel_field_script.py::test_scripts_copies_have_not_drifted_from_the_test_originals
-# asserts byte equality on all four pairs and names the offending file when it
-# fails, and a sibling test asserts each copy here stays tracked despite the
-# blanket *.json ignore.  So editing one side turns the suite red rather than
-# corrupting a run quietly -- but only if the suite is actually run before the
-# results are trusted.
+# NOTHING IN THIS REPO CHECKS THAT THE TWO SETS AGREE.  There is no committed
+# test asserting byte equality across the pairs, so if you cloned this branch,
+# the hand-maintenance rule above is the ONLY protection you have -- discipline
+# and the recipe below, nothing automated.
+#
+# (A guard test covering exactly this does exist in the author's working tree,
+# but the suite is deliberately kept UNCOMMITTED and is therefore NOT part of
+# the repo.  Do not count on it: assume it is absent, because for you it is.)
 #
 # This is not hypothetical.  This repo has already shipped stale config facts
 # twice, both caught only by reading the files:
@@ -35,10 +38,9 @@
 #     while the Npixels key next to it said 25;
 #   * driftZDepth left at 159.9 in the weighting pair after the drift pair had
 #     already moved to 69.9.
-# Both are fixed now, and both are exactly why the guard above is worth
-# keeping: they were one file disagreeing with another that nothing compared.
-# Two full copies of four configs is that same failure mode with more surface
-# area.
+# Both are fixed now, and both are why this warning is here: each was one
+# file disagreeing with another that nothing compared.  Two full copies of
+# four configs is that same failure mode with more surface area.
 #
 # The pairs -- same basename on each side:
 #   example_gen_pcb_drift_pixel_task13_coarse.json
@@ -46,7 +48,7 @@
 #   example_gen_pixel_with_grid_task13_coarse.json
 #   example_gen_pixel_with_grid_task13_fine.json
 #
-# To check the pairs by hand without running the suite:
+# CHECK THE PAIRS BY HAND before trusting a run, after editing either side:
 #   orig=../test ; for f in *task13*.json ; do cmp "$f" "$orig/$f" ; done
 # =========================================================================
 #
