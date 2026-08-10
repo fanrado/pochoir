@@ -168,10 +168,32 @@ cd "$(dirname "$0")"
 ROOT="$(cd .. && pwd)"
 export PATH="$ROOT/env/bin:$PATH"
 
-export POCHOIR_STORE="${1:-store_task13_hybrid_5cm}"
+## ---------------------------------------------------------------------------
+## SIZES -- the only knobs you are meant to edit.  Everything about HOW the
+## near/far solve is carried out lives inside `pochoir hybrid-iterate`, not
+## here.
+## ---------------------------------------------------------------------------
+STORE="${1:-store_task13_hybrid_5cm}"
+INTERFACE="40*mm"       # near/far split depth
+COARSE_SPACING=0.4      # mm, far-field grid
+FINE_SPACING=0.1        # mm, near-field and final grid
+
+export POCHOIR_STORE="$STORE"
 export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_driftfield.log"
 
 source helpers.sh
+
+## ---------------------------------------------------------------------------
+## One field, one line.  The drift and weighting solves differ only in --field
+## and their two configs; every other option is a SIZE from the block above.
+## ---------------------------------------------------------------------------
+hybrid_field () {   # <field> <coarse-config> <fine-config>
+    pochoir hybrid-iterate --field "$1" \
+        --coarse-config "$2" --fine-config "$3" \
+        --interface "$INTERFACE" \
+        --coarse-spacing "$COARSE_SPACING" \
+        --fine-spacing "$FINE_SPACING"
+}
 
 ## ---------------------------------------------------------------------------
 ## want: run a step only when its output is missing, so a re-run resumes
@@ -185,23 +207,15 @@ ccfg=example_gen_pcb_drift_pixel_task13_coarse.json
 date
 
 ############################################################################
-## PART A: DRIFT FIELD  (one-shot hybrid, Python-driven)
+## PART A: DRIFT FIELD  (hybrid, Python-driven)
 ############################################################################
-echo "=== Task13 PART A: one-shot hybrid 5cm drift field (interface z=20mm) -> $POCHOIR_STORE ==="
+echo "=== Task13 PART A: hybrid 15cm drift field (interface z=${INTERFACE}) -> $POCHOIR_STORE ==="
 
 ## POCHOIR_STORE reaches the command through the `cli` group's envvar, so no
-## --store is needed.  Defaults carried by the command: --interface '20*mm',
-## --precision 2e-8, --coarse-spacing 0.4, --fine-spacing 0.1.  One coarse
-## solve, one near solve, one stitch -> potential/drift3d (44x44x601 @0.1mm),
-## and it STOPS there -- the drift chain is PART B below.
-pochoir hybrid-iterate \
-    --coarse-config "$ccfg" \
-    --fine-config   "$dcfg" \
-    --interface "40*mm" \
-    --coarse-spacing 0.4 \
-    --fine-spacing 0.1 \
-    --band-cells 2 \
-    --max-sweeps 1
+## --store is needed.  --precision and the near/far scheme are the command's
+## own defaults.  Result: potential/drift3d, and it STOPS there -- the drift
+## chain is PART B below.
+hybrid_field drift "$ccfg" "$dcfg"
 
 date
 
@@ -251,7 +265,7 @@ want paths/drift3d \
 date
 
 ############################################################################
-## PART C: WEIGHTING FIELD  (same one-shot hybrid, --field weighting)
+## PART C: WEIGHTING FIELD  (same hybrid scheme, --field weighting)
 ##
 ## Identical scheme, precision and 0.1mm fine grid as PART A -- only the grids,
 ## generator, edges and store-key names differ, all carried by the 'weighting'
@@ -281,20 +295,12 @@ date
 ## node full grid is only a stitch target.  This is much cheaper than the old
 ## iterated scheme, but still the longest PART here.
 ############################################################################
-echo "=== Task13 PART C: one-shot hybrid weighting field (5x5 unit probe, fix,fix,fix) ==="
+echo "=== Task13 PART C: hybrid weighting field (unit probe, fix,fix,fix) ==="
 
 wcfg=example_gen_pixel_with_grid_task13_fine.json
 wccfg=example_gen_pixel_with_grid_task13_coarse.json
 
-pochoir hybrid-iterate \
-    --field weighting \
-    --coarse-config "$wccfg" \
-    --fine-config   "$wcfg" \
-    --interface "40*mm" \
-    --coarse-spacing 0.4 \
-    --fine-spacing 0.1 \
-    --band-cells 2 \
-    --max-sweeps 1
+hybrid_field weighting "$wccfg" "$wcfg"
 
 date
 
