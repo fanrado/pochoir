@@ -7,6 +7,40 @@
 # --hybrid no runs ONE 0.1mm full-depth solve.  Both write the same store keys
 # and, at this geometry, the same final lattice, so the two are comparable.
 #
+# =========================================================================
+# DUPLICATED CONFIGS -- READ BEFORE CHANGING ANY GEOMETRY
+# =========================================================================
+# The four task13 JSON configs in scripts/ are COPIES of the originals of the
+# same basename in the sibling "test" directory.  scripts/ is the production
+# folder and deliberately reads nothing from there, so both sets exist and
+# BOTH ARE MAINTAINED BY HAND -- there is no symlink, no generator, and no
+# test asserting the two agree.
+#
+# Therefore: RETARGETING A GEOMETRY MEANS EDITING BOTH COPIES.  Change only
+# scripts/ and run-task13-hybrid.sh over there keeps solving the old geometry;
+# change only that side and this script does.  Either way both runners still
+# call themselves "task13" and neither errors -- the divergence is SILENT, and
+# surfaces only as two sets of results that will not reconcile.
+#
+# This is not hypothetical.  This repo has already shipped stale config facts
+# twice, both caught only by reading the files:
+#   * a weighting _description claiming "Npixels 17 ... = 74.8mm transverse"
+#     while the Npixels key next to it said 25;
+#   * driftZDepth left at 159.9 in the weighting pair after the drift pair had
+#     already moved to 69.9.
+# Both were one file disagreeing with another that nothing compared.  Two full
+# copies of four configs is that same failure mode with more surface area.
+#
+# The pairs -- same basename on each side:
+#   example_gen_pcb_drift_pixel_task13_coarse.json
+#   example_gen_pcb_drift_pixel_task13_fine.json
+#   example_gen_pixel_with_grid_task13_coarse.json
+#   example_gen_pixel_with_grid_task13_fine.json
+#
+# After editing either side, diff the pair before trusting a run:
+#   orig=../test ; for f in *task13*.json ; do cmp "$f" "$orig/$f" ; done
+# =========================================================================
+#
 # WITH-GRID vs WITHOUT-GRID IS NOT A FLAG.  It follows entirely from which
 # configs the SIZES block points at -- GridHoleShape in the JSON ("None" = no
 # shield grid) is what the generators branch on.  That is exactly how
@@ -22,8 +56,8 @@
 
 set -e
 
-# This script lives in scripts/ but the task13 configs live in test/, so cd to
-# our own directory first and reach them as ../test/... below.  Same structure
+# This script lives in scripts/ and its configs sit beside it, so cd to our own
+# directory first and reach them by bare filename below.  Same structure
 # as run-for-larpix-v2a-wogrid.sh; without the cd, the relative config paths
 # and helpers.sh would only resolve when invoked from scripts/.
 cd "$(dirname "$0")"
@@ -69,13 +103,12 @@ want () {
 ############################################################################
 ## SIZES
 ############################################################################
-## CONFIGS.  ../test/ because this script lives in scripts/ and we cd'd here:
-## these are the Phase 1 files themselves, deliberately NOT copied into
-## scripts/ -- a copy would fork and silently drift from the originals.
-dcfg_coarse="../test/example_gen_pcb_drift_pixel_task13_coarse.json"
-dcfg_fine="../test/example_gen_pcb_drift_pixel_task13_fine.json"
-wcfg_coarse="../test/example_gen_pixel_with_grid_task13_coarse.json"
-wcfg_fine="../test/example_gen_pixel_with_grid_task13_fine.json"
+## CONFIGS.  Bare filenames, resolved against scripts/ by the cd above.  See
+## the DUPLICATED CONFIGS warning in the header before editing any of them.
+dcfg_coarse="example_gen_pcb_drift_pixel_task13_coarse.json"
+dcfg_fine="example_gen_pcb_drift_pixel_task13_fine.json"
+wcfg_coarse="example_gen_pixel_with_grid_task13_coarse.json"
+wcfg_fine="example_gen_pixel_with_grid_task13_fine.json"
 
 ## SHAPES.  Explicit values, not derived: this table is the authority and
 ## field-solve is invoked with --domain no, so a typo here cannot be silently
