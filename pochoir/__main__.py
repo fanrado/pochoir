@@ -58,6 +58,13 @@ import sys, os
 import json
 import click
 import pochoir
+# Imported at module scope (not just inside the command body) so the
+# hybrid-iterate click options can take their DEFAULTS from the driver's
+# constants rather than repeating them as literals -- the CLI always passes a
+# value, so a literal that drifted from the constant would silently win.
+# Safe: hybrid_iterate.py imports only json and pathlib at top level, its
+# pochoir imports are all inside function bodies.
+import pochoir.hybrid_iterate
 import torch
 from . import units
 # no others than click and pochoir!
@@ -2376,13 +2383,16 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
 @click.option("--fine-shape", type=str, default=None,
               help="'nx,ny,nz' for the final full fine grid, stored as "
                    "domain/drift3d resp. domain/weight3d (--domain no only)")
-@click.option("--band-cells", type=int, default=2,
+@click.option("--band-cells", type=int,
+              default=pochoir.hybrid_iterate.DEFAULT_BAND_CELLS,
               help="Near/far Schwarz overlap in COARSE cells (def: 2, i.e. a "
                    "3-coarse-node band at the interface)")
-@click.option("--max-sweeps", type=int, default=1,
+@click.option("--max-sweeps", type=int,
+              default=pochoir.hybrid_iterate.DEFAULT_MAX_SWEEPS,
               help="Number of near/far Schwarz sweeps (def: 1). 0 skips the "
                    "sweep entirely and reproduces the old one-shot path.")
-@click.option("--schwarz-tol", type=str, default='1*V',
+@click.option("--schwarz-tol", type=str,
+              default=pochoir.hybrid_iterate.DEFAULT_TOL,
               help="Inter-sweep convergence tolerance (def: '1*V'). Does not "
                    "bite at the default of a single sweep.")
 @click.pass_context
