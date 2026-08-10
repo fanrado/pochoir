@@ -14,8 +14,6 @@
     "chamfer_r": 0.4,
     "chamferMode": "dynamic",
     "Npixels" : 5,
-    "LArPermittivity": 1.5,
-    "FR4Permittivity": 4.5,
     "enableFR4": false,
     "enableInsulatorFR4": true,
     "driftZDepth": 159.9,
