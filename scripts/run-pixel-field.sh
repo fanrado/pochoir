@@ -59,6 +59,20 @@
 # run-for-largepix-wgrid.sh and run-for-larpix-v2a-wogrid.sh differ: same
 # commands, different JSON filenames.
 #
+# enableFR4 IS INERT ON THIS BRANCH -- DO NOT REACH FOR IT.  The drift configs
+# still carry the key, but NOTHING reads it: grep it in pochoir/ and you get
+# zero hits.  The pad/FR4 laminate z-layout is gated on enableInsulatorFR4
+# ALONE (gen_pcb_drift_pixel_with_grid.py:507).  So flipping enableFR4 to true
+# does NOT move the pad and does NOT create a laminate -- it does nothing at
+# all.  enableInsulatorFR4 is the key that matters; leave it TRUE.
+#
+# This is worth stating because the failure is silent: a config with
+# enableFR4 true and enableInsulatorFR4 false looks like it asked for a
+# laminate, gets none, and drops the pad top by ~1.5mm with no error and no
+# warning -- a live defect already found in the task7a config.  The four
+# task13 drift configs and the largepix wgrid config all currently set
+# enableFR4 false / enableInsulatorFR4 true, which is the correct pairing.
+#
 # ENFORCEMENT-FREE CONTRACT (non-negotiable, see PART B).  --insulator is
 # applied to the FIELD SOLVE only.  velo gets neither --boundary nor
 # --insulator, and drift gets no --insulator, so paths are never clamped or
