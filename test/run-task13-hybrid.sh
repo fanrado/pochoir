@@ -38,7 +38,7 @@ export PATH="$ROOT/env/bin:$PATH"
 ## near/far solve is carried out lives inside `pochoir hybrid-iterate`, not
 ## here.
 ## ---------------------------------------------------------------------------
-STORE="${1:-store_task13_hybrid_5cm}"
+STORE="${1:-store_task13_hybrid_15cm_9x9_testnewBC}"
 INTERFACE="40*mm"       # near/far split depth
 COARSE_SPACING=0.4      # mm, far-field grid
 FINE_SPACING=0.1        # mm, near-field and final grid
