@@ -1,0 +1,20 @@
+{
+    "_description" : "Task13 WEIGHTING field (unit probe), COARSE transcription -- the 0.4mm far-field grid. The fine sibling (example_gen_pixel_with_grid_task13_fine.json) is the 0.1mm near-field and final grid. NO GridPotential and NO CathodePotential, deliberately: the weighting potential is a dimensionless unit probe in [0,1], not volts -- collecting pixel = 1 and every other electrode including the cathode = 0 -- so the cathode formula in the drift configs (example_gen_pcb_drift_pixel_task13_*.json) does not apply here. DEPTH: driftZDepth 69.9 with pixelPlaneLowEdgePosition 10.0 tracks the drift pair's 59.9mm geometry; the weighting solve itself does not use a drift length, but the number is kept in step so the file handed to induce-pixel is not stale. PROBE: Npixels 5 at the 4.4mm pitch = 22mm transverse, i.e. 55 cells at this file's 0.4mm spacing (220 at the fine 0.1mm), solved NON-periodic (edges fix,fix,fix) so phi_w decays to ~0 at the tile edges instead of wrapping; a weighting field cannot be solved on the single periodic pixel tile the drift field uses. PAD/GAP SPLIT: this file uses pixelSize 3.6 / pixelGap 0.8 while the fine file uses 3.5 / 0.9. That is NOT a typo -- both are the same 4.4mm pitch, and each file uses the split that divides its OWN spacing exactly: 3.6/0.4=9 and 0.8/0.4=2 here, versus 3.5/0.1=35 and 0.9/0.1=9 there. The fine split cannot be used at the coarse spacing (3.5/0.4=8.75), which is the whole reason there are two files.",
+    "HoleRadius" : 1.9,
+    "PcbWidth" : 1.6,
+    "GridHoleShape" : "None",
+    "pixelPlaneLowEdgePosition" : 10.0,
+    "pixelPlaneWidth" : 0.4,
+    "padThickness" : 0.4,
+    "padThicknessCells" : 3,
+    "FR4Thickness" : 0.4,
+    "pixelSize" : 3.6,
+    "pixelGap" : 0.8,
+    "chamfer_r": 0.8,
+    "Npixels" : 5,
+    "LArPermittivity": 1.5,
+    "FR4Permittivity": 4.5,
+    "enableInsulatorFR4": true,
+    "driftZDepth": 69.9,
+    "nGridPoints": 10
+}
