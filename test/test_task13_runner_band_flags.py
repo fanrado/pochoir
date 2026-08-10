@@ -1,44 +1,51 @@
 #!/usr/bin/env pytest
 '''
-Tests for commit 348637b: test/run-task13-hybrid.sh passes the band options and
-its header describes the Schwarz sweep.
+Tests for test/run-task13-hybrid.sh: the band options and the runner's shape
+(commits 348637b, d58ab1a).
 
-The flags are the only executable change, so what must hold is:
+d58ab1a reduced the runner to a SIZES block plus a `hybrid_field` helper, so
+each field is one line and --band-cells/--max-sweeps are gone -- they were
+exactly the CLI defaults, which come from the driver constants since 1aa122e.
+That is a refactor, so the load-bearing test is EQUIVALENCE: the options the
+old and new runners resolve to must be identical, per field.  The rest pins
+the runner's shape and the header prose:
 
-  * BOTH hybrid-iterate calls (PART A drift, PART C weighting) pass
-    --band-cells 2 --max-sweeps 1, and both still pass --interface 40*mm;
+  * one `pochoir hybrid-iterate` invocation, inside the helper; both fields
+    go through it, and the SIZES block is the only place a size is written;
+  * the band settings still arrive as 2 / 1 / '1*V' via the CLI defaults;
   * PART B keeps --interp-order linear (the seam is C0 but not known C1);
-  * the header no longer sells the one-shot method, and states the band, the
-    inner-node-only Dirichlet rule, the ~2x cost and --max-sweeps 0 as the way
-    back;
-  * the header's grid table matches what the driver actually derives from the
-    configs today -- the numbers it replaced were stale, and a table nobody
-    checks goes stale again.
+  * the header does not CONTRADICT the code -- it is deliberately NOT asked
+    to contain the method description any more.
 '''
 
 import json
+import os
 import re
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 import pochoir.hybrid_iterate as hi
+from pochoir.__main__ import hybrid_iterate as hi_cmd
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RUNNER = REPO_ROOT / "test" / "run-task13-hybrid.sh"
-DRIFT_FINE = REPO_ROOT / "test" / "example_gen_pcb_drift_pixel_task13_fine.json"
-WEIGHT_FINE = REPO_ROOT / "test" / "example_gen_pixel_with_grid_task13_fine.json"
+TESTDIR = REPO_ROOT / "test"
+RUNNER = TESTDIR / "run-task13-hybrid.sh"
+DRIFT_FINE = TESTDIR / "example_gen_pcb_drift_pixel_task13_fine.json"
+WEIGHT_FINE = TESTDIR / "example_gen_pixel_with_grid_task13_fine.json"
 
 TEXT = RUNNER.read_text()
 INTERFACE_MM = 40.0
 
+# The revision this runner was refactored from; its emitted command lines are
+# the equivalence baseline.
+BASELINE_REV = "d58ab1a^"
 
-def _calls():
-    '''The two `pochoir hybrid-iterate` invocations, backslash continuations
-    joined.'''
-    flat = TEXT.replace('\\\n', ' ')
-    return [line for line in flat.splitlines() if 'hybrid-iterate' in line
-            and line.strip().startswith('pochoir')]
+WANT_TARGETS = ("velocity/drift3d", "starts/drift3d", "paths/drift3d",
+                "current/induced_current")
 
 
 def _header():
@@ -60,31 +67,146 @@ def _derived(field, cfg_path):
 
 
 # --------------------------------------------------------------------------
-# The executable change: the flags
+# Equivalence: run both revisions with a stubbed `pochoir` and compare the
+# options each hybrid-iterate line resolves to.
 # --------------------------------------------------------------------------
 
-def test_there_are_exactly_two_hybrid_iterate_calls():
-    assert len(_calls()) == 2, _calls()
+def _emitted_hybrid_lines(tmp_path, script_text):
+    '''Run `script_text` with a recording `pochoir` stub and return its
+    hybrid-iterate command lines (arguments only).'''
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    stub = bindir / "pochoir"
+    stub.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$CAPTURE"\n')
+    stub.chmod(0o755)
+
+    work = tmp_path / f"work{abs(hash(script_text)) % 10**8}"
+    work.mkdir()
+    (work / "helpers.sh").write_text((TESTDIR / "helpers.sh").read_text())
+    runner = work / "run.sh"
+    runner.write_text(script_text)
+    runner.chmod(0o755)
+    # The configs are read by the driver, which is stubbed out here, but the
+    # runner cd's to its own directory, so give it the real ones.
+    for cfg in TESTDIR.glob("example_gen_p*task13*.json"):
+        (work / cfg.name).write_text(cfg.read_text())
+
+    # Pre-create every `want` target so the drift chain short-circuits to
+    # "have" instead of exiting on the stub's missing output.
+    store = work / "store"
+    for target in WANT_TARGETS:
+        path = store / (target + ".npz")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+
+    capture = work / "capture.txt"
+    env = dict(os.environ)
+    env["PATH"] = f"{bindir}:{env['PATH']}"
+    env["CAPTURE"] = str(capture)
+    subprocess.run(["bash", str(runner), "store"], cwd=str(work), env=env,
+                   capture_output=True, text=True)
+
+    if not capture.exists():
+        return []
+    return [line[len("hybrid-iterate"):].strip()
+            for line in capture.read_text().splitlines()
+            if line.startswith("hybrid-iterate")]
 
 
-@pytest.mark.parametrize("flag", ["--band-cells 2", "--max-sweeps 1"])
-def test_both_calls_pass_the_band_flags(flag):
-    for call in _calls():
-        assert re.search(flag.replace(' ', r'\s+'), call), (flag, call)
+def _resolved(argline):
+    '''Resolve one hybrid-iterate argument line through the real click command
+    (config paths exist relative to test/, so resolve from there).'''
+    cwd = os.getcwd()
+    os.chdir(TESTDIR)
+    try:
+        ctx = hi_cmd.make_context("hybrid-iterate", shlex.split(argline))
+        return dict(ctx.params)
+    finally:
+        os.chdir(cwd)
 
 
-def test_both_calls_still_pass_the_same_interface_and_spacings():
-    for call in _calls():
-        assert '--interface "40*mm"' in call or "--interface 40*mm" in call
-        assert '--coarse-spacing 0.4' in call
-        assert '--fine-spacing 0.1' in call
+@pytest.fixture(scope="module")
+def emitted(tmp_path_factory):
+    tmp = tmp_path_factory.mktemp("runner")
+    old = subprocess.run(["git", "show", f"{BASELINE_REV}:test/run-task13-hybrid.sh"],
+                         cwd=str(REPO_ROOT), capture_output=True, text=True)
+    if old.returncode != 0:
+        pytest.skip(f"{BASELINE_REV} not reachable in this checkout")
+    return (_emitted_hybrid_lines(tmp, old.stdout),
+            _emitted_hybrid_lines(tmp, TEXT))
 
 
-def test_the_two_calls_are_drift_and_weighting():
-    calls = _calls()
-    assert sum('--field weighting' in c for c in calls) == 1
-    # the drift call takes the default --field, so it names no field
-    assert sum('--field' not in c for c in calls) == 1
+def test_both_revisions_emit_one_call_per_field(emitted):
+    before, after = emitted
+    assert len(before) == 2, before
+    assert len(after) == 2, after
+
+
+def test_refactor_resolves_to_identical_options(emitted):
+    '''The whole point of d58ab1a: fewer flags, same resolved options.'''
+    before, after = emitted
+    for old_line, new_line in zip(before, after):
+        old, new = _resolved(old_line), _resolved(new_line)
+        assert old == new, (old_line, new_line,
+                            {k: (old[k], new.get(k))
+                             for k in old if old[k] != new.get(k)})
+
+
+def test_resolved_band_settings_are_the_driver_defaults(emitted):
+    '''--band-cells/--max-sweeps were dropped only because the CLI defaults
+    already carry them.'''
+    _, after = emitted
+    for line in after:
+        params = _resolved(line)
+        assert params["band_cells"] == hi.DEFAULT_BAND_CELLS == 2
+        assert params["max_sweeps"] == hi.DEFAULT_MAX_SWEEPS == 1
+        assert params["schwarz_tol"] == hi.DEFAULT_TOL == "1*V"
+
+
+def test_resolved_sizes_and_field_selection(emitted):
+    _, after = emitted
+    fields = sorted(_resolved(line)["field"] for line in after)
+    assert fields == ["drift", "weighting"]
+    for line in after:
+        params = _resolved(line)
+        assert params["interface"] == "40*mm"
+        assert params["coarse_spacing"] == 0.4
+        assert params["fine_spacing"] == 0.1
+        assert params["precision"] == 2e-8      # untouched by the refactor
+
+
+# --------------------------------------------------------------------------
+# The runner's shape after d58ab1a
+# --------------------------------------------------------------------------
+
+def test_only_one_hybrid_iterate_invocation_in_the_script():
+    '''The near/far structure lives in the driver; the script calls a helper.'''
+    invocations = [ln for ln in TEXT.splitlines()
+                   if ln.strip().startswith("pochoir hybrid-iterate")]
+    assert len(invocations) == 1, invocations
+    assert TEXT.count("hybrid_field ") >= 2
+
+
+def test_sizes_block_holds_the_sizes():
+    for name, value in (("INTERFACE", '"40\\*mm"'),
+                        ("COARSE_SPACING", "0.4"),
+                        ("FINE_SPACING", "0.1")):
+        assert re.search(rf'^{name}={value}', TEXT, re.M), name
+    assert "SIZES" in TEXT
+
+
+def test_helper_uses_the_sizes_variables_not_literals():
+    body = TEXT[TEXT.index("hybrid_field ()"):]
+    body = body[:body.index("\n}")]
+    for var in ("$INTERFACE", "$COARSE_SPACING", "$FINE_SPACING"):
+        assert var in body, var
+    assert "40*mm" not in body
+
+
+def test_band_flags_are_gone_from_the_script():
+    body = _command_lines()
+    assert "--band-cells" not in body
+    assert "--max-sweeps" not in body
 
 
 def test_drift_chain_still_uses_linear_interpolation():
@@ -93,83 +215,78 @@ def test_drift_chain_still_uses_linear_interpolation():
     assert '--interp-order cubic' not in TEXT
 
 
+def _command_lines():
+    """Executable lines only -- comments and prose may still mention flags."""
+    return "\n".join(ln for ln in TEXT.splitlines()
+                     if ln.strip() and not ln.strip().startswith('#'))
+
+
 def test_no_precision_or_sweep_tolerance_override_was_added():
-    for call in _calls():
-        assert '--precision' not in call
-        assert '--schwarz-tol' not in call
+    body = _command_lines()
+    assert '--precision' not in body
+    assert '--schwarz-tol' not in body
+
+
+def test_echo_lines_are_not_stale():
+    echoes = "\n".join(ln for ln in TEXT.splitlines()
+                       if ln.strip().startswith("echo"))
+    assert "one-shot" not in echoes
+    assert "z=20mm" not in echoes
+    assert not re.search(r'(?<!1)5cm drift', echoes)
+    assert "15cm" in echoes
 
 
 # --------------------------------------------------------------------------
-# The header
+# The header, where it still says anything
+#
+# NOT asserted: that the header CONTAINS the method / band / cost / seam prose
+# or a grid table.  That description belongs to pochoir/hybrid_iterate.py's
+# module docstring and `pochoir hybrid-iterate --help`; duplicating it in the
+# runner is how it went stale (z=20mm, 151/201/601) in the first place, and
+# d58ab1a cut it out.  What is checked is only that whatever the header DOES
+# still say agrees with the code.
 # --------------------------------------------------------------------------
 
-def test_header_describes_the_sweep_not_the_one_shot_method():
+def test_header_points_at_the_real_documentation():
     head = _header()
-    assert 'BANDED SCHWARZ' in head
-    assert 'coarse, near,\n# far, near' in head or 'coarse, near' in head
+    assert 'hybrid-iterate --help' in head
+    assert 'hybrid_iterate.py' in head
+
+
+def test_header_does_not_restate_the_method():
+    """The prose that went stale must not have crept back in."""
+    head = _header()
     for stale in ('ONE-SHOT hybrid solver',
                   'METHOD (single pass, no iteration',
-                  'There is NO outer iteration any more'):
+                  'There is NO outer iteration any more',
+                  '39.2 mm', '39.6 mm'):
         assert stale not in head, stale
 
 
-def test_header_states_the_band_and_the_inner_node_rule():
+def test_header_quotes_no_grid_shapes():
+    """A grid table here cannot track --domain yes; if one reappears, every
+    number in it must be one the driver actually derives."""
+    quoted = set(re.findall(r'(\d+)\s*x\s*(\d+)\s*x\s*(\d+)', _header()))
+    if not quoted:
+        return
+    derived = set()
+    for field, cfg in (('drift', DRIFT_FINE), ('weighting', WEIGHT_FINE)):
+        for shape in _derived(field, cfg).values():
+            derived.add(tuple(shape.split(',')))
+    assert quoted <= derived, quoted - derived
+
+
+def test_header_does_not_contradict_the_interface():
+    """The old header claimed a 20mm split while the script passes 40mm."""
     head = _header()
-    for needle in ('40.0 mm', '39.6 mm', '39.2 mm', 'INNER node', 'FREE'):
-        assert needle in head, needle
-    # ...and why the band needs no reshaping.
-    assert 'no grid reshaping' in head
+    planes = set(re.findall(r'z\s*=\s*(\d+)\s*mm', head))
+    assert planes <= {'40'}, planes
+    assert 'z = 0..60 mm' not in head
 
 
-def test_header_states_the_cost_and_the_way_back():
+def test_header_keeps_the_flag_rationale_that_lives_here():
+    """--interp-order linear is a flag on THIS script's commands, so its
+    reason stays with it."""
     head = _header()
-    assert '2x' in head
-    assert '--max-sweeps 0' in head
-
-
-def test_header_keeps_the_seam_caveat():
-    head = _header()
-    assert 'C0 by construction' in head
-    assert 'NOT known to be C1' in head
     assert '--interp-order linear' in head
-
-
-def test_header_separation_plane_agrees_with_the_flag():
-    '''The old header said 20 mm while both calls pass --interface 40*mm.'''
-    head = _header()
-    assert 'z = 40 mm' in head
-    assert 'separation at z = 20 mm' not in head
-
-
-# --------------------------------------------------------------------------
-# The grid table must match what the driver derives
-# --------------------------------------------------------------------------
-
-@pytest.mark.parametrize("field, cfg, leaves", [
-    ('drift', DRIFT_FINE, ('coarse', 'near', 'drift3d')),
-    ('weighting', WEIGHT_FINE, ('w_coarse', 'w_near', 'weight3d')),
-])
-def test_header_grid_table_matches_the_derived_shapes(field, cfg, leaves):
-    head = _header()
-    derived = _derived(field, cfg)
-    for leaf in leaves:
-        nx, ny, nz = derived[leaf].split(',')
-        pretty = f'{nx} x {ny} x {nz}'
-        assert re.search(re.escape(pretty).replace(r'\ ', r'\s*'), head), \
-            (leaf, pretty)
-
-
-def test_header_z_extent_matches_the_derived_full_depth():
-    head = _header()
-    nz = int(_derived('drift', DRIFT_FINE)['drift3d'].split(',')[2])
-    depth_mm = (nz - 1) * hi.DEFAULT_SPACINGS['fine']
-    assert f'z = 0..{depth_mm:.0f} mm' in head
-    assert 'z = 0..60 mm' not in head        # the stale value
-
-
-def test_header_records_the_17_pixel_weighting_probe():
-    head = _header()
-    cfg = json.loads(WEIGHT_FINE.read_text())
-    npix = cfg.get('Npixels') or cfg.get('npixels')
-    assert npix is not None
-    assert str(npix) in head
+    assert 'kink' in head
