@@ -170,14 +170,26 @@ def test_cathode_formula_geometry_matches_the_file(which):
 
 @pytest.mark.parametrize("which", sorted(DRIFT))
 def test_quoted_cathode_arithmetic_is_right(which):
-    '''-2500 - 50*148.4 = -9920, and the bulk really is 160.0 - 11.6.'''
+    """The worked example must actually work out -- but the TARGET bulk field
+    is read out of the prose, not hardcoded here.  The detector's wanted field
+    is the user's to set (and to re-document); this only checks that whatever
+    the prose claims is self-consistent with the file's own geometry and
+    GridPotential."""
+    import re
+
     cfg = _load(DRIFT[which])
     desc = cfg["_description"]
     bulk = 160.0 - (cfg["pixelPlaneLowEdgePosition"] + cfg["PcbWidth"])
     assert bulk == pytest.approx(148.4)
-    assert "148.4mm" in desc
-    assert cfg["GridPotential"] - 50.0 * bulk == pytest.approx(-9920.0)
-    assert "-9920 V" in desc
+    assert f"{bulk}mm" in desc
+
+    worked = re.search(r"At (-?[\d.]+) V/mm that gives .*?= (-?[\d.]+) V",
+                       desc)
+    assert worked, desc[-400:]
+    target_field, quoted_result = (float(worked.group(1)),
+                                   float(worked.group(2)))
+    assert cfg["GridPotential"] - target_field * bulk == \
+        pytest.approx(quoted_result)
 
 
 @pytest.mark.parametrize("which", sorted(DRIFT))
