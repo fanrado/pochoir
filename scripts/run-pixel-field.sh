@@ -28,9 +28,10 @@
 # the hand-maintenance rule above is the ONLY protection you have -- discipline
 # and the recipe below, nothing automated.
 #
-# (A guard test covering exactly this does exist in the author's working tree,
-# but the suite is deliberately kept UNCOMMITTED and is therefore NOT part of
-# the repo.  Do not count on it: assume it is absent, because for you it is.)
+# (Most of test/ IS tracked -- this is not a repo that omits its tests.  But
+# the specific guard covering these four pairs is held back from the repo on
+# purpose, so it is not yours and cannot protect you.  Assume it is absent,
+# because for you it is.)
 #
 # This is not hypothetical.  This repo has already shipped stale config facts
 # twice, both caught only by reading the files:
