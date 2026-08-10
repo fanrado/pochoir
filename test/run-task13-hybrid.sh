@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Task13: ONE-SHOT hybrid solver -- 5 cm drift, Python-driven,
+# Task13: BANDED SCHWARZ hybrid solver -- Python-driven,
 #         node-centered Neumann (no-flux) PCB insulator BC.
 #         PART A drift field | PART B velocity + paths |
 #         PART C weighting field (same scheme, --field weighting) |
@@ -10,8 +10,9 @@
 # driven by `pochoir hybrid-iterate`) -- PART A below is a one-line call to it.
 # The earlier bash hybrids (run-hybrid-30cm-drift.sh, run-task8-hybrid-5cm-insul.sh)
 # hard-coded the near/far sequence, so the structure was invisible from the
-# script.  There is NO outer iteration any more: one coarse solve, one near
-# solve, one stitch (beads pochoir-uy3c).
+# script.  PART A now runs ONE banded near/far Schwarz sweep -- coarse, near,
+# far, near -- then one stitch (beads pochoir-uy3c).  There is still no outer
+# convergence loop; --max-sweeps 1 means exactly one sweep, not "iterate until".
 #
 # The DRIFT CHAIN (velo + starts + drift) is deliberately NOT inside the Python
 # driver: PART B runs it as explicit `pochoir` commands, copied from task10b
@@ -19,36 +20,66 @@
 # the drift time window, --plot -- can be edited or overridden by hand here
 # without touching the module.
 #
-# METHOD (single pass, no iteration; near/far separation at z = 20 mm, axis 2;
-# see the module docstring):
+# METHOD (one Schwarz sweep; near/far separation at z = 40 mm = --interface,
+# axis 2; see the module docstring):
 #   1. coarse 0.4 mm full-volume solve
 #   2. refine the coarse potential onto the 0.1 mm near grid, then near-bc pins
-#      the near grid's last z plane (z = 20 mm) to the coarse value there --
-#      a FIXED Dirichlet BC, never revisited
-#   3. near solve at 0.1 mm over z = 0..20 mm (no-flux FR4 BC active)
-#   4. stitch-near multi-linearly upsamples the coarse far field onto the full
-#      0.1 mm grid and overwrites the first 201 z planes with the fine near
-#      solution.  Continuous at the seam because step 2 pinned the near top
-#      plane to the same coarse values.
-#   5. that stitched array IS the final field -- written straight to
-#      potential/drift3d.  No full-volume re-solve, no coarsen-back, no
-#      convergence loop.
+#      the near grid's last z plane (z = 40 mm) to the coarse value there --
+#      the Dirichlet BC for the sweep-0 near solve
+#   3. near solve at 0.1 mm over z = 0..40 mm (no-flux FR4 BC active)
+#   4. ONE Schwarz sweep over a band of --band-cells 2 coarse cells of overlap,
+#      i.e. a 3-coarse-node band at the interface:
+#
+#        outer  z = 40.0 mm   coarse node 100   the near grid's top plane
+#        middle z = 39.6 mm   coarse node  99
+#        inner  z = 39.2 mm   coarse node  98
+#
+#      The FAR solve pins only the INNER node (39.2 mm) Dirichlet to the
+#      downsampled near solution and leaves the middle and outer nodes seeded
+#      but FREE; the NEAR then re-solves with its outer node (40.0 mm) pinned to
+#      the updated far.  Pinning all three would push the far problem's real
+#      domain up to the outer node and throw the overlap away, which is the
+#      whole mechanism by which the two solves see each other.
+#
+#      The inner node at 39.2 mm sits INSIDE the near grid's 0..40 mm z range,
+#      so the band needs no grid reshaping -- the near grid shape is unchanged.
+#   5. stitch-near multi-linearly upsamples the SWEPT far field onto the full
+#      0.1 mm grid and overwrites the near z planes with the SWEPT near
+#      solution.  That stitched array IS the final field -- written straight to
+#      potential/drift3d.  No full-volume re-solve, no coarsen-back.
 # PART A ends there; PART B runs velo + starts + drift on that 0.1 mm field.
 #
-# SEAM CAVEAT.  The far field is a piecewise-linear upsample of the 0.4 mm solve
-# and is never re-solved at 0.1 mm, so E_z there is piecewise-constant across
-# 0.4 mm blocks and phi has a derivative kink at z = 20 mm.  PART B therefore
-# MUST keep --interp-order linear: cubic overshoots at a kink.
+# COST.  The sweep adds one extra fine near solve and one extra coarse far solve
+# per field, so PART A and PART C each take roughly 2x the field-solve time of
+# the previous one-shot runner.  Pass --max-sweeps 0 to skip the sweep and get
+# the old one-shot behaviour (and the old runtime) back.
 #
-# GRIDS (same 4.4 mm periodic pixel tile throughout; z = 0..60 mm = 10 mm of
-# PCB/pad region below the plane + 50 mm drift, cathode at z = 60 mm).  TWO
-# spacings, three grids; the near solve and the final volume share the 0.1 mm
+# SEAM CAVEAT -- STILL APPLIES.  The seam is now C0 by construction, because the
+# final near solve is pinned to the final far solve at the outer band node.  It
+# is NOT known to be C1: the sweep is expected to shrink the derivative jump at
+# z = 40 mm, but that jump has not been measured yet.  Until it has, assume the
+# kink is still there -- PART B MUST keep --interp-order linear, since cubic
+# overshoots at a kink.
+#
+# GRIDS (4.4 mm pixel pitch = pixelSize 3.5 + pixelGap 0.9; z = 0..160 mm =
+# 10 mm of PCB/pad region below the plane + 150 mm drift, cathode at z = 160 mm,
+# from driftZDepth 159.9 rounded up to a whole coarse cell).  TWO spacings,
+# three grids per field; the near solve and the final volume share the 0.1 mm
 # lattice, so the stitch is a plane-for-plane overwrite, not a resample.
 #
-#   grid                            shape            spacing   extent        config
-#   coarse full                     11 x 11 x 151    0.4 mm    z = 0..60 mm  coarse
-#   near fine                       44 x 44 x 201    0.1 mm    z = 0..20 mm  fine
-#   final full (stitch target)      44 x 44 x 601    0.1 mm    z = 0..60 mm  fine
+# DERIVED, not pinned here: --domain yes is the default, so the driver computes
+# these from the fine config geometry and the two spacings.  Listed as the
+# driver reports them today -- if a config changes, they change with it.
+#
+#   grid                       shape             spacing   extent         config
+#   drift, one periodic 4.4 mm tile:
+#     coarse full              11 x 11 x 401     0.4 mm    z = 0..160 mm  coarse
+#     near fine                44 x 44 x 401     0.1 mm    z = 0..40 mm   fine
+#     final full (stitch tgt)  44 x 44 x 1601    0.1 mm    z = 0..160 mm  fine
+#   weighting, a 17 x 17 pixel probe (Npixels 17, so 17 x 44 = 748 cells):
+#     coarse full            187 x 187 x 401     0.4 mm    z = 0..160 mm  coarse
+#     near fine              748 x 748 x 401     0.1 mm    z = 0..40 mm   fine
+#     final full (stitch tgt)748 x 748 x 1601    0.1 mm    z = 0..160 mm  fine
 #
 # CONFIGS (both from Phase 1, commit 99fbd00):
 #   * example_gen_pcb_drift_pixel_task13_fine.json -- a verbatim copy of
@@ -168,7 +199,9 @@ pochoir hybrid-iterate \
     --fine-config   "$dcfg" \
     --interface "40*mm" \
     --coarse-spacing 0.4 \
-    --fine-spacing 0.1
+    --fine-spacing 0.1 \
+    --band-cells 2 \
+    --max-sweeps 1
 
 date
 
@@ -259,7 +292,9 @@ pochoir hybrid-iterate \
     --fine-config   "$wcfg" \
     --interface "40*mm" \
     --coarse-spacing 0.4 \
-    --fine-spacing 0.1
+    --fine-spacing 0.1 \
+    --band-cells 2 \
+    --max-sweeps 1
 
 date
 
