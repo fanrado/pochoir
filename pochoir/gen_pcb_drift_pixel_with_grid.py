@@ -254,7 +254,7 @@ def _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val, chamfer_r):
 
 
 ## Draw shield plane with square holes, rounded corners
-def draw_pcb_plane_rounded_sq_drift(arr, barr, hole_w, pcb_width, pp_loweredge, gridPotential, chamfer_r):
+def draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential, chamfer_r):
     """Draw the PCB shield plane as a solid layer with rounded-square holes.
 
     The shield is modelled as a single z-plane that is initially set to solid
@@ -277,11 +277,10 @@ def draw_pcb_plane_rounded_sq_drift(arr, barr, hole_w, pcb_width, pp_loweredge, 
         Potential array modified in-place.
     barr          : ndarray, shape (Nx, Ny, Nz)
         Boundary mask array modified in-place (1 = boundary, 0 = free).
-    hole_w        : int
-        Width of the square hole in grid-index units (from cfg
-        ``HoleRadius``).  The solid grid band is derived from the tile width
-        as ``g = Nx - hole_w`` so the tile identity ``2*half + g == Nx`` holds
-        for any hole width; it is NOT the pixel gap.
+    p_gap         : int
+        Gap between pixel edges in grid-index units.
+    p_size        : int
+        Pixel side length in grid-index units.
     pcb_width     : int
         Thickness of the PCB layer in grid-index units.
     pp_loweredge  : int
@@ -300,7 +299,7 @@ def draw_pcb_plane_rounded_sq_drift(arr, barr, hole_w, pcb_width, pp_loweredge, 
     Called from ``generator`` before ``draw_pixel_plane`` to set the upper
     boundary of the drift volume::
 
-        draw_pcb_plane_rounded_sq_drift(arr, barr, hole_w,
+        draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size,
                                         pcb_width, pp_loweredge,
                                         gridPotential)
     """
@@ -308,19 +307,12 @@ def draw_pcb_plane_rounded_sq_drift(arr, barr, hole_w, pcb_width, pp_loweredge, 
     z1, z2 = z, z + 1
     barr[:, :, z] = 1
     arr[:, :, z]  = gridPotential
-    # The hole is centred on the tile corners (four quarter-holes), so the tile
-    # splits as half + g + (hole_w - half) == Nx with g the solid band width.
-    Nx = barr.shape[0]
-    g = Nx - hole_w
-    if g <= 0:
-        raise ValueError(f'square grid hole width {hole_w} cells leaves no '
-                         f'solid band in a {Nx}-cell tile')
-    half = (hole_w + 1) // 2
-    barr[0:half,     0:half,     z] = 0
-    barr[0:half,     half+g:,    z] = 0
-    barr[half+g:,    0:half,     z] = 0
-    barr[half+g:,    half+g:,    z] = 0
-    _apply_rounded_corners(barr, hole_w, g, z1, z2, val=1, chamfer_r=chamfer_r)
+    half = (p_size + 1) // 2
+    barr[0:half,        0:half,        z] = 0
+    barr[0:half,        half+p_gap:,   z] = 0
+    barr[half+p_gap:,   0:half,        z] = 0
+    barr[half+p_gap:,   half+p_gap:,   z] = 0
+    _apply_rounded_corners(barr, p_size, p_gap, z1, z2, val=1, chamfer_r=chamfer_r)
 ##----
 
 import sys
@@ -385,7 +377,7 @@ def draw_pixel_plane(arr, barr, p_size, p_gap, n_pix, pp_loweredge, pp_width, ca
     z1, z2 = pp_loweredge, pp_width + pp_loweredge + 1
     # When the pixel-plane laminate FR4 is activated (fr4_bottom), the pad
     # conductor covers only the TOP of the pp_width layer; the bottom n_fr4
-    # cell(s) are left FREE so the no-flux insulator mask can cover them.
+    # cell(s) are left FREE so their FR4 permittivity enters the Poisson solve.
     # For fr4_bottom=False (n_fr4=0) this is byte-identical to the old behaviour.
     zp1 = z1 + n_fr4 if fr4_bottom else z1
     barr[0:half,        0:half,        zp1:z2] = 1
@@ -485,18 +477,10 @@ def generator(dom, cfg, info_msg=None):
     arr = numpy.zeros(dom.shape)
     barr = numpy.zeros(dom.shape)
 
-    # The dielectric / permittivity path is GONE (pochoir-d4of): no epsilon,
-    # no LArPermittivity / FR4Permittivity / enableFR4.  The FR4 laminate is
-    # represented ONLY as a no-flux (Neumann) insulator mask via
-    # enableInsulatorFR4.  epsilon is kept as a None placeholder in the return
-    # tuple because __main__.gen unpacks result[2] generically.
-    epsilon = None
-
     # Pixel-plane laminate FR4 WITHOUT a shield grid (Task7a): the BOTTOM
     # n_fr4 cell(s) of the pixel-plane layer are FR4.  The pad conductor sits
     # on TOP of the layer (see draw_pixel_plane fr4_bottom); the FR4 cell(s)
-    # stay FREE so the no-flux insulator mask can cover them.  Both flags off ->
-    # no laminate and insulator stays None (byte-unchanged).
+    # stay FREE.  Default off -> no laminate for every non-FR4 run.
     #
     # Physically-correct laminate geometry: the pad and FR4 thicknesses are
     # given explicitly (in mm) via 'padThickness'/'FR4Thickness' -- e.g. a
@@ -508,32 +492,19 @@ def generator(dom, cfg, info_msg=None):
     # thickness keys are absent, fall back to the legacy half-and-half split
     # (n_fr4 = pp_width // 2) so older FR4 configs are unchanged.
     #
-    # TWO SEPARATE THINGS, deliberately decoupled (pochoir-m7rc).  The laminate
-    # Z-LAYOUT above -- n_pad / n_fr4 / pp_width / fr4_bottom -- is pure
-    # geometry and has nothing to do with permittivity, so it must NOT be gated
-    # on a dielectric flag.  It used to live inside the enableFR4 epsilon branch
-    # and was lost when that branch went (pochoir-d4of), silently collapsing a
-    # 1.6mm laminate to pixelPlaneWidth and dropping the pad top ~1.5mm.
-    #
-    #   * enableFR4          -> LAYOUT ONLY.  Retained purely so existing
-    #                           configs keep their pad/FR4 geometry.  It builds
-    #                           NO epsilon: the dielectric path is gone, and a
-    #                           permittivity-carrying config now simply gets the
-    #                           laminate solved as vacuum/LAr throughout.
-    #   * enableInsulatorFR4 -> the same layout PLUS a no-flux (Neumann)
-    #                           insulator MASK over the slab cells, used by the
-    #                           insulating-surface boundary (EPIC pochoir-ktj0).
-    #
-    # Either flag places the pad conductor on TOP of the layer (fr4_bottom) so
+    # The continuous FR4 slab is expressed as:
+    #   * enableInsulatorFR4 -> a no-flux (Neumann) insulator MASK over those
+    #                           cells, used by the insulating-surface boundary
+    #                           (EPIC pochoir-ktj0).
+    # The flag places the pad conductor on TOP of the layer (fr4_bottom) so
     # the bottom n_fr4 cells form the laminate slab and stay disjoint from the
-    # pad.  With both off, fr4_bottom stays False and the return is the legacy
-    # 3-tuple -> every non-laminate run is byte-unchanged.
-    enableFR4 = cfg.get('enableFR4', False)
+    # pad.  With the flag off, fr4_bottom stays False and the return is the
+    # legacy 3-tuple -> every non-laminate run is byte-unchanged.
     enableInsulatorFR4 = cfg.get('enableInsulatorFR4', False)
     fr4_bottom = False
     n_fr4 = 0
     insulator = None
-    if enableFR4 or enableInsulatorFR4:
+    if enableInsulatorFR4:
         # --- shared laminate-slab geometry (pad on top, slab the bottom n_fr4) ---
         fr4_thickness = cfg.get('FR4Thickness', None)
         pad_thickness = cfg.get('padThickness', None)
@@ -547,26 +518,14 @@ def generator(dom, cfg, info_msg=None):
         else:
             n_fr4 = max(1, pp_width // 2)
         fr4_bottom = True
-        # --- no-flux insulator mask over the continuous slab (NO permittivity) ---
-        # Only the insulator flag produces a mask; enableFR4 is layout-only.
-        if enableInsulatorFR4:
-            insulator = numpy.zeros(dom.shape, dtype=bool)
-            insulator[:, :, pp_loweredge:pp_loweredge + n_fr4] = True
+        # --- no-flux insulator mask over the continuous slab ---
+        insulator = numpy.zeros(dom.shape, dtype=bool)
+        insulator[:, :, pp_loweredge:pp_loweredge + n_fr4] = True
     if gridHoleShape == 'circular':
         draw_pcb_plane((len(arr),len(arr[0])), arr, barr, pp_loweredge+pcb_width, r1, gridPotential) # Draw the PCB plane with holes circular
-        # The former per-hole permittivity mask over the FR4 slab is gone with
-        # the epsilon path (pochoir-d4of); the shield-plane geometry above is
-        # all this branch draws.
 
     elif gridHoleShape == 'square':
-        # cfg HoleRadius is the WIDTH of the square hole (not a radius); the
-        # chamfer radius stays the pixel chamfer_r.
-        hole_w = int(round(cfg['HoleRadius']/dom.spacing[0]))
-        if info_msg is not None:
-            info_msg(f"square grid hole: HoleRadius={cfg['HoleRadius']}mm "
-                     f'-> hole width {hole_w} cell(s), solid band '
-                     f'{len(arr) - hole_w} cell(s)')
-        draw_pcb_plane_rounded_sq_drift(arr, barr, hole_w, pcb_width, pp_loweredge, gridPotential, chamfer_r=chamfer_r) # Draw the PCB plane with holes rounded square
+        draw_pcb_plane_rounded_sq_drift(arr, barr, p_gap, p_size, pcb_width, pp_loweredge, gridPotential, chamfer_r=chamfer_r) # Draw the PCB plane with holes rounded square
     barr[arr==0]=0
 
 
@@ -631,6 +590,8 @@ def generator(dom, cfg, info_msg=None):
     # Return the no-flux insulator mask as a 4th element ONLY when the insulator
     # path is enabled; otherwise keep the legacy 3-tuple so existing callers
     # (and non-insulator runs) are byte-unchanged.  gen() unpacks tolerantly.
+    # The 3rd slot is the legacy epsilon slot, now always None: the dielectric
+    # permittivity path has been removed, so callers store no permittivity.
     if enableInsulatorFR4:
-        return arr, barr, epsilon, insulator
-    return arr,barr, epsilon
+        return arr, barr, None, insulator
+    return arr, barr, None

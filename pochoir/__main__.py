@@ -423,7 +423,7 @@ def fdm(ctx, initial, boundary,
         if ins is not None:
             extra['insulator'] = ins
         phi_0, err_phi0 = solve(iarr, barr, bool_edges,
-                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64, epsilon=eps, **extra) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+                                precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64, epsilon=eps, **extra) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
         ctx.obj.put(potential, phi_0, taxon="potential", **params)
         ctx.obj.put(increment, err_phi0, taxon="increment", **params)
 
@@ -1249,8 +1249,18 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
         # print("I shape=",I.shape)
         # print("I=",I)
     import numpy as np
-    #np.save('fr_4p4pitch_3.8pix_circgrid_1p9.npy', I)
-    np.save(os.path.join(STORE_DIR, 'fr_4p4pitch_3.8pix_nogrid_10pathsperpixel.npy'), I)
+    # Name the output after the actual pixel geometry of this run rather than
+    # the hard-wired 3.8mm/4.4mm ASIC version.
+    _geom = geom if npixels > 1 else (_load_pixel_geometry(configs) if configs else None)
+    _npaths = _load_start_point_config(configs)["ngridpoints"]
+    if _geom is None:
+        _tag = f'fr_nogrid_{_npaths}pathsperpixel.npy'
+    else:
+        def _fmt(v):
+            return ('%g' % v).replace('.', 'p')
+        _tag = (f'fr_{_fmt(_geom["pixel_pitch"])}pitch_'
+                f'{_fmt(_geom["pixel_size"])}pix_nogrid_{_npaths}pathsperpixel.npy')
+    np.save(os.path.join(STORE_DIR, _tag), I)
     np.save(os.path.join(STORE_DIR, 'startpoints.npy'), startpoints)
     np.save(os.path.join(STORE_DIR, 'endpoints.npy'), endpoints)
     ctx.obj.put(output, I, command="induce", taxon="current",
