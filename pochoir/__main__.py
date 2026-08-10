@@ -65,6 +65,9 @@ import pochoir
 # Safe: hybrid_iterate.py imports only json and pathlib at top level, its
 # pochoir imports are all inside function bodies.
 import pochoir.hybrid_iterate
+# Same reasoning for field-solve's --spacing default (single_field's top-level
+# imports are json, pathlib and hybrid_iterate, so this stays import-safe).
+import pochoir.single_field
 import torch
 from . import units
 # no others than click and pochoir!
@@ -2469,6 +2472,182 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface, precision,
         band_cells=band_cells, max_sweeps=max_sweeps, tol=schwarz_tol,
         shapes={"coarse": coarse_shape, "near": near_shape,
                 pochoir.hybrid_iterate.FULL_LEAF: fine_shape})
+
+
+# The two option groups field-solve dispatches between.  Listed as data rather
+# than checked ad hoc so a new option cannot be added to one mode and silently
+# accepted by the other: every name here is rejected when the OTHER mode is
+# selected.  Silently ignoring a mis-addressed option is the exact bug commit
+# 83aa149 had to fix, so this errors instead.
+_FIELD_SOLVE_HYBRID_ONLY = (
+    "coarse_config", "fine_config", "interface",
+    "coarse_spacing", "fine_spacing",
+    "band_cells", "max_sweeps", "schwarz_tol",
+    "coarse_shape", "near_shape", "fine_shape",
+)
+_FIELD_SOLVE_SINGLE_ONLY = ("config", "spacing", "shape")
+
+
+def _field_solve_given(ctx, *names):
+    '''
+    Those of `names` the user actually typed on the command line.
+
+    Uses click's parameter SOURCE rather than comparing against the default,
+    because most of these options have non-None defaults (--interface,
+    --coarse-spacing, --band-cells...) and a user who explicitly retypes the
+    default value still means it -- and, more to the point, still means it for
+    the WRONG mode, which must be reported rather than shrugged off.
+    '''
+    from click.core import ParameterSource
+
+    return [n for n in names
+            if ctx.get_parameter_source(n) == ParameterSource.COMMANDLINE]
+
+
+def _field_solve_opt(name):
+    '''Render a parameter name as the option the user typed.'''
+    return "--" + name.replace("_", "-")
+
+
+@cli.command("field-solve")
+@click.option("--hybrid", type=click.Choice(["yes", "no"]), required=True,
+              help="yes: the near/far hybrid solve (hybrid-iterate). "
+                   "no: one grid at one spacing (single-field). This is the "
+                   "ONLY mode switch -- it selects which driver runs and "
+                   "therefore which options are legal.")
+@click.option("--field", type=click.Choice(["drift", "weighting"]),
+              default="drift",
+              help="Which field to solve (def: drift)")
+@click.option("--precision", type=float, default=2e-8,
+              help="Per-solve fdm convergence precision (def: 2e-8)")
+@click.option("--domain", type=click.Choice(["yes", "no"]), default="no",
+              help="no (def): grid SHAPES come from the shape options, which "
+                   "are then REQUIRED -- this is what the runner script "
+                   "supplies. yes: derive them from the config geometry, and "
+                   "the shape options are rejected as contradictory. Note "
+                   "hybrid-iterate's own --domain still defaults to yes.")
+# --- hybrid-only ----------------------------------------------------------
+@click.option("--coarse-config", type=click.Path(exists=True), default=None,
+              help="[--hybrid yes] JSON config for the 0.4mm coarse grid")
+@click.option("--fine-config", type=click.Path(exists=True), default=None,
+              help="[--hybrid yes] JSON config for the 0.1mm near/full grids")
+@click.option("--interface", type=str, default='40*mm',
+              help="[--hybrid yes] Near/far interface on axis 2 (def: '40*mm')")
+@click.option("--coarse-spacing", type=float, default=0.4,
+              help="[--hybrid yes] Coarse grid spacing in mm (def: 0.4)")
+@click.option("--fine-spacing", type=float, default=0.1,
+              help="[--hybrid yes] Fine grid spacing in mm (def: 0.1)")
+@click.option("--coarse-shape", type=str, default=None,
+              help="[--hybrid yes, --domain no] 'nx,ny,nz' coarse grid")
+@click.option("--near-shape", type=str, default=None,
+              help="[--hybrid yes, --domain no] 'nx,ny,nz' near grid")
+@click.option("--fine-shape", type=str, default=None,
+              help="[--hybrid yes, --domain no] 'nx,ny,nz' final fine grid")
+@click.option("--band-cells", type=int,
+              default=pochoir.hybrid_iterate.DEFAULT_BAND_CELLS,
+              help="[--hybrid yes] Schwarz overlap in COARSE cells")
+@click.option("--max-sweeps", type=int,
+              default=pochoir.hybrid_iterate.DEFAULT_MAX_SWEEPS,
+              help="[--hybrid yes] Number of Schwarz sweeps; 0 skips the sweep")
+@click.option("--schwarz-tol", type=str,
+              default=pochoir.hybrid_iterate.DEFAULT_TOL,
+              help="[--hybrid yes] Inter-sweep convergence tolerance")
+# --- single-only ----------------------------------------------------------
+@click.option("--config", type=click.Path(exists=True), default=None,
+              help="[--hybrid no] JSON config for the single grid")
+@click.option("--spacing", type=float,
+              default=pochoir.single_field.DEFAULT_SPACING,
+              help="[--hybrid no] The one grid spacing in mm (def: 0.1)")
+@click.option("--shape", type=str, default=None,
+              help="[--hybrid no, --domain no] 'nx,ny,nz' for the one grid")
+@click.pass_context
+def field_solve(ctx, hybrid, field, precision, domain,
+                coarse_config, fine_config, interface,
+                coarse_spacing, fine_spacing,
+                coarse_shape, near_shape, fine_shape,
+                band_cells, max_sweeps, schwarz_tol,
+                config, spacing, shape):
+    '''
+    Solve a field, hybrid near/far or single-spacing, behind one command.
+
+    --hybrid yes runs the Task13 near/far hybrid (see `hybrid-iterate`); its
+    defaults here are run-task13-hybrid.sh's SIZES block.  --hybrid no runs the
+    single-spacing driver: one grid, one solve, no stitch.  BOTH modes write the
+    same output keys -- potential/drift3d resp. potential/weight3d -- and, at the
+    task13 geometry, the same final lattice, so the two are directly comparable.
+
+    --domain defaults to "no" here (the runner supplies shapes from its own
+    table) whereas hybrid-iterate's own --domain defaults to "yes".  Under
+    --domain no the shape options for the selected mode are REQUIRED: a missing
+    one is an error, never a quiet fall-through to derivation.  Under
+    --domain yes they are rejected as contradictory.
+
+    Options belonging to the mode you did NOT select are an error rather than a
+    silent no-op.
+
+    With-grid vs without-grid is NOT a flag here: it is decided entirely by
+    GridHoleShape in the JSON config ("None" = no shield grid), which the
+    generators already branch on.
+    '''
+    import pochoir.hybrid_iterate
+    import pochoir.single_field
+
+    want_hybrid = (hybrid == "yes")
+    derive = (domain == "yes")
+
+    # Cross-mode options: error, never ignore.
+    stray = _field_solve_given(
+        ctx, *(_FIELD_SOLVE_SINGLE_ONLY if want_hybrid
+               else _FIELD_SOLVE_HYBRID_ONLY))
+    if stray:
+        raise click.UsageError(
+            f'--hybrid {hybrid} does not take '
+            f'{", ".join(_field_solve_opt(n) for n in stray)}; '
+            f'{"those are single-spacing options" if want_hybrid else "those are hybrid options"}')
+
+    shape_opts = (("coarse_shape", coarse_shape), ("near_shape", near_shape),
+                  ("fine_shape", fine_shape)) if want_hybrid else \
+                 (("shape", shape),)
+
+    if derive:
+        # Rejected on SOURCE, not on value: retyping a shape under --domain yes
+        # is a contradiction whatever the value happens to be.
+        given = _field_solve_given(ctx, *(n for n, _ in shape_opts))
+        if given:
+            raise click.UsageError(
+                f'--domain yes derives the shapes, so it contradicts '
+                f'{", ".join(_field_solve_opt(n) for n in given)}; '
+                f'drop those or use --domain no')
+    else:
+        missing = [n for n, v in shape_opts if not v]
+        if missing:
+            raise click.UsageError(
+                f'--domain no takes the shapes from the command line, so '
+                f'{", ".join(_field_solve_opt(n) for n in missing)} '
+                f'{"is" if len(missing) == 1 else "are"} required '
+                f'(use --domain yes to derive them instead)')
+
+    if want_hybrid:
+        for name, value in (("--coarse-config", coarse_config),
+                            ("--fine-config", fine_config)):
+            if not value:
+                raise click.UsageError(f'--hybrid yes requires {name}')
+        pochoir.hybrid_iterate.hybrid_iterate(
+            ctx, coarse_config, fine_config,
+            interface=interface, precision=precision, field=field,
+            coarse_spacing=coarse_spacing, fine_spacing=fine_spacing,
+            derive_domain=derive,
+            band_cells=band_cells, max_sweeps=max_sweeps, tol=schwarz_tol,
+            # FULL_LEAF, never the literal 'fine01' -- same as hybrid-iterate.
+            shapes={"coarse": coarse_shape, "near": near_shape,
+                    pochoir.hybrid_iterate.FULL_LEAF: fine_shape})
+        return
+
+    if not config:
+        raise click.UsageError('--hybrid no requires --config')
+    pochoir.single_field.single_field(
+        ctx, config, field=field, spacing=spacing, precision=precision,
+        derive_domain=derive, shape=None if derive else shape)
 
 
 def main():
