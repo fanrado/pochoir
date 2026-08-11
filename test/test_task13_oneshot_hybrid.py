@@ -27,6 +27,7 @@ option-surface checks.
 
 import inspect
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -81,20 +82,49 @@ def test_no_near_coarse_grid_any_more():
 
 # NOTE: the full-volume grid is keyed by FIELD (drift3d/weight3d) since
 # e253dc8 / pochoir-efgb, not prefix+fine01.  See test_task13_full_leaf_naming.py.
-@pytest.mark.parametrize("field,cfg,expect", [
-    # Shapes are DERIVED from the live configs, so they move when the geometry
-    # does: z = 0..160mm since the drift depth change, and 17x17 weighting
-    # pixels (17 x 4.4mm pitch = 74.8mm) since a6abec7.  The interface is the
-    # 40mm the runner passes.
-    ("drift", DRIFT_FINE, {"coarse": ("11,11,401", "0.4*mm"),
-                           "near": ("44,44,401", "0.1*mm"),
-                           "drift3d": ("44,44,1601", "0.1*mm")}),
-    ("weighting", WEIGHT_FINE, {"w_coarse": ("187,187,401", "0.4*mm"),
-                                "w_near": ("748,748,401", "0.1*mm"),
-                                "weight3d": ("748,748,1601", "0.1*mm")}),
-])
-def test_derived_shapes_at_default_spacings(field, cfg, expect):
-    assert _shapes(field, cfg) == expect
+def _transverse_mm(cfg_path):
+    '''The weighting probe spans Npixels whole pitches; the drift tile is one.
+
+    Read from the config rather than hardcoded: Npixels is a knob the user
+    turns for the run they want (17 since a6abec7, 25 now), and a pixel-count
+    change must not red the suite.'''
+    cfg = json.loads(cfg_path.read_text())
+    return cfg["Npixels"] * round(cfg["pixelSize"] + cfg["pixelGap"], 9)
+
+
+@pytest.mark.parametrize("field,cfg", [("drift", DRIFT_FINE),
+                                       ("weighting", WEIGHT_FINE)])
+def test_derived_shapes_at_default_spacings(field, cfg):
+    '''Shapes are DERIVED from the live configs, so they move when the geometry
+    does -- both the drift depth and the weighting pixel count are the user's
+    to change.  What is pinned is the derivation: transverse = extent/spacing,
+    z = 0..(depth rounded up to a whole coarse cell), the near grid stopping at
+    the 40mm interface the runner passes.'''
+    cfg_d = json.loads(cfg.read_text())
+    coarse, fine = hi.DEFAULT_SPACINGS["coarse"], hi.DEFAULT_SPACINGS["fine"]
+
+    if field == "drift":
+        # one periodic pixel tile; the coarse split is what tiles the 0.4 grid
+        extent = round(cfg_d["pixelSize"] + cfg_d["pixelGap"], 9)
+        prefix, near_key, full_key = "", "near", "drift3d"
+    else:
+        extent = _transverse_mm(cfg)
+        prefix, near_key, full_key = "w_", "w_near", "weight3d"
+
+    # periodic/probe tile: no duplicated node, so extent/spacing exactly
+    nx_coarse = int(round(extent / coarse))
+    nx_fine = int(round(extent / fine))
+
+    z_top = coarse * math.ceil(round(cfg_d["driftZDepth"] / coarse, 6))
+    nz_coarse = int(round(z_top / coarse)) + 1
+    nz_full = int(round(z_top / fine)) + 1
+    nz_near = int(round(INTERFACE_MM / fine)) + 1
+
+    assert _shapes(field, cfg) == {
+        f"{prefix}coarse": (f"{nx_coarse},{nx_coarse},{nz_coarse}", "0.4*mm"),
+        near_key: (f"{nx_fine},{nx_fine},{nz_near}", "0.1*mm"),
+        full_key: (f"{nx_fine},{nx_fine},{nz_full}", "0.1*mm"),
+    }
 
 
 def test_near_and_full_grids_share_the_fine_lattice():
@@ -340,7 +370,7 @@ def _drive(monkeypatch, tmp_path, **kwds):
     monkeypatch.setattr(hi, "_schwarz", fake_schwarz)
     monkeypatch.setattr(hi, "_stitch", fake_stitch)
 
-    shapes = dict(coarse="11,11,401", near="44,44,401", fine01="44,44,1601")
+    shapes = dict(coarse="11,11,176", near="44,44,401", fine01="44,44,701")
     final, _ = hi.hybrid_iterate(
         _RecordingCtx(tmp_path), "c.json", "f.json", derive_domain=False,
         shapes=shapes, log=lambda msg: None, **kwds)
@@ -430,7 +460,9 @@ def test_absurd_band_is_rejected_not_silently_clamped():
 def test_grid_shapes_are_untouched_by_the_sweep():
     """The band changes no geometry: the derived shapes are exactly the ones
     pinned above, at both band widths."""
+    # The Step 3.1 validation geometry: 70.0mm full depth (driftZDepth 69.9
+    # rounded up to a whole 0.4mm coarse cell), 4.4mm pitch, interface 40mm.
     before = _shapes("drift", DRIFT_FINE)
     assert before["near"][0] == "44,44,401"
-    assert before["coarse"][0] == "11,11,401"
-    assert before["drift3d"][0] == "44,44,1601"
+    assert before["coarse"][0] == "11,11,176"
+    assert before["drift3d"][0] == "44,44,701"

@@ -138,41 +138,61 @@ wcfg_fine="example_gen_pixel_with_grid_task13_fine.json"
 
 ## SHAPES.  Explicit values, not derived: this table is the authority and
 ## field-solve is invoked with --domain no, so a typo here cannot be silently
-## "corrected" into a different grid.
+## "corrected" into a different grid.  The flip side is that --domain no ALSO
+## skips hybrid_iterate.py's _cells() check, which is the only thing that would
+## otherwise refuse a geometry the spacings cannot represent -- so this table
+## must be re-derived BY HAND whenever the configs' pitch or depth moves.  See
+## the SPACINGS note below for what that derivation is.
 ##
-## Validation geometry: driftZDepth 69.9 rounds up to a whole 0.4mm coarse cell
-## at 70.0mm full depth; 4.4mm pitch; Npixels 5; interface 40mm.
+## Geometry: pitch 3.7mm (pixelSize 2.2 + pixelGap 1.5), Npixels 9,
+## driftZDepth 159.9, interface 39.96mm.
 ##
-##   depth    70.0mm   -> 175 coarse cells (176 nodes), 700 fine (701 nodes)
-##   near    0..40mm   -> 400 fine cells (401 nodes)
-##   pitch     4.4mm   ->  11 coarse /  44 fine cells
-##   probe  5*4.4=22mm ->  55 coarse / 220 fine cells
+## SPACINGS ARE 0.37 / 0.0925, NOT 0.4 / 0.1.  The pitch must be a WHOLE number
+## of cells on both grids, and 3.7 = 37 x 0.1 with 37 prime, so with a 0.1mm
+## fine grid the only coarse spacings dividing 3.7 exactly are 0.1 and 3.7 --
+## neither is a usable coarse grid.  Solving pitch = n*fine, coarse = 4*fine
+## with 4 dividing n gives n = 40: fine 3.7/40 = 0.0925, coarse 3.7/10 = 0.37,
+## preserving the validated 4:1 ratio.  This choice also makes the pad quantize
+## IDENTICALLY on both grids (2.2mm -> 24 fine / 6 coarse cells, both 2.22mm;
+## 1.5mm -> 16 / 4, both 1.48mm; 24+16 = 40 = 4*(6+4)), so the far field and the
+## near field model the same pad.  Do not "round" these spacings back to
+## 0.4/0.1: that reintroduces a 4.0mm coarse pitch against a 3.7mm fine one.
 ##
-##                              drift        weighting
-##   coarse 0.4mm, full depth   11,11,176    55,55,176
-##   near   0.1mm, to interface 44,44,401    220,220,401
-##   fine   0.1mm, full depth   44,44,701    220,220,701
-##   single 0.1mm (--hybrid no) 44,44,701    220,220,701
+##   depth   160.21mm     -> 433 coarse cells (434 nodes), 1732 fine (1733)
+##                           ceil(159.9/0.37) = 433, and 433*4 = 1732 exactly
+##   near   0..39.96mm    -> 432 fine cells (433 nodes); 39.96 = 108 coarse
+##                           cells, so the seam is a plane of BOTH grids
+##   pitch     3.7mm      ->  10 coarse /  40 fine cells
+##   probe  9*3.7=33.3mm  ->  90 coarse / 360 fine cells
+##
+##                                    drift          weighting
+##   coarse 0.37mm,   full depth      10,10,434      90,90,434
+##   near   0.0925mm, to interface    40,40,433      360,360,433
+##   fine   0.0925mm, full depth      40,40,1733     360,360,1733
+##   single 0.0925mm (--hybrid no)    40,40,1733     360,360,1733
+##
+## The weighting fine grid is ~225 M nodes (was ~77 M at 220,220,1601): mostly
+## Npixels 9 rather than the spacing change.  Budget the run accordingly.
 ##
 ## The single row and the fine row are the SAME grid ON PURPOSE -- that is what
 ## makes the two modes comparable on identical output lattices.  They are kept
 ## as two separate, labelled variables rather than deduplicated into one: they
 ## answer different questions, and collapsing them would hide the fact that
 ## their agreement is a deliberate choice rather than a coincidence.
-d_coarse_shape="11,11,176"
-d_near_shape="44,44,401"
-d_fine_shape="44,44,701"
-d_single_shape="44,44,701"
+d_coarse_shape="10,10,434"
+d_near_shape="40,40,433"
+d_fine_shape="40,40,1733"
+d_single_shape="40,40,1733"
 
-w_coarse_shape="55,55,176"
-w_near_shape="220,220,401"
-w_fine_shape="220,220,701"
-w_single_shape="220,220,701"
+w_coarse_shape="90,90,434"
+w_near_shape="360,360,433"
+w_fine_shape="360,360,1733"
+w_single_shape="360,360,1733"
 
-interface='40*mm'
-coarse_spacing=0.4
-fine_spacing=0.1
-spacing=0.1
+interface='39.96*mm'
+coarse_spacing=0.37
+fine_spacing=0.0925
+spacing=0.0925
 precision=0.00000002
 
 date
