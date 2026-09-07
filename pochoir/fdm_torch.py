@@ -14,7 +14,8 @@ import numpy as np
 
 from torch.profiler import profile, record_function, ProfilerActivity # For profiling the performance of the solver
 
-from .fdm_generic import (edge_condition, stencil, stencil_poisson,
+from .fdm_generic import (edge_condition, edge_condition_fixed,
+                          stencil, stencil_poisson,
                           stencil_poisson_harmonic, stencil_poisson_neumann,
                           neumann_coeff, mirror_masks, mirror_project,
                           padplane_noflux_geom, padplane_noflux)
@@ -31,7 +32,7 @@ def set_core2(dst, src, core):
 @torch.compile
 def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core,
                    core, periodic, spacing=1.0, source=None, epsilon=None,
-                   masks=None):
+                   masks=None, true_fixed=False):
     # Three-way relaxation step (branch is on None-ness, static per solve run,
     # so torch.compile specialises once with no recompilation blowup):
     #   - pad-plane no-flux masks present : plain Laplace on the WHOLE volume,
@@ -54,10 +55,24 @@ def _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core,
         # and before edge_condition.  padplane_noflux is pure, so write its result
         # back into iarr_pad in place.
         iarr_pad[...] = padplane_noflux(iarr_pad, masks)
-    edge_condition(iarr_pad, *periodic, info_msg=None)
+    # true_fixed selects the edge condition applied to the non-periodic
+    # dimensions.  Like the masks/epsilon branches above it is a Python bool
+    # held constant for a whole solve run, so torch.compile specialises on it
+    # once and there is no recompilation blowup.
+    #   - False (default) : edge_condition, whose non-periodic branch is a
+    #                       Neumann mirror.  Correct for the drift solve.
+    #   - True            : edge_condition_fixed, which leaves the non-periodic
+    #                       halo slabs holding their construction values, i.e. a
+    #                       genuinely held Dirichlet wall.  Wanted by the
+    #                       weighting solve, whose reflecting transverse walls
+    #                       otherwise stop W from decaying laterally.
+    if true_fixed:
+        edge_condition_fixed(iarr_pad, *periodic, info_msg=None)
+    else:
+        edge_condition(iarr_pad, *periodic, info_msg=None)
 
 
-def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torch.float64, phi0=None, ctx=None, potential=None, increment=None, params=None, epsilon=None, insulator=None):
+def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torch.float64, phi0=None, ctx=None, potential=None, increment=None, params=None, epsilon=None, insulator=None, true_fixed=False):
     '''
     Solve boundary value problem
 
@@ -70,6 +85,15 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
 
         - periodic is list of Boolean.  If true, the corresponding
           dimension is periodic, else it is fixed.
+
+        - true_fixed selects how the non-periodic ("fixed") dimensions
+          are treated.  The default False keeps the historical
+          edge_condition() behaviour, a Neumann mirror, which is correct
+          for the drift solve (per,per,fix) because its paths are later
+          replicated onto a larger domain.  True uses
+          edge_condition_fixed(), which holds the boundary value written
+          by domain construction; the weighting solve (fix,fix,fix)
+          wants this so W decays laterally instead of plateauing.
 
         - epoch is number of iteration per precision check
 
@@ -157,7 +181,13 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
         path_to_padded_phi0 = potential.split('/')[0] + '/padded_phi0'
         ctx.obj.put(path_to_padded_phi0, phi0_.cpu(), taxon='padded_phi0', **params)
         # print(f'padded phi0 saved to {path_to_padded_phi0}')
-        edge_condition(phi0_, *periodic)
+        # Gated the same way as the relaxation step: this call fills the phi0
+        # halo used by stencil(phi0_) below, and it must agree with the BC the
+        # solve itself applies.
+        if true_fixed:
+            edge_condition_fixed(phi0_, *periodic)
+        else:
+            edge_condition(phi0_, *periodic)
         # print(f'---shape of phi0 after edge condition: {phi0.shape}, max value: {torch.max(phi0)}, min value: {torch.min(phi0)}')
         s = stencil(phi0_).detach()
         # edge_condition(s, *periodic)
@@ -224,7 +254,7 @@ def solve(iarr, barr, periodic, prec, epoch, nepochs, info_msg=None, _dtype=torc
                 prev = iarr_pad.clone().detach().requires_grad_(False)
 
             # _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic)
-            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, spacing=1.0, source=source, epsilon=epsilon_pad, masks=insulator_masks)
+            _compiled_step(iarr_pad, tmp_core, bi_core, mutable_core, core, _periodic, spacing=1.0, source=source, epsilon=epsilon_pad, masks=insulator_masks, true_fixed=true_fixed)
             # stencil(iarr_pad, tmp_core)
             # iarr_pad[core] = bi_core + mutable_core * tmp_core
             # edge_condition(iarr_pad, *periodic, info_msg=None)
