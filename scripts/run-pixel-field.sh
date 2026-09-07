@@ -231,24 +231,79 @@ export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_driftfield.log"
 ## --insulator (the node-centered no-flux Neumann BC) is applied by field-solve
 ## to the SOLVE only -- never to velo or drift below.
 ## SCHWARZ PARAMETERS (stated explicitly below rather than inherited from
-## hybrid_iterate.py's DEFAULT_BAND_CELLS / DEFAULT_MAX_SWEEPS / DEFAULT_TOL):
+## hybrid_iterate.py's DEFAULT_BAND_CELLS / DEFAULT_MAX_SWEEPS / DEFAULT_TOL).
+## These values are MEASURED, not guessed -- the full study, with every number
+## below, is in scripts/NOTES-run-pixel-field-seam.md.
 ##
-##   * --band-cells 3 is 3 COARSE cells = band_cells+1 = 4 nodes.  At
-##     --interface 19.8mm with coarse 0.22mm those are coarse nodes
-##     90/89/88/87 = z 19.80/19.58/19.36/19.14mm (spelled out at
-##     hybrid_iterate.py:319).
-##   * the innermost plane 19.14mm is NOT a fine node: coarse and fine nodes
-##     coincide only every 1.1mm at the 2.2 ratio, so the far Dirichlet pin
-##     there is INTERPOLATED onto the near grid, not exact.  Only band_cells
-##     that are multiples of 5 give an exact pin.  Measured in Phase 2, not
-##     fixed here.
-##   * --schwarz-tol 2e-8 is undimensioned ON PURPOSE so one value serves both
-##     the volt-valued drift potential and the dimensionless [0,1] weighting
-##     probe.
-##   * at 2e-8 the tolerance NEVER GATES -- measured near deltas on this 8cm
-##     grid-free geometry run 0.34 (band 2) to 3.17 (band 20), about seven
-##     orders above it -- so --max-sweeps 4 is the BINDING limit and the sweep
-##     count alone decides seam quality.
+##   --band-cells 5 --max-sweeps 15 --schwarz-tol 2e-8   (BOTH fields)
+##
+## THE SWEEP COUNT IS THE ONLY KNOB.  --schwarz-tol 2e-8 NEVER GATES: on the
+## drift field the sweep stops on max_sweeps with the final near delta ~6.7
+## ORDERS OF MAGNITUDE above the tol (0.112 at 20 sweeps against 2e-8).  Every
+## run measured so far ended on max_sweeps, never on the tolerance.  So seam
+## quality is set by --max-sweeps and by nothing else.
+##
+## WHY 15 SWEEPS, AND WHAT 4 WAS COSTING.  The E_z kink at the seam, as a
+## percentage of the 56.0 V/mm design field, measured on the drift field:
+##
+##     sweeps      0        1        4       20
+##     band 3   1.3798%  1.2745%  1.0045%  0.2821%
+##     band 5                              0.0928%
+##
+## The reference is the 0.199% COARSE/FINE GEOMETRY FLOOR -- the two grids'
+## own measured far E_z, 55.996 V/mm coarse against 55.885 fine.  That gap is
+## systematic (the grids model different pads: 3.52 vs 3.5mm, chamfer 0.66 vs
+## 0.70, and padThicknessCells 3 is a CELL count so the pad block is 0.66mm
+## coarse against 0.30mm fine).  A seam kink below it has stopped being the
+## limiting error; it is a stopping criterion, not a target to beat.
+##
+## The shipped --max-sweeps 4 left the kink at 1.0045%, about 5x that floor.
+## Band 5 reaches the floor at ~15 sweeps, which is why 15 is the value here.
+##
+## WHY BAND 5 AND NOT 3.  The Schwarz contraction is a FIXED geometric rate
+## per band -- flat to four decimals across all nineteen gaps of a 20-sweep
+## run, with no transient.  Band 3's inner plane is 19.14mm, which is NOT a
+## fine node (the grids share nodes only every 1.1mm at the 2.2 ratio), so its
+## far Dirichlet pin is INTERPOLATED.  Band 5's inner plane is 18.70mm = fine
+## node 187 exactly, so its pin is EXACT.  That is worth a real rate change:
+##
+##     band 3 (interpolated pin)   0.9237/sweep   ~25 sweeps to the floor
+##     band 5 (exact pin)          0.8737/sweep   ~15 sweeps to the floor
+##
+## Band 5 costs 3.4% more per sweep (28.76s vs 27.81s) and still wins by 38%
+## on time-to-floor.  Only band_cells that are MULTIPLES OF 5 give an exact
+## pin at this 2.2 ratio.
+##
+## BANDS 10 AND 20 ARE DELIBERATELY NOT USED.  Pinning the coarse far solve to
+## fine data over a large fraction of its depth converges the seam by turning
+## the hybrid into the single-spacing solve, which defeats the point of the
+## method.  Do not "improve" the seam by widening the band.
+##
+## --schwarz-tol 2e-8 is undimensioned ON PURPOSE so one value serves both the
+## volt-valued drift potential and the dimensionless [0,1] weighting probe.
+##
+## COST, HONESTLY.  15 sweeps is not free, and the sweep dominates the run:
+##
+##     drift      28.76 s/sweep  ->  ~431 s of sweeping, ~9 min total
+##     weighting  10.10 s/sweep  ->  ~152 s of sweeping, ~4 min total
+##
+## The WEIGHTING field is CHEAPER per sweep than the drift field despite 25x
+## more nodes (coarse 3.6M vs 144k, near 9.6M vs 385k, output 38M vs 1.5M):
+## the drift grids are small enough to be kernel-launch-latency bound, so the
+## GPU inverts the naive scaling.  This was measured, not extrapolated.  It is
+## why BOTH fields can afford the same sweep count and the runner does not
+## need to split them.
+##
+## WHAT 15 SWEEPS DOES NOT FIX.  The weighting seam is NOT sweep-limited.  At
+## band 5 / 20 sweeps its kink is 4.20% of the local |E_z| (against the drift
+## field's 0.093%), because at 19.8mm the TRANSVERSE CORRUGATION is still 40%
+## of the local W value -- for the drift field the same quantity is 7e-08, so
+## the interface is deep inside the corrugated zone for one field and clear of
+## it for the other.  More sweeps cannot fix that: the sweep converges the two
+## domains to each other, not to the truth.  The weighting far tail is also a
+## linear ramp rather than a decay, from the fix,fix,fix Neumann-mirror edges
+## (see scripts/NOTES-weighting-farfield.md).  Both are open questions, not
+## settled by this sweep count.
 
 if [ "$HYBRID" = yes ] ; then
     want potential/drift3d \
@@ -260,7 +315,7 @@ if [ "$HYBRID" = yes ] ; then
          --fine-shape "$d_fine_shape" \
          --interface "$interface" \
          --coarse-spacing "$coarse_spacing" --fine-spacing "$fine_spacing" \
-         --band-cells 3 --max-sweeps 4 --schwarz-tol 2e-8 \
+         --band-cells 5 --max-sweeps 15 --schwarz-tol 2e-8 \
          --precision "$precision"
 else
     want potential/drift3d \
@@ -324,7 +379,7 @@ if [ "$HYBRID" = yes ] ; then
          --fine-shape "$w_fine_shape" \
          --interface "$interface" \
          --coarse-spacing "$coarse_spacing" --fine-spacing "$fine_spacing" \
-         --band-cells 3 --max-sweeps 4 --schwarz-tol 2e-8 \
+         --band-cells 5 --max-sweeps 15 --schwarz-tol 2e-8 \
          --precision "$precision"
 else
     want potential/weight3d \

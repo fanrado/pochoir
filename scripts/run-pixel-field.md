@@ -242,31 +242,53 @@ alternating overlapping-Schwarz iteration (`pochoir/nearfar.py:schwarz_solve`):
   exactly **C0**: the near is pinned to the far it was just handed. A *wider*
   band drives the seam toward gradient continuity (**C1**) as well, so the
   induced current `i(t) = q·v·∇W` has no spurious glitch where a drift electron
-  crosses the seam. It also converges much faster — the ~0.95/sweep rate of the
-  single-cell coupling improves strongly with width
+  crosses the seam. `schwarz_solve`'s docstring also claims the ~0.95/sweep rate
+  of the single-cell coupling "improves strongly with width"; **measured on this
+  geometry the improvement is real but modest** — 0.9237/sweep at band 3 against
+  0.8737 at band 5 — and it appears to come from band 5's pin landing on an
+  exact fine node rather than from the 0.44 mm of extra width itself
 * `max_sweeps = 0` is the **one-shot-pin fallback** (byte-identical to the old
   behaviour), not the default path
 
-The script now states the parameters explicitly at both `--hybrid yes` call
-sites rather than inheriting `hybrid_iterate.py`'s defaults:
+The script states the parameters explicitly at both `--hybrid yes` call sites
+rather than inheriting `hybrid_iterate.py`'s defaults, and uses the same values
+for **both** fields:
 
 ```
---band-cells 3 --max-sweeps 4 --schwarz-tol 2e-8
+--band-cells 5 --max-sweeps 15 --schwarz-tol 2e-8
 ```
 
-* **band 3** is 3 *coarse* cells = `band_cells + 1` = **4 nodes**. At
-  `--interface 19.8 mm` with coarse 0.22 mm those are coarse nodes 90 / 89 / 88 /
-  87 = z **19.80 / 19.58 / 19.36 / 19.14 mm**.
-* the innermost plane 19.14 mm is **not** a fine node. At the 2.2 coarse:fine
-  ratio the two grids share nodes only every 1.1 mm, so the far Dirichlet pin
-  there is **interpolated** onto the near grid rather than exact; only
-  `band_cells` that are multiples of 5 give an exact pin.
+* **band 5** is 5 *coarse* cells = `band_cells + 1` = **6 nodes**, inner plane
+  at **18.70 mm**. That is fine node 187 exactly, so the far Dirichlet pin is
+  **exact**. Only `band_cells` that are multiples of 5 achieve this at the 2.2
+  coarse:fine ratio — band 3's inner plane, 19.14 mm, is not a fine node and its
+  pin is interpolated. The exact pin is worth a real convergence-rate change
+  (0.8737/sweep against 0.9237), which is why band 5 is used.
+* **bands 10 and 20 are deliberately not used**: pinning the coarse far solve to
+  fine data over a large fraction of its depth converges the seam by turning the
+  hybrid into the single-spacing solve, defeating the method.
+* **15 sweeps** is what band 5 needs to bring the drift seam's E_z kink down to
+  the 0.199 % coarse/fine geometry floor. The previously shipped 4 sweeps left
+  it at 1.0045 % of the 56.0 V/mm design field, about 5× that floor.
 * **tol 2e-8** is undimensioned *on purpose*, so a single value serves both the
   volt-valued drift potential and the dimensionless [0, 1] weighting probe.
-* at 2e-8 the tolerance **never gates**: measured near deltas on this 8 cm
-  grid-free geometry run 0.34 (band 2) to 3.17 (band 20), about seven orders of
-  magnitude above it. **`--max-sweeps 4` is therefore the binding limit**, and
-  the sweep count alone decides seam quality.
+* the tolerance **never gates** — every run measured stopped on `max_sweeps`,
+  with the final near delta some 6.7 orders of magnitude above the tol. **The
+  sweep count is the only knob that controls seam quality.**
+
+**Cost:** the sweep dominates the run. Drift is 28.76 s/sweep (~9 min total at
+15 sweeps); weighting is 10.10 s/sweep (~4 min total). The weighting field is
+*cheaper* per sweep despite 25× more nodes — the small drift grids are
+kernel-launch-latency bound, so the GPU inverts the naive scaling. That is why
+both fields can afford the same sweep count.
+
+**What 15 sweeps does not fix:** the weighting seam is not sweep-limited. Its
+kink is 4.20 % of the local field, because at 19.8 mm the transverse corrugation
+is still 40 % of the local W value (for drift the same quantity is 7e-08). More
+sweeps cannot fix that, and the weighting far tail is a linear ramp rather than
+a decay because of the `fix,fix,fix` Neumann-mirror edges. Both remain open.
+
+Evidence and every number above: **`scripts/NOTES-run-pixel-field-seam.md`**.
 
 ## 9. Caveat carried from the script header
 
