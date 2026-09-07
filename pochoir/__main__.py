@@ -2274,9 +2274,9 @@ def stitch_near(ctx, near, coarse, domain, output, axis):
               help="Convergence precision for the fine near solve")
 @click.option("--far-precision", default=2e-7, type=float,
               help="Convergence precision for the coarse far solve")
-@click.option("--tol", type=str, default="1.0",
-              help="Schwarz tolerance: max near-solution change per sweep "
-                   "(may use units, e.g. '1*V')")
+@click.option("--tol", type=float, default=2e-8,
+              help="Schwarz tolerance: max near-solution change per sweep, "
+                   "in the units of the potential array (same as --precision)")
 @click.option("--max-iters", default=6, type=int,
               help="Maximum number of near<->far Schwarz sweeps")
 @click.option("--overlap", default=1, type=int,
@@ -2341,9 +2341,12 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
         raise ValueError("number of edge conditions does not match dimensions")
 
     interface_z = float(pochoir.arrays.fromstr1(interface)[0])
-    # potentials are stored in raw volts (pot is not scaled by units.V), so
-    # express the Schwarz tolerance in volts too: '1*V' -> 1.0, '0.05*V' -> 0.05.
-    tol_v = float(pochoir.arrays.fromstr1(tol)[0]) / units.V
+    # The Schwarz tolerance is a max change on the potential array, the same
+    # kind of undimensioned quantity as --precision, so it is passed straight
+    # through.  It used to be a units string round-tripped as
+    # fromstr1(tol)/units.V, which turned the '1*V' default into 1.0 -- one
+    # whole volt -- and halted the sweep after one iteration.
+    tol_v = float(tol)
 
     def _make_solver(prec, ckpt_key, insulator=None):
         # ckpt_key names the torch checkpoint slot this solver writes into.
@@ -2427,16 +2430,17 @@ def near_far_solve(ctx, coarse_potential, coarse_initial, coarse_boundary,
                    "domain/drift3d resp. domain/weight3d (--domain no only)")
 @click.option("--band-cells", type=int,
               default=pochoir.hybrid_iterate.DEFAULT_BAND_CELLS,
-              help="Near/far Schwarz overlap in COARSE cells (def: 2, i.e. a "
-                   "3-coarse-node band at the interface)")
+              help="Near/far Schwarz overlap in COARSE cells (def: 3, i.e. a "
+                   "4-coarse-node band at the interface)")
 @click.option("--max-sweeps", type=int,
               default=pochoir.hybrid_iterate.DEFAULT_MAX_SWEEPS,
-              help="Number of near/far Schwarz sweeps (def: 1). 0 skips the "
+              help="Number of near/far Schwarz sweeps (def: 5). 0 skips the "
                    "sweep entirely and reproduces the old one-shot path.")
-@click.option("--schwarz-tol", type=str,
+@click.option("--schwarz-tol", type=float,
               default=pochoir.hybrid_iterate.DEFAULT_TOL,
-              help="Inter-sweep convergence tolerance (def: '1*V'). Does not "
-                   "bite at the default of a single sweep.")
+              help="Inter-sweep convergence tolerance: max change on the "
+                   "potential array per sweep, in the same units as "
+                   "--precision")
 @click.pass_context
 def hybrid_iterate(ctx, coarse_config, fine_config, interface, precision,
                    field, coarse_spacing, fine_spacing, domain,
@@ -2447,11 +2451,12 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface, precision,
 
     Sequence: coarse -> near -> far -> near.  A coarse full-volume solve; the
     coarse potential on the interface plane pinned Dirichlet for the near grid;
-    a fine near solve over z = 0..interface; then ONE Schwarz sweep over a band
-    of --band-cells coarse cells of overlap (2 cells = a 3-coarse-node band, e.g.
-    40.0 / 39.6 / 39.2mm at --interface 40*mm and --coarse-spacing 0.4).  The far
-    solve pins the INNER band node Dirichlet to the downsampled near solution and
-    leaves the middle and outer nodes free; the near then re-solves against the
+    a fine near solve over z = 0..interface; then up to --max-sweeps Schwarz
+    sweeps over a band of --band-cells coarse cells of overlap (3 cells = a
+    4-coarse-node band, e.g. 19.80 / 19.58 / 19.36 / 19.14mm at --interface
+    19.8*mm and --coarse-spacing 0.22).  The far solve pins the INNER band node
+    Dirichlet to the downsampled near solution and leaves the middle and outer
+    nodes free; the near then re-solves against the
     updated far.  Finally `stitch-near` upsamples the swept far field onto the
     full fine grid and overwrites the near planes with the swept near solution.
     That stitched array IS the final field -- there is still no full-volume
@@ -2578,9 +2583,11 @@ def _field_solve_opt(name):
 @click.option("--max-sweeps", type=int,
               default=pochoir.hybrid_iterate.DEFAULT_MAX_SWEEPS,
               help="[--hybrid yes] Number of Schwarz sweeps; 0 skips the sweep")
-@click.option("--schwarz-tol", type=str,
+@click.option("--schwarz-tol", type=float,
               default=pochoir.hybrid_iterate.DEFAULT_TOL,
-              help="[--hybrid yes] Inter-sweep convergence tolerance")
+              help="[--hybrid yes] Inter-sweep convergence tolerance: max "
+                   "change on the potential array per sweep, in the same "
+                   "units as --precision")
 # --- single-only ----------------------------------------------------------
 @click.option("--config", type=click.Path(exists=True), default=None,
               help="[--hybrid no] JSON config for the single grid")

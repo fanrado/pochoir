@@ -316,13 +316,25 @@ EPOCH = 130000000
 NEPOCHS = 10
 
 # Banded near/far Schwarz sweep (see `_schwarz`).  The band is
-# DEFAULT_BAND_CELLS coarse cells of overlap, i.e. 3 coarse nodes: at
-# --interface 40*mm with coarse 0.4mm those are nodes 100/99/98 = z
-# 40.0/39.6/39.2mm.  The innermost, 39.2mm, still falls inside the near grid's
-# 0..40mm range, so the band needs NO grid reshaping.
-DEFAULT_BAND_CELLS = 2
-DEFAULT_MAX_SWEEPS = 1
-DEFAULT_TOL = '1*V'
+# DEFAULT_BAND_CELLS coarse cells of overlap, i.e. band_cells+1 coarse nodes:
+# at --interface 19.8*mm with coarse 0.22mm those are nodes 90/89/88/87 = z
+# 19.80/19.58/19.36/19.14mm.  The innermost, 19.14mm, still falls inside the
+# near grid's 0..19.8mm range, so the band needs NO grid reshaping.
+#
+# DEFAULT_TOL is a PLAIN NUMBER, not a units string.  It is a max change on the
+# potential array between sweeps -- the same kind of quantity as --precision,
+# which is likewise undimensioned.  It was '1*V' until Phase 2/Step 1, which
+# round-tripped through the unit system to 1.0, i.e. one whole volt, and so
+# halted the sweep after a single iteration; measured near deltas on the 8cm
+# grid-free geometry run 0.34 (band 2) to 3.17 (band 20).  At 2e-8 the
+# tolerance sits ~7 orders below the smallest of those, so it never gates and
+# max_sweeps is the binding constant at ANY band width.  Being undimensioned is
+# also what lets ONE value serve both fields: the drift potential is in volts
+# while the weighting probe is dimensionless in [0,1] (observed delta 3.7e-05),
+# and no volt-valued tolerance can gate both.
+DEFAULT_BAND_CELLS = 3
+DEFAULT_MAX_SWEEPS = 5
+DEFAULT_TOL = 2e-8
 
 
 def _profile(field):
@@ -633,12 +645,14 @@ def hybrid_iterate(ctx, coarse_config, fine_config, interface='20*mm',
         strings keyed by GRID_SPEC leaf ('coarse', 'near', 'fine01' =
         FULL_LEAF).  All three required.
 
-    THE SWEEP.  `band_cells` (default 2) is the near/far overlap in COARSE
+    THE SWEEP.  `band_cells` (default 3) is the near/far overlap in COARSE
     cells, so the band spans band_cells+1 coarse nodes at the interface.
-    `max_sweeps` (default 1) caps the sweep count and `tol` (default '1*V') is
-    the inter-sweep convergence tolerance handed to near-far-solve; at the
-    default of a single sweep neither ever bites, and both exist so a longer
-    iteration can be asked for without touching this module.
+    `max_sweeps` (default 5) caps the sweep count and `tol` (default 2e-8, a
+    plain number in the units of the potential array, exactly like
+    --precision) is the inter-sweep convergence tolerance handed to
+    near-far-solve.  `max_sweeps` is the constant that binds: 2e-8 is far below
+    any delta this geometry produces, so the tolerance is an escape hatch for
+    an already-converged interface rather than the normal stopping condition.
 
     `max_sweeps=0` SKIPS the sweep and stitches the sweep-0 near solution
     against the step-1 coarse field, reproducing the old one-shot scheme
