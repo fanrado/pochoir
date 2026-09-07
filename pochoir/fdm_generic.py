@@ -35,6 +35,78 @@ def edge_condition(arr, *periodic, info_msg=None):
             arr[tuple(dst2)] = arr[tuple(src1)]
 
 
+def edge_condition_fixed(arr, *periodic, info_msg=None):
+    '''
+    Apply N edge conditions (periodic if True, else truly fixed) to an N-D array.
+
+    This is edge_condition() with a corrected non-periodic branch.  The
+    periodic branch is identical: the halo slab on each side is copied
+    from the opposite interior slab, wrapping the array.
+
+    The non-periodic branch here leaves BOTH halo slabs untouched.  The
+    relaxation update writes only the interior (see iarr_pad[core] = ...
+    in fdm_torch.py), so a halo that is never assigned simply keeps the
+    value written into it by domain/boundary construction: that is a
+    held Dirichlet wall, which is what "fixed" is supposed to mean.
+
+    Why this function exists rather than a change to edge_condition():
+    edge_condition()'s non-periodic branch does
+
+        arr[0]   = arr[1]
+        arr[n-1] = arr[n-2]
+
+    which forces zero normal derivative at the wall.  That is a Neumann
+    mirror -- a reflecting wall -- not a fixed BC.  Both behaviours are
+    wanted, by different solves:
+
+    * The drift solve runs per,per,fix.  Its mirror is CORRECT: the
+      drift paths it produces are later replicated onto a larger domain
+      during the induced-current calculation, so the reflecting wall is
+      the intended symmetry.
+
+    * The weighting solve runs fix,fix,fix.  There the mirror is WRONG.
+      Reflecting transverse walls make the 5x5 patch behave as an
+      infinite periodic array of collecting pads instead of one pad in
+      an extended grounded plane, so W plateaus near the pad-area
+      fraction instead of decaying laterally to 0.  Measured, W(domain
+      centre) equals W(transverse edge) to four digits at z=88 in both
+      the 0.55mm and the 0.1mm runs.  The drifting electron then sees a
+      nonzero weighting field over its whole path and dQ/dt is nonzero
+      from t=0, with charge accruing while the electron is still ~160mm
+      from the pad.  See issue pochoir-ziqz for the full diagnosis.
+
+    Callers that want the reflecting wall keep calling edge_condition();
+    callers that want a genuinely held boundary call this one.
+    '''
+    np = len(periodic)
+    na = len(arr.shape)
+    if np != na:
+        raise ValueError(f"dimension mismatch: {np} != {na}")
+
+    # whole array slice
+    slices = [slice(0,s) for s in arr.shape]
+    for dim, per in enumerate(periodic):
+        if not per:
+            # Fixed: leave both halo slabs holding their construction
+            # values.  No assignment -- see docstring.
+            continue
+
+        n = arr.shape[dim]
+        src1 = list(slices)
+        src2 = list(slices)
+        dst1 = list(slices)
+        dst2 = list(slices)
+
+        dst1[dim] = slice(0,1)
+        src1[dim] = slice(n-2, n-1)
+
+        dst2[dim] = slice(n-1,n)
+        src2[dim] = slice(1,2)
+
+        arr[tuple(dst1)] = arr[tuple(src1)]
+        arr[tuple(dst2)] = arr[tuple(src2)]
+
+
 def stencil(array, res=None):
     '''
     Return sum of 2N views of N-D array.
@@ -573,6 +645,7 @@ def padplane_noflux_geom(barr, insulator=None):
     # drift volume, so that is where E_z must vanish.
     partial = sorted(z for z in range(barr.shape[axis])
                      if 0 < counts[z] < plane_size)
+    print("Calculated partial : ", partial)
     if not partial:
         raise ValueError(
             f"padplane_noflux_geom: no partially-Dirichlet plane (the pad plane) "
