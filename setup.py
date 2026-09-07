@@ -41,7 +41,10 @@ setuptools.setup(
     author_email="brett.viren@gmail.com",
     description="Calculate response functions with FDM field calculations",
     url="https://brettviren.github.io/pochoir",
-    packages=setuptools.find_packages(),
+    # find_packages() already picks up both pochoir and pochoir_Analysis
+    # (the post-run analysis tools); named explicitly so neither can be
+    # dropped by an accidental layout change.
+    packages=["pochoir", "pochoir_Analysis"],
     python_requires='>=3.5',
     install_requires=[
         "click",         # CLI
