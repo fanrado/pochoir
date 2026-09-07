@@ -179,9 +179,20 @@ def rgi(points, values):
     '''
     if is_torch(values):
         from torch_interpolations import RegularGridInterpolator as RGI
-    else:
-        from scipy.interpolate import RegularGridInterpolator as RGI
-    return RGI(points, values, method="linear")
+        return RGI(points, values, method="linear")
+
+    from scipy.interpolate import RegularGridInterpolator as RGI
+    # Samples may fall outside the grid: the pixel weighting field is
+    # tiled by offsetting drift paths outward from the collecting pad,
+    # and paths that focus across the inter-pad gap land past the high
+    # edge of the weighting domain.  Physically W -> 0 away from the
+    # collecting pad, so fill with 0 rather than raising.  Do NOT use
+    # fill_value=None here: the truncated Dirichlet edge makes W turn
+    # back upward at the last two nodes, and linear extrapolation
+    # projects that numerical artifact outward, manufacturing weighting
+    # field larger than any real W in the region.
+    return RGI(points, values, method="linear",
+               bounds_error=False, fill_value=0.0)
 
 def invert(arr):
     if is_torch(arr):
