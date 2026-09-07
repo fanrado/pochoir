@@ -247,6 +247,7 @@ where `near_bc` pinned the near top plane once and never revisited it.
 | 0 | 7.97e-06 V | 0.772708 | **1.3798 %** | 130 s |
 | 1 | 7.81e-06 V | 0.713747 | **1.2745 %** | 165 s |
 | 4 | 7.80e-06 V | 0.562495 | **1.0045 %** | 250 s |
+| 20 | 7.85e-06 V | 0.157948 | **0.2821 %** | 647 s (Phase 2/Step 1, solo) |
 
 E_z either side, for completeness:
 
@@ -289,3 +290,156 @@ would plausibly couple no better than a 1-cell band — which is what the flat
 That remains a **hypothesis**, not a result: testing it means varying
 `--band-cells` (3 vs 5 vs 10) and the interface placement, which is Phase 2.
 Reporting and stopping here as instructed.
+
+
+---
+
+# Phase 2/Step 1 — drift seam at band 3 with 20 sweeps
+
+Beads: `pochoir-7nyz`.
+
+Identical to Phase 1/Step 1 in every respect — same geometry, same
+`--band-cells 3` — except `--max-sweeps 20` and the store name
+`store_seam_drift_sweeps20`. **`--band-cells` was not varied**, and the wider
+bands (10, 20 coarse cells) were deliberately **not** run: pinning the coarse
+far solve to fine data over a large fraction of its depth converges the seam by
+turning the hybrid into the single-spacing solve, which defeats the method.
+
+This run was **solo on the GPU**, unlike Phase 1's three concurrent runs, so its
+wall clock is the clean one.
+
+## Wall clock
+
+**Total 647 s (10.8 min)**, close to the ~12 min estimate.
+
+| stage | wall clock |
+|---|---|
+| domains | 0.1 s |
+| geometry generation ×3 (coarse, near, full-depth fine) | 46.8 s |
+| coarse solve | 31.0 s |
+| refine + `near_bc` | 0.4 s |
+| near solve (sweep 0) | 10.4 s |
+| **Schwarz sweep, 20 iterations** | **556.7 s** |
+| stitch | 0.19 s |
+
+The sweep is now **86 %** of the run. Per sweep: **27.81 s** (measured across
+the 19 gaps between logged deltas), matching the ~28 s estimate (far ~21 s +
+near ~7 s). Store size 68 MB.
+
+Solo, the base solves are noticeably faster than Phase 1's contended numbers
+(coarse 31.0 s vs 36.1 s, near 10.4 s vs 25.4 s, geometry 46.8 s vs 64 s) —
+which confirms Phase 1's caveat that those wall clocks were inflated.
+
+## Stop reason
+
+```
+schwarz hit max_iters=20 (last delta 0.11162065008306854)
+near-far-solve: 20 sweeps, final near delta=0.11162065008306854
+```
+
+**It stopped on `max_iters=20`, as expected — `--schwarz-tol 2e-8` still never
+gates.** The final delta is 0.1116, ~6.7 orders of magnitude above the tol.
+
+## THE FULL 20-ENTRY PER-SWEEP NEAR DELTA SERIES
+
+| sweep | near delta | ratio to previous |
+|---|---|---|
+| 0 | 0.5043925981392476 | — |
+| 1 | 0.4658988697312907 | 0.9237 |
+| 2 | 0.4303447145097152 | 0.9237 |
+| 3 | 0.3975040926957263 | 0.9237 |
+| 4 | 0.3671696616370355 | 0.9237 |
+| 5 | 0.3391501191784982 | 0.9237 |
+| 6 | 0.3132688104536783 | 0.9237 |
+| 7 | 0.2893625625489449 | 0.9237 |
+| 8 | 0.2672806542069566 | 0.9237 |
+| 9 | 0.2468838659827952 | 0.9237 |
+| 10 | 0.2280436025694144 | 0.9237 |
+| 11 | 0.2106410820555311 | 0.9237 |
+| 12 | 0.1945665870460971 | 0.9237 |
+| 13 | 0.1797187729263214 | 0.9237 |
+| 14 | 0.166004028915836 | 0.9237 |
+| 15 | 0.1533358878842819 | 0.9237 |
+| 16 | 0.1416344812038233 | 0.9237 |
+| 17 | 0.1308260352016077 | 0.9237 |
+| 18 | 0.120842406037923 | 0.9237 |
+| 19 | 0.1116206500830685 | 0.9237 |
+
+**The ratio is 0.9237 to four decimal places for all nineteen gaps.** It does
+not drift, does not improve, and shows no transient: the first gap and the
+nineteenth are the same number.
+
+**This answers the question the step was set to answer: the 0.924 coupling rate
+is a property of the band, not a transient of the near solution settling.** The
+iteration is a clean geometric contraction with a fixed rate.
+
+The kink contracts at exactly the same rate: 0.157948 / 0.562495 = **0.2808**
+over 16 sweeps, and 0.9237^16 = **0.2809**.
+
+## The seam at 20 sweeps
+
+Interface still on node 198 of 793. `phi` continuous to ~1e-8 (C0 by
+construction, as before).
+
+| quantity | value |
+|---|---|
+| E_z just BELOW the plane | **55.7497232 V/mm** |
+| E_z just ABOVE the plane | **55.9076713 V/mm** |
+| **kink (above − below)** | **+0.157948 V/mm** |
+| as % of the local &#124;E_z&#124; (55.829) | 0.2829 % |
+| **as % of the 56.0 V/mm design field** | **0.2821 %** |
+
+Transverse corrugation on the seam plane is 3.62e-05 V — unchanged from Phase 1
+and still six orders below the pad plane, so corrugation remains a non-factor.
+
+## The falsifiable prediction, checked
+
+The prediction was: below-side gap to the fine grid's 55.885 is 0.482 at sweep
+4, so 16 more sweeps at 0.924 gives ~0.138 → E_z below ~55.75, kink ~0.22 V/mm
+= ~0.39 % of design.
+
+* **The below-side half of the prediction was exact.**
+  55.885 − 0.482 × 0.9237^16 = **55.7496**, measured **55.7497**. The
+  contraction did **not** improve, exactly as predicted.
+* **The kink half was pessimistic**, because the prediction held the far side
+  fixed at 55.966. It did not stay fixed: the above side also converged
+  downward, 55.966 → **55.9077**, toward the fine grid's 55.885. Both sides move
+  toward each other, so the kink came in at **0.2821 %** rather than 0.386 %.
+
+So the measurement **partly contradicts** the prediction — not in the
+contraction rate, which was dead-on, but in the assumption that only the near
+side moves.
+
+## WHICH OF THE TWO OUTCOMES
+
+Neither cleanly, and the distinction matters:
+
+* The issue's second branch — *"if it lands near 0.39 %, then band 3 cannot
+  reach the floor at any practical sweep count"* — **is not what happened.** It
+  landed at 0.2821 %, i.e. **1.42× the 0.199 % geometry floor** (0.111 V/mm),
+  down from 5× at 4 sweeps.
+* The issue's first branch — *"much better than that, the contraction
+  improved"* — is **half right**: the kink is better than predicted, but **the
+  contraction did not improve at all** (a flat 0.9237 over 19 gaps). The
+  improvement came from the far side converging too, not from a better rate.
+
+**Conclusion: more sweeps at band 3 IS a viable fix, and band 3 reaches the
+geometry floor at a practical sweep count.** Extrapolating the same 0.9237
+contraction from the measured kink 0.157948 down to the 0.111 V/mm floor needs
+**4.4 more sweeps — about 25 sweeps in total, ~11.3 min of sweeping.**
+
+That is a real cost (25 sweeps is ~700 s of sweeping against the 4 sweeps the
+runner currently ships, ~111 s) but it is not the "impractical at any sweep
+count" outcome, and it does **not** require touching `--band-cells`, the
+interface placement, or the non-fine-node inner pin at 19.14 mm.
+
+**The leading hypothesis from Phase 1 — that the interpolated, non-fine-node
+inner pin at 19.14 mm is what caps the coupling — is not needed to explain
+these numbers, and is not supported by them either way.** What the flat 0.9237
+does establish is that whatever sets the rate is *fixed* for this band: it is
+not a transient the iteration works through. Whether the rate would improve
+with an exactly-pinned band (`band_cells` a multiple of 5) is untested and
+remains a Phase 2 question — but it is now a question about *speed*, not about
+*reachability*.
+
+No fix attempted, no default in `pochoir/` changed.
