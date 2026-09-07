@@ -92,7 +92,7 @@ which matches the documented band exactly — coarse nodes 90…87 = z 19.80 /
 ### THE PER-SWEEP NEAR DELTA — the load-bearing number
 
 ```
-schwarz iter 0: near delta = 0.5043925981392263
+schwarz iter 0: near delta = 0.5043925981392476
 schwarz iter 1: near delta = 0.4658988697312907
 schwarz iter 2: near delta = 0.43034471450971523
 schwarz iter 3: near delta = 0.3975040926957263
@@ -109,7 +109,7 @@ schwarz hit max_iters=4 (last delta 0.3975040926957263)
 **Conclusion (stated as the issue asks): 4 sweeps under-converges the seam.**
 
 * The tolerance **never gates**. It stopped on `max_iters=4`, and the final
-  delta 0.3975 is **~7.4 orders of magnitude above** `--schwarz-tol 2e-8`. This
+  delta 0.3975 is **~7.3 orders of magnitude above** `--schwarz-tol 2e-8`. This
   confirms the premise recorded in `run-pixel-field.md` and `run-pixel-field.sh`:
   `--max-sweeps` is the binding limit and the sweep count alone decides seam
   quality.
@@ -269,7 +269,7 @@ Measured against the three outcomes `pochoir-k83d` sets out, this is the
 * It is **not quite** the third outcome either — 4 sweeps *is* measurably
   better than 1 (1.0045 % vs 1.2745 %), so the band **is** coupling the two
   domains. But only just: going from 1 sweep to 4 (three extra sweeps, +85 s,
-  +52 % wall clock) removes only **27 %** of the kink, and the whole sweep
+  +52 % wall clock) removes only **21 %** of the kink, and the whole sweep
   machinery from 0 to 4 removes only **27 %** of the one-shot kink. The
   per-sweep near delta contracts at a flat **0.924**, essentially the
   single-cell rate.
