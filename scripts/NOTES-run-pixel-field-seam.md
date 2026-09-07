@@ -585,3 +585,209 @@ Two caveats on that recommendation, both honest limits of this measurement:
 
 No fix applied, `run-pixel-field.sh` not touched, no default in `pochoir/`
 changed — setting the shipped values is Phase 3/Step 3.
+
+
+---
+
+# Phase 3/Step 2 — the weighting field: seam and per-sweep cost
+
+Beads: `pochoir-h92v`. The cost question is decided here, not on the drift field.
+
+**Band used: 5.** Phase 3/Step 1 showed the exact fine-node pin improves the
+contraction rate materially (0.9237 → 0.8737), so band 5 is what this step
+carries forward, as `pochoir-h92v` instructs.
+
+Store `store_seam_weight_sweeps20`, solo on the GPU, weighting configs
+(`example_gen_pixel_with_grid_*`), transverse shapes 5× wider than drift.
+Band confirmed again: `schwarz: interface z=19.8 coarse idx 90 (inner 85)`.
+Disk checked before starting: 1.1 TB free on `/nfs/data/1`.
+
+## COST — and the result is the opposite of what was feared
+
+The step's premise was that a naive 25× node scaling puts the weighting sweep at
+hours. **It does not. The weighting field is CHEAPER per sweep than the drift
+field.**
+
+| | drift (band 5) | weighting (band 5) | ratio |
+|---|---|---|---|
+| coarse grid | 20×20×361 = 144 k | 100×100×361 = 3.6 M | 25× |
+| near grid | 44×44×199 = 385 k | 220×220×199 = 9.6 M | 25× |
+| output lattice | 44×44×793 = 1.5 M | 220×220×793 = 38 M | 25× |
+| **per sweep** | **28.76 s** | **10.10 s** | **0.351×** |
+| **total wall clock** | **666 s** | **324 s** | **0.487×** |
+| store size | 68 MB | 1.6 GB | 24× |
+
+**A 25× larger problem sweeps 2.85× FASTER.** GPU throughput is not merely
+sublinear here — it inverts. The drift grids are small enough that each FDM
+iteration is dominated by kernel-launch latency rather than arithmetic, so the
+tiny drift solve wastes most of its time; the weighting grids actually fill the
+device. This is exactly why the step said to measure rather than extrapolate.
+
+Stage breakdown (weighting):
+
+| stage | wall clock |
+|---|---|
+| domains | 0.1 s |
+| geometry generation ×3 | 33.2 s |
+| coarse solve (3.6 M) | 57.0 s |
+| refine + `near_bc` | 1.4 s |
+| near solve, sweep 0 (9.6 M) | 20.3 s |
+| **Schwarz sweep, 20 iterations** | **205.2 s** |
+| stitch (38 M output) | 4.6 s |
+
+**Answering the step's question directly: 25 sweeps on the weighting field costs
+252 s of sweeping (4.2 min). It is entirely affordable — cheaper than the same
+25 sweeps on the drift field (695–719 s).** There is no need for the two fields
+to take different sweep counts on cost grounds.
+
+## Per-sweep near delta series
+
+| sweep | near delta | ratio to previous |
+|---|---|---|
+| 0 | 0.000300782 | — |
+| 1 | 0.000139035 | 0.4622 |
+| 2 | 7.02999e-05 | 0.5056 |
+| 3 | 3.97029e-05 | 0.5648 |
+| 4 | 2.17265e-05 | 0.5472 |
+| 5 | 1.45088e-05 | 0.6678 |
+| 6 | 1.0069e-05 | 0.6940 |
+| 7 | 7.40132e-06 | 0.7351 |
+| 8 | 5.74085e-06 | 0.7757 |
+| 9 | 4.65568e-06 | 0.8110 |
+| 10 | 3.90535e-06 | 0.8388 |
+| 11 | 3.35814e-06 | 0.8599 |
+| 12 | 2.93954e-06 | 0.8753 |
+| 13 | 2.59647e-06 | 0.8833 |
+| 14 | 2.29654e-06 | 0.8845 |
+| 15 | 2.03609e-06 | 0.8866 |
+| 16 | 1.81054e-06 | 0.8892 |
+| 17 | 1.61506e-06 | 0.8920 |
+| 18 | 1.44516e-06 | 0.8948 |
+| 19 | 1.29694e-06 | 0.8974 |
+
+**The contraction is NOT flat here, and that is the important structural
+difference from the drift field.** It starts at 0.4622 — far faster than any
+drift ratio — and then *degrades* monotonically, rising through 0.55, 0.69,
+0.81, 0.87 and reaching **0.8974** by the last gap, still rising.
+
+So the weighting seam converges very quickly at first and then settles toward a
+rate close to (and slightly worse than) the drift field's band-5 0.8737. The
+early sweeps are doing most of the work.
+
+Absolute magnitudes are not comparable to drift — this probe is dimensionless in
+[0, 1] while the drift potential is in volts. The final delta is 1.297e-06,
+which is ~1.8 orders above the 2e-8 tol; it stopped on **`max_iters=20`**, so
+the tol still never gates, though the margin is far narrower than drift's 6.7
+orders.
+
+## The seam
+
+Interface on node 198 of 793, as before.
+
+| quantity | value |
+|---|---|
+| E_z just BELOW the plane | 0.00470598 1/mm |
+| E_z just ABOVE the plane | 0.00451240 1/mm |
+| kink (above − below) | −0.000193582 1/mm |
+| **kink as % of the local &#124;E_z&#124; (0.0046092)** | **4.20 %** |
+| phi departure from the below-side trend | 1.984e-04 |
+| phi departure from the above-side trend | 1.309e-04 |
+
+No `--design-field` was passed: there is no 56.0 V/mm reference for a
+dimensionless probe.
+
+**The weighting seam is far worse than the drift seam: 4.20 % of the local field
+against the drift field's 0.093 % at the same band and sweep count.** Note also
+that the kink is *negative* here (the far side is below the near side), the
+opposite sign to drift.
+
+## TRANSVERSE CORRUGATION — this is the finding
+
+This had never been measured for the weighting probe, and it does **not** behave
+like the drift field.
+
+| z [mm] | index | max − min | W at pad centre | (max−min)/W |
+|---|---|---|---|---|
+| 10.5 | 105 | 0.786249 | — | — |
+| 15.0 | 150 | 0.0896033 | — | — |
+| **19.8 (seam)** | **198** | **0.0183202** | **0.045814** | **0.400** |
+| 25.0 | 250 | 0.004007 | 0.032836 | 0.122 |
+| 30.0 | 300 | 0.000964657 | 0.028000 | 0.034 |
+| 40.0 | 400 | 6.06952e-05 | 0.021606 | 0.003 |
+
+**At the seam plane the transverse corrugation is 40 % of the local W value.**
+For the drift field the same quantity was 3.6e-05 V on 553 V — a factor of 7e-08.
+
+**The interface at 19.8 mm sits deep inside the still-corrugated zone for the
+weighting field, and does not for the drift field.** The corrugation only falls
+below ~3 % of W by z ≈ 30 mm, which is where `NOTES-weighting-farfield.md` put
+the end of the corrugated zone. The seam is 10 mm too shallow for this field.
+
+This reframes the 4.20 % kink: it is being measured at a plane where the
+transverse structure is the dominant feature, and the coarse grid must represent
+that structure at 0.22 mm while the near grid has it at 0.1 mm. The two grids
+disagreeing there is not surprising, and **more sweeps cannot fix it** — the
+sweep converges the two domains to each other, not to the truth.
+
+## KNOWN CONFOUND — the far-field BC (noted, not fixed)
+
+The weighting solve's transverse edges are `fix,fix,fix`, which
+`fdm_generic.py:8-34` implements as a **Neumann mirror, not Dirichlet zero**.
+Per `scripts/NOTES-weighting-farfield.md` that makes the 5×5 patch behave as an
+infinite periodic pad array.
+
+**Confirmed here — the far side is a plateau/ramp, not a decay:**
+
+| z [mm] | 19.8 | 25 | 30 | 40 | 50 | 60 | 70 | 79.2 |
+|---|---|---|---|---|---|---|---|---|
+| W at pad centre | 0.0458 | 0.0328 | 0.0280 | 0.0216 | 0.0159 | 0.0104 | 0.0049 | 0.0000 |
+
+From 30 mm out, W falls essentially **linearly** to zero at the cathode — the
+parallel-plate signature of an infinite pad array. A physically isolated pad's
+weighting potential would decay far faster. So the entire far side of this seam
+is unphysical in its tail, which plausibly contributes to the coarse side of the
+kink. **The BC was not changed**, as instructed.
+
+## Sweeps to floor, and what it would cost
+
+Honest answer: **this cannot be computed the way it was for drift, and it should
+not be faked.**
+
+* There is **no measured coarse/fine far-field spread for the weighting field**.
+  The 0.199 % floor is a *drift* number (55.996 vs 55.885 V/mm) and does not
+  transfer to a dimensionless probe with a different generator and different
+  edges. There is no target value to extrapolate to.
+* The contraction is **not a fixed rate** here — it is still degrading at sweep
+  19 — so the clean geometric extrapolation that worked for drift is not valid.
+
+What can be said, using the asymptotic ~0.897:
+
+| goal | extra sweeps | extra wall clock |
+|---|---|---|
+| halve the kink | 6.4 | 65 s |
+| quarter the kink | 12.8 | 129 s |
+
+So even aggressive extra sweeping is cheap in absolute terms (~1–2 min). **Cost
+is not the obstacle for the weighting field; the corrugated interface placement
+and the unphysical far-field BC are.**
+
+## CONCLUSION
+
+1. **25 sweeps is affordable on the weighting field** — 252 s of sweeping,
+   *cheaper* than the same count on drift. The feared 25× cost blow-up does not
+   exist; the GPU inverts it. **Both fields can ship the same sweep count.**
+2. **But the weighting seam is not sweep-limited the way the drift seam is.** At
+   4.20 % of local field, with 40 % transverse corrugation on the seam plane and
+   a linear-ramp far tail from the Neumann-mirror BC, its error is dominated by
+   *where the interface is* and *what the far BC does*, not by how many sweeps
+   are run.
+3. Recommendation for Phase 3/Step 3: **band 5 and the same sweep count for both
+   fields** — cost permits it and it keeps the runner simple. But the shipped
+   comment should not claim the weighting seam is converged: it is not, and more
+   sweeps will not converge it.
+4. Two follow-ups worth their own issues, **not attempted here**: measuring a
+   coarse/fine far-field spread for the weighting probe so it has a floor to be
+   judged against, and moving the weighting interface deeper (~30 mm, where
+   corrugation is ~3 % of W) or fixing the transverse BC.
+
+`run-pixel-field.sh` not touched; no default in `pochoir/` changed.
