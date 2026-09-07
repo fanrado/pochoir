@@ -230,6 +230,26 @@ export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_driftfield.log"
 
 ## --insulator (the node-centered no-flux Neumann BC) is applied by field-solve
 ## to the SOLVE only -- never to velo or drift below.
+## SCHWARZ PARAMETERS (stated explicitly below rather than inherited from
+## hybrid_iterate.py's DEFAULT_BAND_CELLS / DEFAULT_MAX_SWEEPS / DEFAULT_TOL):
+##
+##   * --band-cells 3 is 3 COARSE cells = band_cells+1 = 4 nodes.  At
+##     --interface 19.8mm with coarse 0.22mm those are coarse nodes
+##     90/89/88/87 = z 19.80/19.58/19.36/19.14mm (spelled out at
+##     hybrid_iterate.py:319).
+##   * the innermost plane 19.14mm is NOT a fine node: coarse and fine nodes
+##     coincide only every 1.1mm at the 2.2 ratio, so the far Dirichlet pin
+##     there is INTERPOLATED onto the near grid, not exact.  Only band_cells
+##     that are multiples of 5 give an exact pin.  Measured in Phase 2, not
+##     fixed here.
+##   * --schwarz-tol 2e-8 is undimensioned ON PURPOSE so one value serves both
+##     the volt-valued drift potential and the dimensionless [0,1] weighting
+##     probe.
+##   * at 2e-8 the tolerance NEVER GATES -- measured near deltas on this 8cm
+##     grid-free geometry run 0.34 (band 2) to 3.17 (band 20), about seven
+##     orders above it -- so --max-sweeps 4 is the BINDING limit and the sweep
+##     count alone decides seam quality.
+
 if [ "$HYBRID" = yes ] ; then
     want potential/drift3d \
          pochoir field-solve --hybrid yes --field drift \
@@ -240,6 +260,7 @@ if [ "$HYBRID" = yes ] ; then
          --fine-shape "$d_fine_shape" \
          --interface "$interface" \
          --coarse-spacing "$coarse_spacing" --fine-spacing "$fine_spacing" \
+         --band-cells 3 --max-sweeps 4 --schwarz-tol 2e-8 \
          --precision "$precision"
 else
     want potential/drift3d \
@@ -303,6 +324,7 @@ if [ "$HYBRID" = yes ] ; then
          --fine-shape "$w_fine_shape" \
          --interface "$interface" \
          --coarse-spacing "$coarse_spacing" --fine-spacing "$fine_spacing" \
+         --band-cells 3 --max-sweeps 4 --schwarz-tol 2e-8 \
          --precision "$precision"
 else
     want potential/weight3d \
