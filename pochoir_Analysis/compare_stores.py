@@ -198,11 +198,35 @@ def report(label, path, charge, endpoints, paths, zlist):
     print()
 
 
+def zoom_ticks(means, frac=0.05, pad=1.6, minimum=20):
+    '''
+    Return how many leading ticks the zoom panel should span.
+
+    The interesting part of Q(t) is the leading edge, which occupies a
+    small fraction of the tick axis; the panel is useless if it spans
+    the whole run.  Take the latest tick at which either curve is still
+    below `frac` of its own final value, widen it a little so the rise
+    itself is visible rather than clipped at the panel edge, and never
+    return less than `minimum` ticks.
+    '''
+    nticks = max(len(m) for m in means)
+    reach = [minimum]
+    for m in means:
+        final = m[-1]
+        if final == 0.0:
+            continue
+        above = numpy.nonzero(m >= frac * final)[0]
+        reach.append(int(above[0]) if above.size else nticks)
+    return int(min(nticks, max(reach) * pad))
+
+
 def plot(outfile, new, ref, new_label, ref_label):
     '''
     Write an overlaid mean-Q(t) plot of the two stores.
     '''
-    fig, (ax, axz) = plt.subplots(2, 1, figsize=(8, 8), sharex=True)
+    # NOT sharex: the lower panel exists precisely to show a different
+    # (much shorter) tick range than the upper one.
+    fig, (ax, axz) = plt.subplots(2, 1, figsize=(8, 8))
 
     for charge, label, style in ((new, new_label, '-'), (ref, ref_label, '--')):
         mean = charge.mean(axis=0)
@@ -214,12 +238,17 @@ def plot(outfile, new, ref, new_label, ref_label):
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # The whole point of the comparison lives in the first few percent,
-    # where a reflecting weighting-field wall makes Q rise from tick 0.
+    # The whole point of the comparison lives in the first few percent of
+    # the drift, where a reflecting weighting-field wall makes Q rise
+    # early.  Zoom in BOTH axes: with the full 4000-tick x range the
+    # panel collapses to a vertical line at x=0 and shows nothing.
+    means = [new.mean(axis=0), ref.mean(axis=0)]
+    nzoom = zoom_ticks(means)
+    axz.set_xlim(0, nzoom)
     axz.set_ylabel('mean Q (zoom on the early rise)')
-    axz.set_xlabel('tick')
-    both = numpy.concatenate([new.mean(axis=0), ref.mean(axis=0)])
-    axz.set_ylim(0, max(1e-12, 0.02 * both.max()))
+    axz.set_xlabel(f'tick (first {nzoom} of {new.shape[1]})')
+    head = numpy.concatenate([m[:nzoom] for m in means])
+    axz.set_ylim(0, max(1e-12, 1.05 * head.max()))
     axz.legend()
     axz.grid(True, alpha=0.3)
 
