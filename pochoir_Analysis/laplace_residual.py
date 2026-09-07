@@ -128,6 +128,38 @@ def companion_keys(store, key):
     return first_present('domain', dom), first_present('boundary', bnd)
 
 
+def insulator_key(store, key):
+    '''
+    Store key of the no-flux insulator mask for `key`, or None.
+
+    The FR4 slab is NOT part of the boundary array.  With
+    enableInsulatorFR4 the generator writes it separately, as the
+    initial key plus '_insulator', and its cells carry a no-flux
+    (Neumann) stencil rather than a Dirichlet value -- so del^2 phi is
+    legitimately nonzero on them and the plain 7-point residual is
+    meaningless there.  Unmasked, that one slab plane dominates the
+    whole volume: on store_pixel_field_no it reads 9.56e+01 V while
+    every other plane sits at 1.2e-07.
+
+    The potential's sidecar JSON does not name it (a stitched hybrid
+    potential has no 'initial' key at all), so it is looked up by leaf,
+    the same way companion_keys resolves its fallbacks.
+    '''
+    meta = load_meta(store, key)
+    leaf = _leaf(key)
+    guesses = []
+    if meta.get('initial'):
+        guesses.append(_leaf(meta['initial']))
+    guesses.append(leaf)
+    if leaf.endswith('3d'):
+        guesses.append(leaf[:-2])
+    for g in guesses:
+        cand = f'initial/{g}_insulator'
+        if os.path.exists(os.path.join(store, cand + '.npz')):
+            return cand
+    return None
+
+
 def load_domain(store, domain_key):
     '''
     Return (shape, spacing, origin) as tuples, read from the domain JSON.
@@ -283,9 +315,23 @@ def analyse(store, key, interface_mm=None, coarse_spacing=None,
             f'{store}: {domain_key} shape {tuple(shape)} does not match '
             f'{key} shape {phi.shape}')
 
+    # The insulator slab is excluded exactly like an electrode: its
+    # cells are not Dirichlet, but they are not plain-Laplace either.
+    ins_key = insulator_key(store, key)
+    n_ins = 0
+    solid = numpy.asarray(barr) != 0
+    if ins_key is not None:
+        ins = numpy.asarray(load_array(store, ins_key)) != 0
+        if ins.shape != phi.shape:
+            raise SystemExit(
+                f'{store}: {ins_key} shape {ins.shape} does not match '
+                f'{key} shape {phi.shape}')
+        n_ins = int((ins & ~solid).sum())
+        solid = solid | ins
+
     dx, dy, dz = per_axis_residual(phi)
     terms = dict(total=dx + dy + dz, x=dx, y=dy, z=dz)
-    excluded = stencil_mask(barr)
+    excluded = stencil_mask(solid)
     stats = plane_stats(terms, excluded)
 
     # Keep one x-z slice through the pad centre for the heatmap, then let
@@ -311,6 +357,7 @@ def analyse(store, key, interface_mm=None, coarse_spacing=None,
         stats=stats, zindex=zindex, zmm=zmm,
         interior=interior, masked=int(excluded.sum()),
         electrodes=int((numpy.asarray(barr) != 0).sum()),
+        insulator_key=ins_key, insulator=n_ins,
         slice_iy=iy, slice_total=slice_total, slice_mask=slice_mask,
         slice_x_mm=origin[0] + numpy.arange(1, phi.shape[0] - 1) * spacing[0],
         interface_mm=interface_mm, seam_index=seam_index,
@@ -338,6 +385,12 @@ def report(res, stride=1, out=None):
       f'origin {res["origin"]}')
     p(f'boundary   : {res["boundary_key"]}  '
       f'{res["electrodes"]} flagged cells')
+    if res.get('insulator_key'):
+        p(f'insulator  : {res["insulator_key"]}  '
+          f'{res["insulator"]} no-flux cells, excluded like electrodes')
+    else:
+        p('insulator  : none found -- if this field was solved with '
+          '--insulator, the slab is NOT masked')
     p(f'residual   : 7-point stencil sum, NOT divided by h^2; units '
       f'{res["units"]}')
     kept = res['interior'] - res['masked']
