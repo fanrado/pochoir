@@ -144,55 +144,80 @@ wcfg_fine="example_gen_pixel_with_grid_task13_fine.json"
 ## must be re-derived BY HAND whenever the configs' pitch or depth moves.  See
 ## the SPACINGS note below for what that derivation is.
 ##
-## Geometry: pitch 3.7mm (pixelSize 2.2 + pixelGap 1.5), Npixels 9,
-## driftZDepth 159.9, interface 39.96mm.
+## Geometry: pitch 4.4mm (pixelSize 3.5 + pixelGap 0.9), Npixels 5,
+## driftZDepth 79.15, pad plane 9.9mm, interface 19.8mm.  This is the 8cm /
+## 2cm method-confirmation geometry -- the real LArPix v2a tile, at the true
+## design values.
 ##
-## SPACINGS ARE 0.37 / 0.0925, NOT 0.4 / 0.1.  The pitch must be a WHOLE number
-## of cells on both grids, and 3.7 = 37 x 0.1 with 37 prime, so with a 0.1mm
-## fine grid the only coarse spacings dividing 3.7 exactly are 0.1 and 3.7 --
-## neither is a usable coarse grid.  Solving pitch = n*fine, coarse = 4*fine
-## with 4 dividing n gives n = 40: fine 3.7/40 = 0.0925, coarse 3.7/10 = 0.37,
-## preserving the validated 4:1 ratio.  This choice also makes the pad quantize
-## IDENTICALLY on both grids (2.2mm -> 24 fine / 6 coarse cells, both 2.22mm;
-## 1.5mm -> 16 / 4, both 1.48mm; 24+16 = 40 = 4*(6+4)), so the far field and the
-## near field model the same pad.  Do not "round" these spacings back to
-## 0.4/0.1: that reintroduces a 4.0mm coarse pitch against a 3.7mm fine one.
+## SPACINGS ARE 0.22 / 0.1.  DERIVATION -- this table is the authority and must
+## be re-derived BY HAND if the configs move:
 ##
-##   depth   160.21mm     -> 433 coarse cells (434 nodes), 1732 fine (1733)
-##                           ceil(159.9/0.37) = 433, and 433*4 = 1732 exactly
-##   near   0..39.96mm    -> 432 fine cells (433 nodes); 39.96 = 108 coarse
-##                           cells, so the seam is a plane of BOTH grids
-##   pitch     3.7mm      ->  10 coarse /  40 fine cells
-##   probe  9*3.7=33.3mm  ->  90 coarse / 360 fine cells
+##   pitch      4.4mm   =  20 coarse cells   =  44 fine cells
+##   probe    5*4.4mm   = 100 coarse         = 220 fine     (weighting, 22mm)
+##   depth     79.2mm   = 360 coarse cells   = 792 fine cells  -> 361 / 793 nodes
+##   interface 19.8mm   =  90 coarse cells   = 198 fine cells  -> near 199 nodes
+##   pad plane  9.9mm   =  45 coarse         =  99 fine
+##
+## Transverse counts use N = extent/spacing (the far node is the wrap of the
+## near one, not duplicated); z uses N = extent/spacing + 1 (both faces are real
+## planes).  That is the convention _cells() implements with its `closed` flag.
+##
+## WHY 0.22 AND NOT 0.4.  Searching every coarse spacing that divides the 4.4mm
+## pitch, 0.22 is the only one that both snaps the pad to within +1.1% of area
+## (3.52mm; 0.2 and 0.4 give 3.6mm and +5.8%) and puts the pad plane on a node
+## of BOTH grids -- shared nodes come every 1.1mm and 9.9 = 9 x 1.1, whereas
+## 0.44 forces multiples of 2.2mm, which would move the pad plane to 8.8 or
+## 11.0.  Coarse being only 2.2x coarser costs nothing: 100x100x361 is about
+## 3.6M nodes.
+##
+## CONSEQUENCE: the coarse:fine ratio is 2.2, NOT an integer, so coarse nodes
+## are not a subset of fine nodes -- they coincide only every 1.1mm.  This is
+## supported: pochoir/nearfar.py is explicitly coordinate-based interpolation
+## and works for both up- and downsampling, and _cells() only checks each grid
+## against the geometry, never the ratio.  But the near->coarse restriction now
+## INTERPOLATES rather than subsamples, and the coarse-cell staircase is
+## non-commensurate with the fine grid.
+##
+## NO DEAD SPACE: depth 79.2mm equals driftZDepth's cathode node
+## (ceil(79.15/0.22) = 360 coarse = 792 fine), so the cathode is the last plane
+## on both grids, while the launch node 79.15 does not land on it.
 ##
 ##                                    drift          weighting
-##   coarse 0.37mm,   full depth      10,10,434      90,90,434
-##   near   0.0925mm, to interface    40,40,433      360,360,433
-##   fine   0.0925mm, full depth      40,40,1733     360,360,1733
-##   single 0.0925mm (--hybrid no)    40,40,1733     360,360,1733
+##   coarse 0.22mm,  full depth       20,20,361      100,100,361
+##   near   0.1mm,   to interface     44,44,199      220,220,199
+##   fine   0.1mm,   full depth       44,44,793      220,220,793
+##   single 0.1mm    (--hybrid no)    44,44,793      220,220,793
 ##
-## The weighting fine grid is ~225 M nodes (was ~77 M at 220,220,1601): mostly
-## Npixels 9 rather than the spacing change.  Budget the run accordingly.
+## The weighting fine grid is ~38 M nodes, well down from the ~225 M of the
+## retired 9x9 / 0.0925mm transcription.
 ##
 ## The single row and the fine row are the SAME grid ON PURPOSE -- that is what
 ## makes the two modes comparable on identical output lattices.  They are kept
 ## as two separate, labelled variables rather than deduplicated into one: they
 ## answer different questions, and collapsing them would hide the fact that
 ## their agreement is a deliberate choice rather than a coincidence.
-d_coarse_shape="10,10,434"
-d_near_shape="40,40,433"
-d_fine_shape="40,40,1733"
-d_single_shape="40,40,1733"
+##
+## THE test/ COPIES NOW DIVERGE.  The four task13 configs under scripts/ have
+## been retargeted to this geometry; their same-named copies in test/ have NOT,
+## and test/run-task13-hybrid.sh is OUT OF SCOPE for this work and still solves
+## the old 3.7mm / 9x9 / 159.9mm geometry.  The DUPLICATED CONFIGS rule in the
+## header -- edit both copies -- was therefore KNOWINGLY NOT APPLIED here.  The
+## cmp recipe in that header will report all four pairs as differing; that is
+## expected, not a mistake to "fix" by copying either way.
+d_coarse_shape="20,20,361"
+d_near_shape="44,44,199"
+d_fine_shape="44,44,793"
+d_single_shape="44,44,793"
 
-w_coarse_shape="90,90,434"
-w_near_shape="360,360,433"
-w_fine_shape="360,360,1733"
-w_single_shape="360,360,1733"
+w_coarse_shape="100,100,361"
+w_near_shape="220,220,199"
+w_fine_shape="220,220,793"
+w_single_shape="220,220,793"
 
-interface='39.96*mm'
-coarse_spacing=0.37
-fine_spacing=0.0925
-spacing=0.0925
+interface='19.8*mm'
+coarse_spacing=0.22
+fine_spacing=0.1
+spacing=0.1
 precision=0.00000002
 
 date
