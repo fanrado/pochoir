@@ -319,8 +319,17 @@ def analyse(store, key, interface_mm=None, coarse_spacing=None,
     )
 
 
-def report(res, stride=1, out=sys.stdout):
-    'Print the per-plane table and its header to `out`.'
+def report(res, stride=1, out=None):
+    '''
+    Print the per-plane table and its header to `out` (default stdout).
+
+    The default is resolved HERE rather than in the signature: bound at
+    import time it would capture the real stdout, and redirect_stdout or
+    pytest's capsys -- which replace sys.stdout afterwards -- could not
+    see the output.
+    '''
+    if out is None:
+        out = sys.stdout
     p = lambda *a: print(*a, file=out)
 
     p(f'store      : {res["store"]}')
