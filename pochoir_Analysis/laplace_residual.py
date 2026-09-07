@@ -54,6 +54,8 @@ import numpy
 
 import matplotlib
 matplotlib.use("Agg")           # no display on the compute nodes
+import matplotlib.pyplot as plt
+from matplotlib.colors import SymLogNorm
 
 
 # Below this interface depth a weighting-field residual is a
@@ -256,13 +258,16 @@ def label_caveat(key, interface_mm):
         'quote it as production seam quality.')
 
 
-def analyse(store, key, interface_mm=None, coarse_spacing=None):
+def analyse(store, key, interface_mm=None, coarse_spacing=None,
+            slice_iy=None):
     '''
     Load `key` from `store` and return everything the report needs.
 
     Returns a dict with the per-plane statistics, the z coordinate of
-    each reported plane, the mask accounting and the resolved companion
-    keys.
+    each reported plane, the mask accounting, the resolved companion keys
+    and the single x-z slice the heatmap needs.  Only that slice is kept:
+    the full interior residual arrays are several times the size of the
+    potential itself and are dropped as soon as the statistics are taken.
     '''
     phi = load_array(store, key)
     domain_key, boundary_key = companion_keys(store, key)
@@ -283,6 +288,13 @@ def analyse(store, key, interface_mm=None, coarse_spacing=None):
     excluded = stencil_mask(barr)
     stats = plane_stats(terms, excluded)
 
+    # Keep one x-z slice through the pad centre for the heatmap, then let
+    # the full-size residual arrays go.
+    iy = _slice_index(phi.shape, slice_iy)
+    slice_total = numpy.array(terms['total'][:, iy - 1, :])
+    slice_mask = numpy.array(excluded[:, iy - 1, :])
+    del terms, dx, dy, dz
+
     # Interior planes are phi's z indices 1 .. nz-2.
     zindex = numpy.arange(1, phi.shape[2] - 1)
     zmm = origin[2] + zindex * spacing[2]
@@ -299,6 +311,8 @@ def analyse(store, key, interface_mm=None, coarse_spacing=None):
         stats=stats, zindex=zindex, zmm=zmm,
         interior=interior, masked=int(excluded.sum()),
         electrodes=int((numpy.asarray(barr) != 0).sum()),
+        slice_iy=iy, slice_total=slice_total, slice_mask=slice_mask,
+        slice_x_mm=origin[0] + numpy.arange(1, phi.shape[0] - 1) * spacing[0],
         interface_mm=interface_mm, seam_index=seam_index,
         coarse_spacing=coarse_spacing,
         units=units_label(key), caveat=label_caveat(key, interface_mm),
@@ -346,9 +360,220 @@ def report(res, stride=1, out=sys.stdout):
         p(row)
 
     p('')
+    check = transverse_far_check(res)
+    if check:
+        p(check)
     for n in names:
         p(f'{n:>5}: max over all planes {st[n]["max"].max():.4e}, '
           f'largest plane RMS {st[n]["rms"].max():.4e}')
+
+
+def far_planes(zmm, interface_mm):
+    '''
+    Boolean selector for the planes ABOVE the near/far interface.
+
+    These are the planes whose values came from the upsampled coarse
+    solution, i.e. where the far grid's own artifacts live.  With no
+    interface given, nothing is selected.
+    '''
+    if interface_mm is None:
+        return numpy.zeros(len(zmm), dtype=bool)
+    return numpy.asarray(zmm) > interface_mm
+
+
+def coarse_phase_fold(zmm, values, coarse_spacing, nbins=11):
+    '''
+    Fold `values` on coarse-cell phase: bin by (z mod coarse) / coarse.
+
+    Returns (centres, means, counts) with `nbins` bins over phase in
+    [0,1), or None when there is nothing to fold.
+
+    WHY FOLDING AND NOT AN INTEGER STRIDE.  The coarse:fine ratio here is
+    0.22/0.1 = 2.2, NOT an integer, so coarse nodes coincide with fine
+    nodes only every 1.1mm and the upsample's piecewise-constant-gradient
+    ripple is NON-COMMENSURATE with the fine grid -- a beat pattern, not
+    a fixed 4-cell period.  Sampling every Nth plane would work at a 4:1
+    ratio and silently find nothing here.  Phase folding is
+    ratio-agnostic: a real coarse-cell ripple concentrates in phase and
+    shows up as structure across the bins, however the two grids beat.
+    '''
+    z = numpy.asarray(zmm, dtype=float)
+    v = numpy.asarray(values, dtype=float)
+    if coarse_spacing is None or coarse_spacing <= 0 or z.size == 0:
+        return None
+
+    phase = numpy.mod(z, coarse_spacing) / coarse_spacing
+    edges = numpy.linspace(0.0, 1.0, nbins + 1)
+    idx = numpy.clip(numpy.digitize(phase, edges) - 1, 0, nbins - 1)
+
+    counts = numpy.bincount(idx, minlength=nbins)
+    sums = numpy.bincount(idx, weights=v, minlength=nbins)
+    means = numpy.where(counts > 0, sums / numpy.maximum(counts, 1), 0.0)
+    centres = 0.5 * (edges[:-1] + edges[1:])
+    return centres, means, counts
+
+
+def transverse_far_check(res):
+    '''
+    Free correctness check on the tool, for the DRIFT field only.
+
+    The drift domain is ONE periodic 4.4mm tile, so transverse structure
+    decays as exp(-2*pi*z/pitch) and is utterly negligible far from the
+    pads.  A drift field showing transverse residual out there is a bug
+    in this tool or in stitch-near -- it is not physics.
+
+    The WEIGHTING field is a different object: it is non-periodic with a
+    22mm transverse scale and legitimately DOES carry transverse
+    structure at a 19.8mm seam, so this check must not be applied to it
+    and is skipped.
+
+    Returns a text line, or None when the check does not apply.
+    '''
+    if is_weighting(res['key']):
+        return None
+    far = far_planes(res['zmm'], res['interface_mm'])
+    if not far.any():
+        return None
+
+    st = res['stats']
+    trans = numpy.maximum(st['x']['max'], st['y']['max'])
+    far_max = trans[far].max()
+    everywhere = trans.max()
+
+    # Compared against the transverse term's own maximum, which sits at
+    # the pads.  NOT against the z term: for a harmonic field the three
+    # terms sum to ~0, so dz is about -(dx+dy) everywhere and their ratio
+    # is ~2 by construction -- it says nothing.  The decay is
+    # exp(-2*pi*z/pitch), about e^-28 at a 19.8mm seam on a 4.4mm pitch,
+    # so 1e-6 is a very loose bar that only a real defect can fail.
+    ratio = far_max / everywhere if everywhere > 0 else 0.0
+    verdict = ('as expected' if ratio <= 1e-6 else
+               'UNEXPECTEDLY LARGE -- suspect this tool or stitch-near, '
+               'not physics')
+    return (f'drift transverse check above the seam: max |x|,|y| term '
+            f'{far_max:.4e}, {ratio:.2e} of its near-pad maximum '
+            f'{everywhere:.4e} -- {verdict}')
+
+
+def _log_ylim(ax, series, headroom=3.0):
+    '''
+    Clamp a log y axis to the positive data.
+
+    Planes with no unmasked cell report exactly 0 and are floored to
+    1e-30 before plotting; without this the axis would span thirty
+    decades of nothing and flatten every real feature.
+    '''
+    vals = numpy.concatenate([numpy.asarray(s, dtype=float).ravel()
+                              for s in series])
+    vals = vals[vals > 0]
+    if vals.size == 0:
+        return
+    ax.set_ylim(vals.min() / headroom, vals.max() * headroom)
+
+
+def _slice_index(shape, given):
+    'Transverse index of the pad-centre slice, or `given` when supplied.'
+    return shape[1] // 2 if given is None else int(given)
+
+
+def plot(res, outfile):
+    '''
+    Write the three-panel figure for `res` to `outfile`.
+
+    PLOT 1, residual vs z: per-plane max and RMS of the total residual on
+    a log y axis, with the interface marked.  A gradient kink at the seam
+    reads as a spike at the interface plane; the far upsample's
+    piecewise-constant gradient reads as ripple through the far region.
+    The inset folds that far region on coarse-cell phase (see
+    coarse_phase_fold) -- the ratio is non-integer, so a ripple is a beat
+    and only shows up folded.
+
+    PLOT 2, x-z slice through the pad centre: the seam appears as a
+    horizontal line and the staircase as horizontal banding.  Masked
+    cells are left blank rather than drawn as zero, so a masking mistake
+    cannot pass for a clean region.  The colour scale is symmetric log.
+
+    PLOT 3, per-axis curves: the x, y and z terms versus z on one set of
+    axes.  This is what separates "the seam is kinked" (longitudinal)
+    from "the transverse upsample is coarse".
+    '''
+    st = res['stats']
+    zmm = res['zmm']
+    iface = res['interface_mm']
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(9, 12))
+
+    # ---- PLOT 1: residual vs z --------------------------------------
+    ax1.semilogy(zmm, numpy.maximum(st['total']['max'], 1e-30),
+                 label='max over plane')
+    ax1.semilogy(zmm, numpy.maximum(st['total']['rms'], 1e-30),
+                 label='RMS over plane')
+    if iface is not None:
+        ax1.axvline(iface, color='k', ls='--', lw=1,
+                    label=f'interface {iface}mm')
+    ax1.set_xlabel('z / mm')
+    ax1.set_ylabel(f'|residual| / {res["units"]}')
+    ax1.set_title(f'{res["key"]} residual vs z -- {res["store"]}')
+    ax1.legend(fontsize='small', loc='upper left')
+    ax1.grid(alpha=0.3)
+    _log_ylim(ax1, (st['total']['max'], st['total']['rms']))
+
+    far = far_planes(zmm, iface)
+    fold = None
+    if far.any():
+        fold = coarse_phase_fold(zmm[far], st['total']['rms'][far],
+                                 res['coarse_spacing'])
+    if fold is not None:
+        centres, means, counts = fold
+        inset = ax1.inset_axes([0.66, 0.14, 0.32, 0.30])
+        inset.plot(centres, means, marker='o', ms=3)
+        inset.set_title(f'far region folded on {res["coarse_spacing"]}mm '
+                        'phase', fontsize='x-small')
+        inset.set_xlabel('coarse-cell phase', fontsize='x-small')
+        inset.tick_params(labelsize='xx-small')
+        inset.grid(alpha=0.3)
+
+    # ---- PLOT 2: x-z heatmap through the pad centre ------------------
+    sl = numpy.ma.masked_array(res['slice_total'], mask=res['slice_mask'])
+    finite = numpy.abs(sl.compressed())
+    finite = finite[finite > 0]
+    linthresh = float(numpy.median(finite)) if finite.size else 1e-12
+    vmax = float(numpy.abs(sl).max()) if finite.size else 1.0
+
+    cmap = plt.get_cmap('RdBu_r').copy()
+    cmap.set_bad('0.85')        # masked cells blank, never drawn as zero
+    im = ax2.pcolormesh(zmm, res['slice_x_mm'], sl,
+                        cmap=cmap, shading='auto',
+                        norm=SymLogNorm(linthresh=max(linthresh, 1e-30),
+                                        vmin=-vmax, vmax=vmax))
+    if iface is not None:
+        ax2.axvline(iface, color='k', ls='--', lw=1)
+    ax2.set_xlabel('z / mm')
+    ax2.set_ylabel('x / mm')
+    ax2.set_title(f'total residual, x-z slice at iy={res["slice_iy"]} '
+                  '(grey = masked)')
+    fig.colorbar(im, ax=ax2, label=f'residual / {res["units"]}')
+
+    # ---- PLOT 3: per-axis curves -------------------------------------
+    for name, style in (('x', '-'), ('y', '--'), ('z', '-.')):
+        ax3.semilogy(zmm, numpy.maximum(st[name]['rms'], 1e-30), style,
+                     label=f'{name} term, plane RMS')
+    ax3.semilogy(zmm, numpy.maximum(st['total']['rms'], 1e-30), ':',
+                 color='k', label='total, plane RMS')
+    if iface is not None:
+        ax3.axvline(iface, color='k', ls='--', lw=1)
+    ax3.set_xlabel('z / mm')
+    ax3.set_ylabel(f'|term| / {res["units"]}')
+    ax3.set_title('per-axis second-difference terms')
+    ax3.legend(fontsize='small')
+    ax3.grid(alpha=0.3)
+    _log_ylim(ax3, (st['x']['rms'], st['y']['rms'], st['z']['rms'],
+                    st['total']['rms']))
+
+    fig.tight_layout()
+    fig.savefig(outfile, dpi=110)
+    plt.close(fig)
+    return outfile
 
 
 def main(argv=None):
@@ -361,12 +586,21 @@ def main(argv=None):
                     help='near/far interface in mm, for labelling the seam')
     ap.add_argument('--coarse-spacing', type=float, default=None,
                     help='coarse spacing in mm, reported for the record')
+    ap.add_argument('-o', '--output', default=None,
+                    help='write the three-panel figure here (PNG)')
+    ap.add_argument('--slice-y', type=int, default=None,
+                    help='transverse index of the heatmap slice '
+                         '(default: the pad centre, shape[1]//2)')
     ap.add_argument('--stride', type=int, default=1,
                     help='print every Nth z plane (default %(default)s)')
     args = ap.parse_args(argv)
 
-    res = analyse(args.store, args.key, args.interface, args.coarse_spacing)
+    res = analyse(args.store, args.key, args.interface, args.coarse_spacing,
+                  slice_iy=args.slice_y)
     report(res, stride=args.stride)
+    if args.output:
+        plot(res, args.output)
+        print(f'wrote {args.output}')
     return 0
 
 
