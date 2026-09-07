@@ -205,10 +205,10 @@ carrying the sweep-0 pin it has not yet iterated away.
 | 40.0 | 400 | 1.137e-12 |
 
 The pad-plane corrugation has decayed by **~6 orders of magnitude** between
-10.5 mm and the seam, and is at the numerical floor by 30 mm. This matches the
-~4.2 mm decay length in `NOTES-weighting-farfield.md`
-(19.8 − 10.5 = 9.3 mm ≈ 2.2 decay lengths per order… the measured decay is
-steeper than that, but the direction is the same).
+10.5 mm and the seam, and is at the numerical floor by 30 mm. The direction
+agrees with the ~4.2 mm decay length in `NOTES-weighting-farfield.md`; the
+measured decay over 10.5 → 15 → 19.8 mm here is steeper than a single 4.2 mm
+exponential would give, which is not chased further in this step.
 
 **So the interface at 19.8 mm does NOT sit inside the still-corrugated zone**
 for the drift field — 3.6e-05 V of transverse structure on a 553 V potential is
