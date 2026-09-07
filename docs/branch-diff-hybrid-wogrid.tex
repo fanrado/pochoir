@@ -1,0 +1,1014 @@
+% Compile with:  pdflatex docs/branch-diff-hybrid-wogrid.tex  (twice)
+\documentclass[10pt,aspectratio=169]{beamer}
+\usetheme{default}
+\usecolortheme{seahorse}
+\useoutertheme{infolines}
+\setbeamertemplate{navigation symbols}{}
+\setbeamerfont{frametitle}{size=\normalsize}
+\setbeamertemplate{itemize items}[circle]
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+
+% compact bullets
+\setlength{\leftmargini}{1.4em}
+\setlength{\leftmarginii}{1.2em}
+\newcommand{\tit}[1]{\texttt{\small #1}}
+\newcommand{\ti}[1]{\texttt{\footnotesize #1}}
+
+\title{\texttt{pochoir}: codebase description}
+\subtitle{Branch \texttt{hybrid\_wogrid\_merged} against \texttt{confings\_and\_instructions}}
+\author{Reference notes}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}[plain]
+  \titlepage
+\end{frame}
+
+\begin{frame}{Contents}
+  \small
+  \tableofcontents
+\end{frame}
+
+% =====================================================================
+\section{Branch relationship}
+% =====================================================================
+
+\begin{frame}{Branch topology}
+  \begin{itemize}\small
+  \item Merge base \ti{f24803c} is the \emph{parent} of \ti{confings\_and\_instructions};
+        \ti{hybrid\_wogrid\_merged} is therefore a near-superset.
+  \item \ti{hybrid\_wogrid\_merged}: 342 commits, 247 ahead of the other branch.
+  \item \ti{confings\_and\_instructions}: 96 commits, 1 commit not in the merged branch
+        (\ti{362b3df} ``Add CLAUDE.md''); that file's content is present in both, so the
+        file-level diff for \ti{CLAUDE.md} is empty.
+  \item Net diff: \textbf{150 files, +27\,572 / $-$324 lines}. No file is deleted; the
+        deletions are rewrites inside four pre-existing files.
+  \item Head of \ti{hybrid\_wogrid\_merged}: \ti{532e923} ``task13: retarget to 3.7mm pitch,
+        9x9, 15cm drift on 0.37/0.0925 grids''.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Diff by file class}
+  \small
+  \begin{center}
+  \begin{tabular}{lr}
+    \toprule
+    Class & Files \\
+    \midrule
+    \ti{pochoir/} library modules & 13 \\
+    \ti{test/test\_*.py} pytest files & 29 \\
+    Shell runners (\ti{scripts/}, \ti{test/}) & 40 \\
+    JSON geometry configs & 36 \\
+    Jupyter notebooks (\ti{test/}, \ti{toy/}) & 11 \\
+    Examination docs (\ti{docs/examinations/wogrid/}) & 6 \\
+    Other (\ti{Makefile}, \ti{README\_for\_pixelatedReadout.md}, \ti{.gitignore}, \ti{.beads/}) & 15 \\
+    \midrule
+    Total & 150 \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Baseline: \texttt{confings\_and\_instructions}}
+  \begin{itemize}\small
+  \item The \ti{for\_pix}-lineage pixel branch plus two configs-and-instructions commits
+        and \ti{CLAUDE.md}.
+  \item Solver: one Laplace Jacobi kernel, \ti{fdm\_generic.stencil()}; \\
+        \ti{fdm\_torch.solve(iarr, barr, periodic, prec, epoch, nepochs)}.
+  \item No dtype control, no \ti{torch.compile}, no source term, no permittivity,
+        no insulator boundary.
+  \item CLI: 28 commands (\ti{\_\_main\_\_.py}, 1545 lines). No near/far machinery,
+        no field drivers.
+  \item Configs carry 9 keys: \ti{HoleRadius}, \ti{PcbWidth}, \ti{GridPotential},
+        \ti{CathodePotential}, \ti{pixelPlaneLowEdgePosition}, \ti{pixelPlaneWidth},
+        \ti{pixelSize}, \ti{pixelGap}, \ti{Npixels}.
+  \item Geometry: circular quarter-holes only; fixed-cell staircase chamfer
+        (\ti{trimCorner}, hardcoded 4-cell reach); no FR4, no pad thickness.
+  \item Drift: component-wise velocity-field interpolation (\ti{Simple}); no periodic
+        transverse wrap; no potential-based drift.
+  \end{itemize}
+\end{frame}
+
+% =====================================================================
+\section{Main scripts: \texttt{scripts/*.sh}}
+% =====================================================================
+
+\begin{frame}[allowframebreaks]{\texttt{scripts/} inventory}
+  \small
+  \begin{center}
+  \begin{tabular}{p{0.40\linewidth}p{0.52\linewidth}}
+    \toprule
+    File & Role \\
+    \midrule
+    \ti{run-pixel-field.sh} & main runner; hybrid or single-spacing, task13 geometry \\
+    \ti{run-for-larpix-v2a-wogrid.sh} & LArPix v2a, no shield grid, single full-depth solve \\
+    \ti{run-for-largepix-wgrid.sh} & large pixel \emph{with} circular-hole shield grid \\
+    \ti{helpers.sh} & \ti{want} / \ti{want\_file} resume guards \\
+    \ti{run-task10b-drift-2cm-gap09-chamf07.sh} & validated 2\,cm drift reference run \\
+    \ti{run-task12d-gridsq-30cm.sh} & square-hole shield grid, 30\,cm drift \\
+    \ti{run-pixel-field.md}, \ti{run-pixel-field-geometry.md} & command-by-command walkthroughs \\
+    \ti{example\_gen\_*.json} (12) & geometry configs read by the above \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
+\begin{frame}{\texttt{helpers.sh} and the resume guard}
+  \begin{itemize}\small
+  \item \ti{want TARGET CMD...}: if \ti{\$POCHOIR\_STORE/TARGET.npz} exists, print
+        \ti{have TARGET} and return; else run \ti{CMD}, verify the file appeared, print
+        \ti{made TARGET}, or exit non-zero.
+  \item \ti{want\_file TARGET CMD...}: same, for a plain path rather than a store key.
+  \item \ti{run-pixel-field.sh} and the two \ti{run-for-*} scripts \emph{override}
+        \ti{want} with a multi-key variant: first argument is a space-separated list of
+        store keys; the step is skipped only if all exist.
+  \item Effect: an interrupted run resumes cleanly against the same store; a step that
+        silently produces nothing is a hard error, not a skip.
+  \item \ti{POCHOIR\_STORE} is exported by each script (default per-script store folder
+        name, overridable as \ti{\$1}); \ti{POCHOIR\_LOG} is re-pointed per phase
+        (\ti{pochoir\_driftfield.log}, \ti{pochoir\_weightingfield.log}).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{\texttt{run-pixel-field.sh} --- structure}
+  \begin{itemize}\small
+  \item Usage: \ti{./run-pixel-field.sh [--hybrid yes|no] [STORE\_DIR]};
+        anything but \ti{yes}/\ti{no} exits 1. \ti{set -e}; \ti{cd "\$(dirname \$0)"} so
+        configs resolve as bare filenames.
+  \item \textbf{PART A --- drift field}: \ti{pochoir field-solve --field drift}
+        (\ti{--hybrid yes} $\rightarrow$ coarse+near+fine stitch; \ti{--hybrid no}
+        $\rightarrow$ one full-depth solve). Writes \ti{potential/drift3d}.
+  \item \textbf{PART B --- velocity and paths}, identical in both modes:
+    \begin{itemize}
+    \item \ti{pochoir velo --temperature '87.0*K'} $\rightarrow$ \ti{velocity/drift3d};
+    \item \ti{pochoir starts -m yes -c \$dcfg\_fine --plot} $\rightarrow$ \ti{starts/drift3d};
+    \item \ti{pochoir drift --interp-order linear ... '0*us,200*us,0.05*us'}
+          $\rightarrow$ \ti{paths/drift3d}.
+    \end{itemize}
+  \item \textbf{PART C --- weighting field and current}:
+        \ti{field-solve --field weighting} $\rightarrow$ \ti{potential/weight3d};
+        \ti{induce-pixel --npixels 2 --config \$wcfg\_fine --plot} $\rightarrow$
+        \ti{current/induced\_current}.
+  \item \ti{date} is printed after the drift solve, the weighting solve and the induce
+        step; run ends with \ti{=== DONE ===}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{\texttt{run-pixel-field.sh} --- SIZES block}
+  \begin{itemize}\small
+  \item Four configs, bare filenames: \ti{example\_gen\_pcb\_drift\_pixel\_task13\_\{coarse,fine\}.json},
+        \ti{example\_gen\_pixel\_with\_grid\_task13\_\{coarse,fine\}.json}.
+  \item Shapes are an explicit hand-maintained table; \ti{field-solve} is invoked with
+        \ti{--domain no}, so the table is the authority and no shape is re-derived.
+  \item \ti{--domain no} also bypasses \ti{hybrid\_iterate.\_cells()}, the only check that
+        would refuse a geometry the spacings cannot represent.
+  \item Scalars: \ti{interface='39.96*mm'}, \ti{coarse\_spacing=0.37},
+        \ti{fine\_spacing=0.0925}, \ti{spacing=0.0925}, \ti{precision=2e-8}.
+  \item The \ti{single} row and the \ti{fine} row are the same grid by design, kept as two
+        labelled variables rather than one.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{\texttt{run-pixel-field.sh} --- shape table (head commit)}
+  \small
+  Geometry: pitch 3.7\,mm (\ti{pixelSize} 2.2 + \ti{pixelGap} 1.5), \ti{Npixels} 9,
+  \ti{driftZDepth} 159.9, interface 39.96\,mm.
+  \begin{center}
+  \begin{tabular}{llll}
+    \toprule
+    Grid & Spacing / extent & drift & weighting \\
+    \midrule
+    coarse & 0.37\,mm, full depth      & \ti{10,10,434}  & \ti{90,90,434} \\
+    near   & 0.0925\,mm, to interface  & \ti{40,40,433}  & \ti{360,360,433} \\
+    fine   & 0.0925\,mm, full depth    & \ti{40,40,1733} & \ti{360,360,1733} \\
+    single & 0.0925\,mm (\ti{--hybrid no}) & \ti{40,40,1733} & \ti{360,360,1733} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \begin{itemize}\small
+  \item depth 160.21\,mm $=\lceil 159.9/0.37\rceil = 433$ coarse cells $=433\times4=1732$
+        fine cells exactly.
+  \item near 0--39.96\,mm $=432$ fine cells; 39.96\,mm $=108$ coarse cells, so the seam is
+        a plane of \emph{both} grids.
+  \item pitch 3.7\,mm $\rightarrow$ 10 coarse / 40 fine cells;
+        probe $9\times3.7=33.3$\,mm $\rightarrow$ 90 coarse / 360 fine cells.
+  \item Weighting fine grid $\approx225$\,M nodes (was $\approx77$\,M at \ti{220,220,1601}).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Why 0.37 / 0.0925 and not 0.4 / 0.1}
+  \begin{itemize}\small
+  \item Requirement: the pitch must be a whole number of cells on \emph{both} grids.
+  \item $3.7 = 37\times0.1$ with 37 prime, so against a 0.1\,mm fine grid the only coarse
+        spacings dividing 3.7 exactly are 0.1 and 3.7.
+  \item Solving \ti{pitch = n*fine}, \ti{coarse = 4*fine}, $4\mid n$ gives $n=40$:
+        fine $=3.7/40=0.0925$, coarse $=3.7/10=0.37$; the validated $4{:}1$ ratio is kept.
+  \item Consequence: the pad/gap split quantises identically on both grids ---
+        $2.2\,\text{mm}\rightarrow24$ fine / 6 coarse cells (both 2.22\,mm),
+        $1.5\,\text{mm}\rightarrow16/4$ (both 1.48\,mm), $24+16=40=4(6+4)$.
+  \item \ti{hybrid\_iterate.\_cells()} raises on a fractional cell count, so this is a hard
+        constraint of the code, not a convention.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{\texttt{run-for-larpix-v2a-wogrid.sh} / \texttt{run-for-largepix-wgrid.sh}}
+  \begin{itemize}\small
+  \item Same command sequence, explicit \ti{domain} / \ti{gen} / \ti{fdm} instead of
+        \ti{field-solve}; one full-depth 0.1\,mm solve per field, no interface.
+  \item PART A: \ti{domain --shape=44,44,1601 --spacing '0.1*mm'}; \ti{gen --generator
+        pcb\_drift\_pixel\_with\_grid}; \ti{fdm --edges per,per,fix --engine torch
+        --nepochs 10 --epoch 130000000 --precision 2e-8 --insulator initial/drift\_insulator}
+        $\rightarrow$ \ti{potential/drift3d}.
+  \item PART B: identical three commands to \ti{run-pixel-field.sh} PART B.
+  \item PART C: \ti{domain --shape=220,220,1601}; \ti{gen --generator pcb\_pixel\_with\_grid};
+        \ti{fdm --edges fix,fix,fix --multisteps no --insulator initial/weight\_insulator}
+        $\rightarrow$ \ti{potential/weight3d}; then \ti{induce-pixel --npixels 2}.
+  \item The two scripts differ in exactly three lines: default store name and the two
+        config filenames.
+  \item \textbf{With-grid vs without-grid is not a flag}: it follows from
+        \ti{GridHoleShape} in the JSON (\ti{"None"}, \ti{"circular"}, \ti{"square"}),
+        which is what the generators branch on.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Configs used by \texttt{scripts/}}
+  \small
+  \begin{center}
+  \begin{tabular}{lccc}
+    \toprule
+    Key & larpix v2a & largepix wgrid & task13 fine \\
+    \midrule
+    \ti{GridHoleShape}      & \ti{None}   & \ti{circular} & \ti{square} \\
+    \ti{HoleRadius}         & 1.9         & 1.9           & 1.9 \\
+    \ti{PcbWidth}           & 1.6         & 3.2           & 1.6 \\
+    \ti{GridPotential}      & $-2000$     & $-2000$       & $-900$ \\
+    \ti{CathodePotential}   & $-7500$     & $-9500$       & $-8400$ \\
+    \ti{pixelSize}/\ti{pixelGap} & 3.5 / 0.9 & 3.8 / 0.6  & 2.2 / 1.5 \\
+    \ti{chamfer\_r}         & 0.7         & 0.4           & 0.5 \\
+    \ti{chamferMode}        & \ti{dynamic}& \ti{dynamic}  & \ti{dynamic} \\
+    \ti{padThicknessCells}  & 3           & 3             & 3 \\
+    \ti{FR4Thickness}       & 0.1         & 0.1           & 0.1 \\
+    \ti{enableInsulatorFR4} & \ti{true}   & \ti{true}     & \ti{true} \\
+    \ti{Npixels}            & 5           & 5             & 9 \\
+    \ti{driftZDepth}        & 159.9       & 159.9         & 159.9 \\
+    \ti{nGridPoints}        & 44          & 10            & 10 \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Config invariants recorded in the scripts}
+  \begin{itemize}\small
+  \item \ti{enableFR4} is \textbf{inert} on this branch: no reader in \ti{pochoir/}.
+        The pad/FR4 laminate layout is gated on \ti{enableInsulatorFR4} alone
+        (\ti{gen\_pcb\_drift\_pixel\_with\_grid.py:507}), which is kept \ti{true}.
+  \item The four \ti{task13} configs in \ti{scripts/} are hand-maintained copies of
+        same-named files in \ti{test/}; no symlink, no generator, no committed equality
+        check. Manual check: \ti{orig=../test ; for f in *task13*.json ; do cmp "\$f" "\$orig/\$f" ; done}.
+  \item \textbf{Enforcement-free contract}, stated in the header and enforced by the
+        flags in PART B:
+    \begin{itemize}
+    \item \ti{--insulator} is passed to the \emph{field solve} only;
+    \item \ti{velo} receives neither \ti{--boundary} nor \ti{--insulator};
+    \item \ti{drift} receives no \ti{--insulator}, so paths are never clamped or
+          terminated at a surface;
+    \item \ti{--interp-order linear} is required; cubic overshoots at the seam /
+          pad-plane kink.
+    \end{itemize}
+  \item The weighting field is used at its native fine spacing throughout; it is never
+        coarsened before the Ramo calculation.
+  \end{itemize}
+\end{frame}
+
+% =====================================================================
+\section{New library modules}
+% =====================================================================
+
+\begin{frame}[allowframebreaks]{\texttt{pochoir/nearfar.py} (328 lines)}
+  \begin{itemize}\small
+  \item Engine-agnostic overlapping-Schwarz near/far solve; the FDM solver arrives as
+        two injected callables \ti{solve\_near}, \ti{solve\_far}, each
+        \ti{solve(iarr, barr) -> ndarray}.
+  \item \ti{resample\_plane} / \ti{resample\_volume}: coordinate-based multilinear
+        interpolation with query points clamped to the source bounds, so up- and
+        down-sampling are the same code path.
+  \item \ti{graft\_plane(init, bmask, ..., fix)}: writes a resampled plane in place and
+        optionally marks it Dirichlet.
+  \item \ti{seed\_near}: upsample the coarse solution onto the near grid, then re-impose
+        exact electrode values at boundary cells.
+  \item \ti{\_interface\_indices}: resolves \ti{(ci, ci\_in, nt, nt\_in)}; validates that
+        the interface lands on a coarse node, that the near top plane equals the interface,
+        and that the far Dirichlet plane lies inside the near $z$-range.
+  \item \ti{schwarz\_solve(..., axis=2, interface\_z, tol, max\_iters, near\_start, overlap)}
+        returns \ti{(near\_pot, far\_pot, n\_iters, delta)}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{\texttt{nearfar.schwarz\_solve}: one sweep}
+  \begin{itemize}\small
+  \item \textbf{Far solve}: warm-start from the previous far, re-impose electrode Dirichlet
+        values, pin the plane \ti{overlap} coarse cells below the interface to the
+        resampled near solution, seed (free) the interface plane, solve the whole coarse
+        domain.
+  \item \textbf{Near solve}: pin the interface plane to the new far solution, seed (free)
+        the adjacent plane, solve the fine near domain.
+  \item Convergence measure: \ti{delta = max|near\_new - near\_prev|} against \ti{tol}.
+  \item Each sweep ends on the near solve, so the returned near is exactly pinned to the
+        returned far at the interface ($C^0$ by construction).
+  \item \ti{overlap=1} reproduces the original single-cell coupling byte-for-byte; wider
+        overlap converges faster and drives the seam toward gradient continuity.
+  \item \ti{near\_start} lets the driver hand in an already-solved sweep-0 near field so its
+        intermediate store files are preserved.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{\texttt{pochoir/hybrid\_iterate.py} (722 lines) --- sequence}
+  \begin{enumerate}\small
+  \item Coarse full-volume solve at the coarse spacing.
+  \item \ti{refine} the coarse potential onto the fine near grid; \ti{near-bc} pins the
+        near grid's last $z$ plane to the coarse value there (Dirichlet, never revisited).
+  \item Near solve at the fine spacing on $z=0\ldots$interface, no-flux insulator BC active.
+  \item One banded Schwarz sweep at \ti{band\_cells=2} coarse cells --- a 3-coarse-node band
+        at the interface. The far solve pins the \emph{inner} node Dirichlet and leaves the
+        middle and outer nodes seeded but free; the near then re-solves with its outer node
+        pinned. Order: coarse $\rightarrow$ near $\rightarrow$ far $\rightarrow$ near.
+  \item \ti{stitch-near} upsamples the Schwarz far field onto the full fine grid and
+        overwrites the near planes with the Schwarz near solution. That array \emph{is} the
+        final field, written to the profile's output key.
+  \end{enumerate}
+  \begin{itemize}\small
+  \item \ti{max\_sweeps=0} skips step 4 and reproduces the one-shot path exactly.
+  \item Every step runs an existing click command via \ti{ctx.invoke}, sharing one store.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{\texttt{hybrid\_iterate.py} --- field profiles and keys}
+  \small
+  \begin{center}
+  \begin{tabular}{lll}
+    \toprule
+    & \ti{drift} & \ti{weighting} \\
+    \midrule
+    generator & \ti{pcb\_drift\_pixel\_with\_grid} & \ti{pcb\_pixel\_with\_grid} \\
+    edges     & \ti{per,per,fix}   & \ti{fix,fix,fix} \\
+    transverse& 1 periodic pixel tile & \ti{Npixels} pitches \\
+    prefix    & (none)             & \ti{w\_} \\
+    \ti{full\_leaf} & \ti{drift3d} & \ti{weight3d} \\
+    unit      & V                  & dimensionless \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \begin{itemize}\small
+  \item Intermediate leaves (\ti{coarse}, \ti{near}, \ti{near\_bc}, \ti{near\_refined},
+        \ti{near\_schwarz}, \ti{coarse\_schwarz}) carry the profile prefix.
+  \item The full-volume grid is named by field in every taxon:
+        \ti{domain/drift3d}, \ti{boundary/drift3d}, \ti{initial/drift3d},
+        \ti{potential/drift3d} (likewise \ti{weight3d}).
+  \item Namespacing is load-bearing: both fields write into one store so \ti{induce-pixel}
+        can read \ti{paths/drift3d} and \ti{potential/weight3d} together, and the
+        \ti{\_want} guard must not skip a weighting step because a drift key exists.
+  \item No backward compatibility with the retired \ti{fine01}/\ti{w\_fine01} names.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{\texttt{hybrid\_iterate.py} --- grids and constants}
+  \begin{itemize}\small
+  \item \ti{GRID\_SPEC}: \ti{('coarse','coarse','full')}, \ti{('near','fine','near')},
+        \ti{(FULL\_LEAF,'fine','full')}; \ti{FULL\_LEAF='fine01'} is a spec-side label only.
+  \item \ti{\_extents(prof,cfg,coarse\_spacing,interface\_mm)}: transverse
+        $=(\ti{pixelSize}+\ti{pixelGap})\times N_{\text{pix}}$; full depth $=$
+        \ti{driftZDepth}$+$\ti{MIN\_CATHODE\_CLEARANCE} rounded up to a whole coarse cell, so
+        the cathode does not move with resolution; near depth $=$ interface.
+  \item \ti{\_cells(extent,spacing,what,closed)}: transverse is \emph{not} closed
+        ($N=$extent/spacing, far node is the wrap of the near one); $z$ \emph{is} closed
+        ($N+1$, both faces real planes). Raises on a fractional count.
+  \item \ti{\_derive\_grids} (\ti{--domain yes}) vs \ti{\_manual\_grids} (\ti{--domain no},
+        all three shapes required).
+  \item \ti{\_check\_interface}: the split plane is set by the near grid's $z$ extent, not by
+        \ti{--interface}; a mismatch now raises instead of being ignored.
+  \item Fixed solver flags: \ti{ENGINE='torch'}, \ti{EPOCH=130000000}, \ti{NEPOCHS=10}.
+        Sweep defaults: \ti{DEFAULT\_BAND\_CELLS=2}, \ti{DEFAULT\_MAX\_SWEEPS=1},
+        \ti{DEFAULT\_TOL='1*V'}; \ti{DEFAULT\_SPACINGS=\{coarse:0.4, fine:0.1\}}.
+  \item \ti{\_want(ctx,targets,thunk)}: the shell resume guard in Python --- skip when all
+        targets exist, else run and raise if a target is still missing.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{\texttt{pochoir/single\_field.py} (207 lines)}
+  \begin{itemize}\small
+  \item The same pipeline with the hybrid removed: one grid, one spacing, one solve ---
+        \ti{domain/<full\_leaf>} $\rightarrow$ \ti{gen} $\rightarrow$ one \ti{fdm}
+        $\rightarrow$ \ti{potential/<full\_leaf>}.
+  \item Imports \ti{DEFAULT\_SPACINGS}, \ti{FULL\_LEAF}, \ti{\_cells}, \ti{\_domains},
+        \ti{\_extents}, \ti{\_key}, \ti{\_output\_key}, \ti{\_profile}, \ti{\_solve},
+        \ti{\_want} from \ti{hybrid\_iterate}; nothing is copied and
+        \ti{hybrid\_iterate} is not modified.
+  \item Same output keys and same final lattice as the hybrid path, so the two modes are
+        comparable plane for plane.
+  \item \ti{DEPTH\_QUANTUM = DEFAULT\_SPACINGS['coarse']}: the cathode plane is quantised to
+        the coarse spacing even though nothing is solved at that spacing, so the electrode
+        sits at a fixed physical depth and the derived grid matches the hybrid fine grid.
+  \item \ti{shape} is the primary input and is used verbatim; \ti{derive\_domain=True}
+        computes it from the config instead; supplying neither raises.
+  \item Only \ti{\_generate\_one} differs from \ti{hybrid\_iterate.\_generate}: it runs
+        \ti{gen} for the one full grid rather than looping over three leaves.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{\texttt{pochoir/schema.py} (102 lines)}
+  \begin{itemize}\small
+  \item Wire-Cell field-response object schema, expressed as \ti{namedtuple} classes.
+  \item \ti{FieldResponse(planes, axis, origin, tstart, period, speed)}.
+  \item \ti{PlaneResponse(paths, planeid, location, pitch)} --- \ti{paths} must be sorted by
+        \ti{pitchpos}.
+  \item \ti{PathResponse(current, pitchpos, wirepos)}; region
+        $=\ti{int(round(pitchpos/pitch))}$, impact $=\ti{pitchpos}-\text{region}\times\ti{pitch}$.
+  \item Module docstring records the supported response types (1D, 2D, 2.5D, 3D), the
+        Wire-Cell system of units, and the coordinate convention ($x$ counter to nominal
+        drift, $y$ up, $z=x\times y$).
+  \end{itemize}
+\end{frame}
+
+% =====================================================================
+\section{Solver core}
+% =====================================================================
+
+\begin{frame}{\texttt{fdm\_generic.py}: 2 functions $\rightarrow$ 10}
+  \small
+  \begin{center}
+  \begin{tabular}{ll}
+    \toprule
+    Function & Role \\
+    \midrule
+    \ti{edge\_condition} & periodic / fixed halo fill (gains \ti{info\_msg}) \\
+    \ti{stencil} & plain Laplace Jacobi (unchanged) \\
+    \ti{stencil\_poisson} & Jacobi with RHS, $\nabla^2\phi=-f$ \\
+    \ti{stencil\_poisson\_harmonic} & dielectric path, harmonic face permittivities \\
+    \ti{neumann\_coeff} & per-cell reciprocal active-neighbour count \\
+    \ti{stencil\_poisson\_neumann} & masked no-flux Laplace \\
+    \ti{mirror\_masks} & face-centered insulator mirror geometry (superseded) \\
+    \ti{mirror\_project} & face-centered mirror application (superseded) \\
+    \ti{padplane\_noflux\_geom} & node-centered pad-plane mirror geometry \\
+    \ti{padplane\_noflux} & node-centered mirror application \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Poisson and dielectric stencils}
+  \begin{itemize}\small
+  \item \ti{stencil\_poisson(array, source, spacing, res)}:
+        \[\phi_{\text{new}}=\frac{1}{2N}\sum_{\text{neigh}}\phi-\frac{h^2}{2N}f\]
+        \ti{source} is defined on interior cells only; \ti{res} is zeroed on reuse.
+  \item \ti{stencil\_poisson\_harmonic(phi, eps, res)}:
+        \[\phi=\frac{\sum_d\left(\varepsilon_{i+\frac12}\phi_{i+1}+\varepsilon_{i-\frac12}\phi_{i-1}\right)}
+                     {\sum_d\left(\varepsilon_{i+\frac12}+\varepsilon_{i-\frac12}\right)},
+          \qquad
+          \varepsilon_{i\pm\frac12}=\frac{2\varepsilon_i\varepsilon_{i\pm1}}{\varepsilon_i+\varepsilon_{i\pm1}}\]
+  \item Both operate on the whole interior at once and accept a preallocated \ti{res}
+        (the solver passes \ti{tmp\_core}), which must be zeroed each call or the
+        accumulation diverges.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Masked no-flux stencil}
+  \begin{itemize}\small
+  \item \ti{neumann\_coeff(solid\_mask, like)}: \ti{coeff} $=1/(\text{non-solid neighbour
+        count})$, geometry-only, built once.
+  \item \ti{stencil\_poisson\_neumann(phi, solid\_mask, coeff, res)}: each free interior cell
+        becomes the average of its non-solid neighbours --- a ghost-cell realisation of
+        $\partial\phi/\partial n=0$ on every face of the excluded region. No permittivity
+        enters.
+  \item Multiplying by the reciprocal (rather than dividing by the count) makes the
+        all-\ti{False} mask bit-identical to \ti{stencil\_poisson} with \ti{source=None}:
+        \ti{coeff}$\;=1/(2N)=$\ti{norm} uniformly.
+  \item \ti{neumann\_coeff} asserts that no free interior cell is fully enclosed by solid
+        cells (such a cell is decoupled from the solve); the count is clamped to $\ge1$ so
+        solid cells never produce \ti{inf}/\ti{nan}.
+  \item All operations are array-level and branch-free, hence \ti{torch.compile}-safe.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Face-centered mirror (\texttt{mirror\_masks} / \texttt{mirror\_project})}
+  \begin{itemize}\small
+  \item Alternative to the masked stencil: relax the whole volume with plain Laplace, then
+        set each insulator \emph{surface} cell to the average of its adjacent LAr cells.
+  \item A surface cell is an insulator cell with $\ge1$ LAr (free, non-insulator,
+        non-Dirichlet) neighbour. Buried and interior insulator cells are left to plain
+        Laplace, so the field is carried below the slab and nothing is shielded.
+  \item \ti{mirror\_masks(insulator, lar)} returns \ti{dirs} (per-direction masks),
+        \ti{cnt} (LAr-neighbour count), \ti{surf} (\ti{cnt>0}); raises on shape mismatch or
+        overlap of the two masks.
+  \item \ti{mirror\_project(phi, masks)} is pure and branch-free:
+        \ti{where(surf, acc/denom, phi)} with \ti{denom = cnt + (cnt==0)}.
+  \item Superseded for the pixel-plane case (see next slide) but retained.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Node-centered pad-plane mirror --- geometry}
+  \begin{itemize}\small
+  \item \ti{padplane\_noflux\_geom(barr, insulator)} derives the interface from the
+        Dirichlet geometry; no hand-crafted mask.
+  \item \ti{z\_pad}: the drift-facing face of the contiguous block of \emph{partially}
+        Dirichlet planes along the last axis. A fully-Dirichlet plane (cathode) or a
+        fully-free plane is not an interface.
+  \item \ti{gap2d}: the free (gap) nodes on that plane --- the nodes made no-flux.
+  \item \ti{drift\_sign} ($\pm1$): points toward the LAr drift volume, taken as the side
+        carrying the fully-Dirichlet cathode plane; if both sides are bounded, the larger
+        free gap wins.
+  \item Returns \ti{z\_pad}, \ti{gap2d}, \ti{drift\_sign},
+        \ti{ghost\_mask} (true only on plane \ti{z\_pad-drift\_sign} at gap nodes),
+        \ti{roll\_shift} $=-2\cdot$\ti{drift\_sign}, \ti{axis}.
+  \item Shield-grid disambiguation: a grid with apertures is a second, detached partially
+        Dirichlet plane, so \ti{partial} becomes non-contiguous. When an \ti{insulator}
+        mask is supplied, only the contiguous run carrying the FR4 slab is kept; the grid
+        stays an ordinary Dirichlet electrode. With \ti{insulator=None} this is a no-op.
+  \item Raises when no partial plane exists, when the partial planes are not contiguous, or
+        when the pad plane is too close to the domain edge for a ghost node.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Node-centered pad-plane mirror --- application}
+  \begin{itemize}\small
+  \item \ti{padplane\_noflux(phi, masks)}: on gap nodes,
+        \[\phi[\,\cdot\,,\,z_{\text{pad}}-s\,]\;=\;\phi[\,\cdot\,,\,z_{\text{pad}}+s\,],
+          \qquad s=\ti{drift\_sign}\]
+        implemented as \ti{where(ghost\_mask, roll(phi, roll\_shift, axis), phi)}.
+  \item Effect: the centered derivative
+        $-\left(\phi_{z+1}-\phi_{z-1}\right)/2\Delta z$ is exactly zero \emph{at} the pad
+        node --- the node the drift integrator samples.
+  \item The overwritten node is on the non-drift side, so the drift-side field is never
+        corrupted; the transverse $\phi$ profile, hence transverse $E$, is untouched.
+  \item Documented distinction from the face-centered mirror: equating an insulator body
+        cell to its LAr neighbour zeroes the normal field only at the virtual half-node
+        \emph{between} two grid nodes, which the nodal central-difference $E$ never samples.
+  \item Pure function (returns a new array), so \ti{torch.compile}-safe;
+        \ti{masks['ghost\_mask']} is padded and moved to the device once at set-up.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{\texttt{fdm\_torch.py} --- signature and step}
+  \begin{itemize}\small
+  \item \ti{solve(iarr, barr, periodic, prec, epoch, nepochs, info\_msg=None,
+        \_dtype=torch.float64, phi0=None, ctx=None, potential=None, increment=None,
+        params=None, epsilon=None, insulator=None)}.
+  \item \ti{@torch.compile}d \ti{\_compiled\_step(iarr\_pad, tmp\_core, bi\_core,
+        mutable\_core, core, periodic, spacing, source, epsilon, masks)} with a three-way
+        branch on \ti{None}-ness (static per run, so one specialisation):
+    \begin{itemize}
+    \item \ti{masks} present $\rightarrow$ plain Laplace over the whole volume, then
+          \ti{padplane\_noflux}; no epsilon;
+    \item \ti{epsilon} present $\rightarrow$ \ti{stencil\_poisson\_harmonic};
+    \item otherwise $\rightarrow$ \ti{stencil\_poisson}.
+    \end{itemize}
+  \item Update: \ti{iarr\_pad[core] = bi\_core + mutable\_core*tmp\_core}, then the mirror,
+        then \ti{edge\_condition}.
+  \item Explicit device (\ti{cuda:0} when available) and \ti{\_dtype} for every tensor;
+        \ti{torch.cuda.synchronize()} plus per-epoch and total wall-clock timing.
+  \item Returns \ti{(potential, increment)} as \ti{.cpu()} tensors.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{\texttt{fdm\_torch.py} --- insulator handling and convergence}
+  \begin{itemize}\small
+  \item \ti{insulator} is an \textbf{enable signal}; its contents are vestigial. When
+        supplied, \ti{padplane\_noflux\_geom(barr, insulator)} re-derives the geometry, the
+        ghost mask is padded with \ti{False} and moved to the device, and \ti{epsilon} is
+        dropped with a logged notice.
+  \item Logged at set-up: \ti{z\_pad}, \ti{drift\_sign}, gap-node count; plus shapes,
+        devices and dtypes of \ti{bi\_core}, \ti{mutable\_core}, \ti{tmp\_core},
+        \ti{iarr\_pad}.
+  \item Convergence check moved from once per epoch to every 1000 steps: \ti{prev} is
+        cloned at \ti{istep\%1000==0}, and \ti{maxerr} is computed in float64.
+  \item Returns early on \ti{maxerr < prec} and also on \ti{maxerr == 0.0}.
+  \item With \ti{insulator=None} and \ti{epsilon=None} the solve is plain Laplace, as
+        before.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{\texttt{fdm\_torch.py} --- two-step mixed precision}
+  \begin{itemize}\small
+  \item Selected by \ti{fdm --multisteps yes}; driven from \ti{\_\_main\_\_.fdm}.
+  \item Step 1: solve $\nabla^2\phi_0=0$ with the given boundary conditions in
+        \ti{torch.float32}; stored as \ti{<potential>\_float32} / \ti{<increment>\_float32}.
+  \item Step 2: cast $\phi_0$ to float64 and solve
+        $\nabla^2\delta=-\nabla^2\phi_0$ in float64 with \ti{iarr*0} as the initial array;
+        stored as \ti{<potential>\_float64\_delta} / \ti{<increment>\_float64\_delta}.
+  \item Source construction inside \ti{solve}: pad $\phi_0$, apply \ti{edge\_condition},
+        take \ti{stencil(phi0\_)}, then
+        \ti{source = -(6/spacing**2)*(s - non\_padded\_phi0)*mutable\_core}; the
+        \ti{mutable\_core} factor suppresses the source at fixed boundary cells.
+  \item Final: \ti{arr = phi\_0 + delta\_phi}; \ti{err = sqrt(err\_phi0**2 +
+        err\_delta\_phi0**2)}.
+  \item Debug side-saves: \ti{padded\_phi0}, \ti{stencil}, \ti{source}, \ti{source\_FP32},
+        \ti{phi0\_withBC}.
+  \end{itemize}
+\end{frame}
+
+% =====================================================================
+\section{Drift integration}
+% =====================================================================
+
+\begin{frame}[allowframebreaks]{\texttt{drift\_numpy.py} --- potential-based drift}
+  \begin{itemize}\small
+  \item New class \ti{PotentialField(domain, potential, temperature, method, verbose)} and
+        entry point \ti{solve\_potential(domain, start, potential, temperature, times,
+        method, verbose)}.
+  \item The \emph{scalar} potential is interpolated once, and $E$ is obtained by
+        differentiating the interpolant, so $E=\nabla\phi$ is curl-free by construction ---
+        unlike a component-wise interpolation of a vector $E$ field.
+  \item \ti{efield()}: central differences at $h=\tfrac12\Delta x_d$, scaled by
+        \ti{units.V}; one-sided (clamped) differences on non-periodic axes.
+  \item \ti{v = mu(|E|,T) * E} using \ti{lar.mobility}, the same arithmetic as the
+        \ti{velo} command.
+  \item Integration: \ti{solve\_ivp(..., method='Radau', rtol=1e-10, atol=1e-10,
+        t\_eval=times)}.
+  \item Outside the solved domain the velocity is zero --- a data-availability limit, not an
+        imposed condition.
+  \item \ti{method} follows \ti{drift --interp-order} (\ti{linear} or \ti{cubic});
+        \ti{RGI(bounds\_error=False, fill\_value=None)} extrapolates rather than injecting a
+        spurious 0.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{\texttt{drift\_numpy.py} --- periodic transverse wrap}
+  \begin{itemize}\small
+  \item Applied in both \ti{Simple} (velocity-field interpolation) and \ti{PotentialField}.
+  \item \ti{period[d] = shape[d]*spacing[d]}; \ti{periodic = (0,1)}, the transverse axes of
+        the \ti{per,per,fix} tile.
+  \item The 0-slice is appended as an extra wrap node on each periodic axis, for the
+        potential and for every velocity component.
+  \item Positions are taken modulo the period before every field lookup; \ti{inside()}
+        skips the periodic axes.
+  \item The central-difference samples also wrap, so the gradient at the pad centre (which
+        sits on the seam) uses the true neighbour rather than a clamped one-sided value.
+  \item Without the wrap, a strong transverse field pushes near-seam electrons past the
+        domain edge where \ti{fill\_value=0} freezes them, instead of letting them wrap onto
+        the pad centre.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{\texttt{drift\_numpy.py} --- removed enforcement}
+  \begin{itemize}\small
+  \item The module docstring records that all drift-side enforcement is deleted:
+    \begin{itemize}
+    \item the terminal event that force-stopped a path at the FR4 top face;
+    \item the $v=0$ zeroing inside the insulator;
+    \item the mask-aware (ghost/mirror) correction of $E$ at the FR4 surface.
+    \end{itemize}
+  \item The drift now integrates $v=\mu\,\nabla\phi$ on the solved potential; $E$ is taken
+        plainly, with no insulator mask or field correction at this stage.
+  \item The only insulator condition anywhere is the no-flux Neumann boundary the Laplace
+        solver imposed when producing the potential.
+  \item \ti{DRIFT\_NONE = 0} is retained and always returned as \ti{endtag}, for call-site
+        compatibility.
+  \item Hardcoded-index diagnostic prints in \ti{solve\_sde} are commented out.
+  \end{itemize}
+\end{frame}
+
+% =====================================================================
+\section{CLI}
+% =====================================================================
+
+\begin{frame}{\texttt{\_\_main\_\_.py}: 1545 $\rightarrow$ 2658 lines}
+  \begin{itemize}\small
+  \item Module-level \ti{logging} to \ti{\$POCHOIR\_STORE/pochoir.log}
+        (\ti{POCHOIR\_LOG} overrides the path), exposing
+        \ti{info\_msg} / \ti{err\_msg} / \ti{debug\_msg}.
+  \item \ti{STORE\_DIR} honours \ti{POCHOIR\_STORE}, so side-saved PNGs and legacy
+        \ti{.npy} dumps follow the renamed output folder instead of a hardcoded
+        \ti{store/}; the directory is created at import.
+  \item \ti{pochoir.hybrid\_iterate} and \ti{pochoir.single\_field} are imported at module
+        scope so click option \emph{defaults} come from the module constants rather than
+        repeated literals.
+  \item New helpers: \ti{\_coarse\_interpolator}, \ti{\_interp\_clamped},
+        \ti{make\_pixel\_start\_points}, \ti{\_shift\_paths\_pixel\_grid},
+        \ti{\_load\_pixel\_geometry}, \ti{\_load\_start\_point\_config},
+        \ti{\_field\_solve\_given}, \ti{\_field\_solve\_opt}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{New commands: near/far primitives}
+  \begin{itemize}\small
+  \item \ti{refine -c COARSE -i INITIAL -b BOUNDARY -I OUT}: multilinear upsample of a
+        coarse potential onto the fine grid using actual grid coordinates, then merge exact
+        fine boundary values at boundary cells. Output taxon \ti{initial}.
+  \item \ti{near-bc -i INITIAL -b BOUNDARY -c COARSE -I IOUT -B BOUT [--axis 2]}: pin the
+        last plane along \ti{--axis} Dirichlet to the interpolated coarse potential; emits a
+        new \ti{initial} and \ti{boundary} pair.
+  \item \ti{coarsen -i INPUT -d DOMAIN -o OUT [--average]}: downsample onto a coarser
+        domain by stride sampling, or block-average over stride-sized blocks; validates the
+        result against the target domain shape.
+  \item \ti{stitch-near -n NEAR -c COARSE -d DOMAIN -I OUT [--axis 2]}: upsample the coarse
+        field onto the full fine domain, overwrite the first \ti{near.shape[axis]} planes
+        with the near solution, and stamp \ti{domain} into the output metadata so \ti{velo}
+        resolves the grid downstream.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{New command: \texttt{near-far-solve}}
+  \begin{itemize}\small
+  \item Inputs: \ti{--coarse-potential}, \ti{--coarse-initial}, \ti{--coarse-boundary},
+        \ti{--near-initial}, \ti{--near-boundary}, \ti{--near-potential} (warm start),
+        \ti{--insulator}.
+  \item Geometry: \ti{--interface}, \ti{--axis} (default 2), \ti{--edges}.
+  \item Solver: \ti{--engine}, \ti{--epoch} (default $10^6$), \ti{--nepochs} (10),
+        \ti{--near-precision} (\ti{2e-11}), \ti{--far-precision} (\ti{2e-7}).
+  \item Schwarz: \ti{--tol} (units accepted, e.g. \ti{'1*V'}), \ti{--max-iters} (6),
+        \ti{--overlap} (1, in coarse cells).
+  \item Outputs: \ti{--near-out}, \ti{--far-out} (both required).
+  \item \ti{--insulator} is applied to the \emph{near} re-solves only; the coarse/far
+        re-solves never see it, as FR4 is unresolved at the coarse pitch.
+  \item Delegates to \ti{nearfar.schwarz\_solve} with \ti{solve\_near}/\ti{solve\_far} bound
+        to \ti{pochoir.fdm.solve\_<engine>}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{New commands: \texttt{hybrid-iterate} and \texttt{field-solve}}
+  \begin{itemize}\small
+  \item \ti{hybrid-iterate}: \ti{--coarse-config}, \ti{--fine-config}, \ti{--interface},
+        \ti{--precision}, \ti{--field \{drift,weighting\}}, \ti{--coarse-spacing 0.4},
+        \ti{--fine-spacing 0.1}, \ti{--domain \{yes,no\}} (default \ti{yes}),
+        \ti{--coarse-shape}, \ti{--near-shape}, \ti{--fine-shape}, \ti{--band-cells},
+        \ti{--max-sweeps}, \ti{--schwarz-tol}.
+  \item \ti{field-solve}: single entry point. \ti{--hybrid yes|no} is the only mode switch
+        and selects which driver runs, hence which options are legal.
+    \begin{itemize}
+    \item hybrid-only: \ti{--coarse-config}, \ti{--fine-config}, \ti{--interface}
+          (default \ti{'40*mm'}), \ti{--coarse-spacing}, \ti{--fine-spacing},
+          \ti{--coarse/near/fine-shape}, \ti{--band-cells}, \ti{--max-sweeps},
+          \ti{--schwarz-tol};
+    \item single-only: \ti{--config}, \ti{--spacing}, \ti{--shape}.
+    \end{itemize}
+  \item \ti{--domain} defaults to \ti{no} here (shape options required), unlike
+        \ti{hybrid-iterate}'s own \ti{yes}; with \ti{--domain yes} the shape options are
+        rejected as contradictory.
+  \item Options belonging to the other mode are \emph{rejected}, not ignored: which options
+        the user actually typed is read from click's
+        \ti{ParameterSource.COMMANDLINE}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Changed commands}
+  \begin{itemize}\small
+  \item \ti{fdm}: adds \ti{--epsilon} (permittivity array), \ti{--insulator} (no-flux mask,
+        no epsilon), \ti{--multisteps Y/N}; engine choice
+        \ti{numpy|numba|torch|cupy|cumba}. The insulator kwarg is passed only when present,
+        so other engines and flag-off runs are unchanged.
+  \item \ti{velo}: adds \ti{--boundary} and \ti{--insulator}, both documented as accepted
+        for compatibility and \textbf{inert} --- velocity stays pure $\mu\,\nabla\phi$.
+  \item \ti{drift}: adds \ti{--insulator} (also inert), \ti{--plot}, and
+        \ti{--interp-order \{linear,cubic\}} (default \ti{linear}). Resolves the potential
+        and temperature from the velocity array's metadata; stores lacking that metadata
+        fall back to legacy component-wise interpolation.
+  \item \ti{starts}: adds \ti{-c/--config} (multiple) and \ti{--plot}; \ti{-m yes} now
+        builds a cell-centred $n\times n$ grid via \ti{make\_pixel\_start\_points} instead of
+        a hardcoded array.
+  \item \ti{induce-pixel}: adds \ti{-c/--config} (multiple) and \ti{--plot}; per-pad
+        re-centring via \ti{\_shift\_paths\_pixel\_grid}; the \ti{sys.exit()} on the induce
+        path is removed.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Config-driven start points}
+  \begin{itemize}\small
+  \item \ti{make\_pixel\_start\_points(z\_depth, ngridpoints, pitch, spacing)} returns
+        exactly $n^2$ points at one fixed $z$.
+  \item \ti{spacing} defaults to \ti{pitch/ngridpoints}; the first point sits at
+        \ti{spacing/2}, so the grid is cell-centred
+        (e.g.\ $4.4/10\rightarrow$ 0.22, 0.66, 1.10, \ldots, 4.18).
+  \item \ti{\_load\_start\_point\_config} merges all \ti{-c} JSON files and maps:
+        \ti{driftZDepth}$\rightarrow$\ti{z\_depth},
+        \ti{nGridPoints}$\rightarrow$\ti{ngridpoints},
+        \ti{gridSpacing}$\rightarrow$\ti{spacing} (optional),
+        \ti{pixelSize}$+$\ti{pixelGap}$\rightarrow$\ti{pitch}.
+  \item The same config files are handed to \ti{gen}, \ti{starts} and \ti{induce-pixel}.
+  \end{itemize}
+\end{frame}
+
+% =====================================================================
+\section{Geometry generators}
+% =====================================================================
+
+\begin{frame}{\texttt{gen\_pcb\_*\_with\_grid.py} --- shield plane}
+  \begin{itemize}\small
+  \item \ti{draw\_pcb\_plane(shape, arr, barr, z, r1, gridPotential)}: rewritten
+        vectorised --- set the whole plane to boundary at \ti{gridPotential}, then clear
+        four quarter-disk holes at the corners with an \ti{mgrid} mask. Writes both
+        \ti{arr} and \ti{barr}.
+  \item \ti{draw\_pcb\_plane\_rounded\_sq\_drift(arr, barr, p\_gap, p\_size, pcb\_width,
+        pp\_loweredge, gridPotential, chamfer\_r)}: solid plane, four rectangular quadrants
+        cleared to open square apertures, corners restored by
+        \ti{\_apply\_rounded\_corners(..., val=1)}.
+  \item Selected by \ti{GridHoleShape}: \ti{"None"} (no shield grid), \ti{"circular"},
+        \ti{"square"}.
+  \item The shield is a single $z$ plane at \ti{pp\_loweredge + pcb\_width}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{\texttt{gen\_pcb\_*\_with\_grid.py} --- pads and chamfer}
+  \begin{itemize}\small
+  \item \ti{trimCorner(arr, x, y, z1, z2, corner, val=0, chamfer\_r=4)}: parameterised
+        quarter-disk notch at one inner corner; \ti{val=0} carves a pad, \ti{val=1} fills a
+        void; \ti{chamfer\_r}$\le0$ is a no-op. Replaces the duplicated
+        \ti{trimCorner}/\ti{trimCorner\_pcb} pair.
+  \item \ti{trimCorner\_forpix}: the original fixed-cell staircase notch, kept
+        byte-identical to the \ti{for\_pix} branch and used only when
+        \ti{chamferMode == "fixed\_cell"}. Its reach is 4 grid cells, so its physical size
+        scales with the spacing.
+  \item \ti{\_apply\_rounded\_corners(barr, p\_size, p\_gap, z1, z2, val, chamfer\_r)}:
+        encodes the four corner positions and quadrant indices once, shared by pad and
+        shield.
+  \item \ti{half = (p\_size+1)//2} replaces \ti{int(p\_size/2)}, fixing the broken
+        quarter-pixel corner symmetry.
+  \item \ti{draw\_pixel\_plane(..., chamfer\_r=0.7, chamferMode='dynamic', fr4\_bottom=False,
+        n\_fr4=0)}: fills the four pad quadrants over the pixel-plane $z$ range, then carves
+        the corners with \ti{val=0}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{FR4 laminate and pad thickness}
+  \begin{itemize}\small
+  \item \ti{fr4\_bottom} / \ti{n\_fr4}: when the pixel-plane laminate is active, the pad
+        conductor covers only the \emph{top} of the \ti{pixelPlaneWidth} layer; the bottom
+        \ti{n\_fr4} cells stay free so their FR4 permittivity enters the solve. With
+        \ti{fr4\_bottom=False} (\ti{n\_fr4=0}) the layout is byte-identical to the previous
+        behaviour.
+  \item The laminate layout is gated on \ti{enableInsulatorFR4} alone
+        (\ti{gen\_pcb\_drift\_pixel\_with\_grid.py:507}); \ti{enableFR4} has no reader in
+        \ti{pochoir/}.
+  \item \ti{padThickness} / \ti{padThicknessCells}: give the pad real thickness (3 cells in
+        the shipped configs) rather than a one-cell sheet.
+  \item \ti{gen} also writes the no-flux mask under \ti{<initial>\_insulator}; the solver's
+        \ti{--insulator} flag is an enable signal and the interface itself is re-derived by
+        \ti{padplane\_noflux\_geom}.
+  \item Diagnostic 3-D scatter PNGs of \ti{arr} and \ti{barr} (full and clipped to the first
+        150 $z$ planes, at three marker sizes) are written to \ti{\_plot\_dir()}, which
+        follows \ti{POCHOIR\_STORE}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Config key surface}
+  \small
+  \begin{center}
+  \begin{tabular}{ll}
+    \toprule
+    Key & Meaning \\
+    \midrule
+    \ti{GridHoleShape} & \ti{None} / \ti{circular} / \ti{square}: selects the shield drawing \\
+    \ti{chamfer\_r} & corner radius, mm (quantised to cells at the run's spacing) \\
+    \ti{chamferMode} & \ti{dynamic} (mm-based) or \ti{fixed\_cell} (\ti{for\_pix} replica) \\
+    \ti{padThickness}, \ti{padThicknessCells} & pad conductor thickness \\
+    \ti{FR4Thickness} & laminate thickness under the pad \\
+    \ti{enableInsulatorFR4} & gates the pad/FR4 laminate $z$ layout \\
+    \ti{enableFR4} & present in configs, no reader in \ti{pochoir/} \\
+    \ti{driftZDepth} & electron launch node; also sets the derived cathode plane \\
+    \ti{nGridPoints} & start-point grid per side \\
+    \ti{LArPermittivity}, \ti{FR4Permittivity} & dielectric path; dropped from recent configs \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
+% =====================================================================
+\section{Small fixes and supporting material}
+% =====================================================================
+
+\begin{frame}{Compatibility fixes}
+  \begin{itemize}\small
+  \item \ti{arrays.gradient}: numpy $\ge1.23$ no longer accepts a single 1-D array as
+        ``one scalar per axis''. A length-$N$ sequence is now unpacked into $N$ positional
+        scalars; the torch branch, which passed the list unsplatted, is fixed the same way.
+        The debug print is removed.
+  \item \ti{plots.quiver}: \ti{fig.gca(projection='3d')} $\rightarrow$
+        \ti{fig.add\_subplot(projection='3d')} for matplotlib $\ge3.5$.
+  \item \ti{main.Main.put}: prints the resolved key.
+  \item \ti{fdm\_generic.edge\_condition} gains an \ti{info\_msg} keyword.
+  \item \ti{.gitignore}: adds \ti{*PLAN*}, \ti{env/}, \ti{toy/*.npy} and the
+        \ti{test/} scratch directories (\ti{OUTPUT/}, \ti{bkup\_store/}, \ti{plots/},
+        \ti{toy/}, \ti{review/}, log files).
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{\texttt{README\_for\_pixelatedReadout.md} (220 lines)}
+  \begin{itemize}\small
+  \item Companion to \ti{README.org}, scoped to \ti{scripts/run-pixel-field.sh}.
+  \item Numbers the six pipeline stages and the store key each writes; records that
+        \ti{date} is printed at three checkpoints.
+  \item Documents the two modes, that only PARTS A and C differ, and that both write the
+        same keys and land on the same final lattice.
+  \item States the enforcement-free contract and the \ti{--interp-order linear}
+        requirement.
+  \item Requirements: Linux, Python 3.9+, CUDA GPU strongly recommended,
+        \ti{pip install -e .[torch,plots,hdf5]}.
+  \item Config table mapping the four shell variables to their files and roles, plus the
+        duplicated-config warning and the \ti{cmp} recipe.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{\texttt{docs/examinations/wogrid/} (6 documents)}
+  \begin{itemize}\small
+  \item \ti{00-overview.md} --- what the branch is; changes vs master across the solver,
+        stencils, generators, units, LAr physics, tooling.
+  \item \ti{01-algorithm.md} --- Jacobi refresher; \ti{stencil\_poisson};
+        the two-step mixed-precision solver step by step; convergence cadence; pixel/PCB
+        drawing algorithm; domain sizes; diffusion physics; unit-system change.
+  \item \ti{02-bugs.md} --- catalogue with severities: docstring/code sign mismatch;
+        hardcoded \ti{6} assuming 3-D; \ti{err=None} crash when \ti{epoch<1000};
+        \ti{barr\_pad} and \ti{iarr\_pad\_source} allocated but never read;
+        inconsistent \ti{mutable\_core} on the source; \ti{numpy.bool} removal.
+  \item \ti{03-gpu-efficiency.md} --- \ti{@torch.compile} disabled;
+        \ti{torch.cuda.synchronize()} sites; \ti{prev} cloning; per-step kernel-launch
+        count; mixed-precision profile; dead profiler code; geometry-generation cost.
+  \item \ti{04-memory.md} --- per-tensor inventory and totals for standard and two-step
+        modes; memory held outside the solver; reduction opportunities.
+  \item \ti{05-summary.md} --- prioritised bug list and recommendations.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Test suite: 29 new \texttt{test/test\_*.py}}
+  \begin{itemize}\small
+  \item Schwarz and near/far: \ti{test\_hybrid\_schwarz\_step},
+        \ti{test\_hybrid\_schwarz\_wiring}, \ti{test\_hybrid\_cli\_schwarz\_options},
+        \ti{test\_nearfarsolve}, \ti{test\_near\_far\_solve\_tol},
+        \ti{test\_nearfar\_ckpt\_key}.
+  \item Solver and boundary: \ti{test\_stencil\_poisson},
+        \ti{test\_insul\_bc\_torch\_solve}, \ti{test\_neumann\_bc\_doc}.
+  \item Geometry and config: \ti{test\_grid\_init\_method},
+        \ti{test\_pixel\_geometry\_loaded\_from\_config}, \ti{test\_start\_point\_config},
+        \ti{test\_make\_pixel\_start\_points}, \ti{test\_shift\_paths\_pixel\_grid}.
+  \item Task drivers: \ti{test\_task13\_oneshot\_hybrid},
+        \ti{test\_task13\_phase1\_geometry\_configs},
+        \ti{test\_task13\_runner\_band\_flags}, \ti{test\_task13\_config\_descriptions},
+        \ti{test\_task1\_fixedcell\_2cm\_driver}, \ti{test\_task9\_drift\_schwarz},
+        \ti{test\_run\_full\_3d\_pixel\_driver}, \ti{test\_drift\_paths\_task10\_notebook}.
+  \item Hygiene: \ti{test\_no\_stray\_prints}, \ti{test\_pipeline\_no\_todo\_markers},
+        \ti{test\_notebooks\_have\_no\_outputs},
+        \ti{test\_notebook\_enforcementfree\_halt},
+        \ti{test\_induce\_pixel\_no\_sys\_exit}, \ti{test\_plot\_flag},
+        \ti{test\_hybrid\_docs\_describe\_sweep}.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}[allowframebreaks]{Other supporting material}
+  \begin{itemize}\small
+  \item \ti{Makefile}: \ti{make test-pixel} runs pytest and the pipeline, capturing
+        \ti{pytest.log}, \ti{pipeline.log}, \ti{outputs/} and a \ti{NOTES.md} stub under
+        \ti{test/review/<date>\_<slug>/}. Shapes default to \ti{44,44,300} /
+        \ti{220,220,300}, overridable via \ti{POCHOIR\_DRIFT\_SHAPE} /
+        \ti{POCHOIR\_WEIGHT\_SHAPE}.
+  \item \ti{test/} runners: \ti{run-task1} through \ti{run-task13}, plus
+        \ti{run-full-3d-pixel.sh}, \ti{run-full-3d-pixel-debug.sh},
+        \ti{run-fulldepth-01mm-neumann.sh}, \ti{run-hybrid-\{10,30\}cm-drift.sh},
+        \ti{run-near2cm-drift.sh} and the \ti{test-full-3d-*} variants.
+  \item Analysis helpers: \ti{bench\_fdm.py}, \ti{parse\_maxerr.py},
+        \ti{visualize\_fdm\_domain.py}, \ti{sample\_field\_along\_paths.py},
+        \ti{analyze\_gap\_endpoint\_\{efield,velocity\}.py}.
+  \item Notebooks: \ti{test/DriftPaths\_task10\_2cm\_01mm.ipynb},
+        \ti{PathPixBorder\_neumannFullDetph\_01mm.ipynb},
+        \ti{Task10\_surface\_fields\_investigation.ipynb},
+        \ti{test/for\_pixel/*.ipynb}, \ti{toy/*.ipynb}.
+  \item \ti{toy/InverseDistanceWeight.py} and \ti{InverseDistanceWeight\_torch.py}.
+  \item Write-ups: \ti{test/neumann\_bc\_fr4\_insulator.tex},
+        \ti{test/code\_structure\_test\_full\_3d\_pixel.md},
+        \ti{test/run-full-3d-pixel.md}.
+  \end{itemize}
+\end{frame}
+
+% =====================================================================
+\section{Head commit}
+% =====================================================================
+
+\begin{frame}[allowframebreaks]{Head commit \texttt{532e923}: task13 retarget}
+  \begin{itemize}\small
+  \item Geometry: pitch 3.7\,mm (\ti{pixelSize} 2.2, \ti{pixelGap} 1.5),
+        \ti{Npixels} 9, \ti{driftZDepth} 159.9, \ti{CathodePotential} $-8400$,
+        \ti{GridHoleShape} \ti{square} at \ti{GridPotential} $-900$, \ti{chamfer\_r} 0.5.
+  \item Spacings: coarse 0.37, fine 0.0925 (see the derivation slide); the $4{:}1$ ratio is
+        preserved and the pad quantises identically on both grids, so the two configs no
+        longer carry different pad/gap splits.
+  \item \ti{chamfer\_r} 0.5 quantises to 5 cells $=0.4625$\,mm at 0.0925\,mm --- a real
+        0.0375\,mm change to the pad chamfer footprint relative to the retired 0.1\,mm runs.
+  \item \ti{run-pixel-field.sh} carries the re-derived shape table and a note that
+        \ti{--domain no} skips the \ti{\_cells()} check.
+  \item Cathode formula recorded in the configs:
+        \ti{CathodePotential = -BulkField * (driftZDepth - pixelPlaneLowEdgePosition)};
+        $-8400$\,V over 149.9\,mm is 56.04\,V/mm nominal, maintained by hand.
+  \item Corrected claim: the bulk field is set by the cathode against the pixel plane at
+        0\,V, not grid-to-cathode --- the shield grid has holes and is transparent at tile
+        centre (measured $\approx-71$\,V at the grid plane on the earlier
+        149.9\,mm / $-7500$\,V run).
+  \item Task13 tests now read the cathode target and its worked result out of the config
+        prose and check self-consistency against each file's own geometry; the
+        byte-identical-keys check reads the configs at a fixed commit rather than the
+        working tree.
+  \end{itemize}
+\end{frame}
+
+\end{document}
