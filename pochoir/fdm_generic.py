@@ -645,7 +645,6 @@ def padplane_noflux_geom(barr, insulator=None):
     # drift volume, so that is where E_z must vanish.
     partial = sorted(z for z in range(barr.shape[axis])
                      if 0 < counts[z] < plane_size)
-    print("Calculated partial : ", partial)
     if not partial:
         raise ValueError(
             f"padplane_noflux_geom: no partially-Dirichlet plane (the pad plane) "
