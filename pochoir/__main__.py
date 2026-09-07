@@ -345,10 +345,16 @@ def init(ctx, initial, boundary, ambient, domain, filenames):
               help="Output array holding increment (error) on the solution")
 @click.option("-M", "--multisteps", type=str, default="N",
               help="Whether to use multistep method (Y/N)")
+@click.option("--true-fixed-edges/--mirror-edges", "true_fixed", default=False,
+              help="How the non-periodic ('fix') edges in --edges are treated. "
+              "--mirror-edges (default) keeps the historical Neumann mirror, "
+              "correct for the drift solve.  --true-fixed-edges holds the "
+              "boundary value written by domain construction, which the "
+              "weighting solve needs so W decays laterally.  torch engine only.")
 @click.pass_context
 def fdm(ctx, initial, boundary,
         edges, precision, epoch, nepochs, engine,
-        potential, increment, multisteps, epsilon, insulator):
+        potential, increment, multisteps, epsilon, insulator, true_fixed):
     '''
     Apply finite-difference method.
 
@@ -356,6 +362,15 @@ def fdm(ctx, initial, boundary,
     produce a scalar potential array.
     '''
     import pochoir.fdm
+
+    if true_fixed and engine != "torch":
+        raise click.UsageError(
+            f"--true-fixed-edges requires --engine torch, not {engine!r}: "
+            "the numpy/numba/cupy/cumba engines still apply the mirror "
+            "edge_condition() unconditionally.")
+    # Only the torch solve() accepts true_fixed; the others keep their signature.
+    edge_kwds = dict(true_fixed=true_fixed) if engine == "torch" else {}
+
     try:
         solve = getattr(pochoir.fdm, f'solve_{engine}')
         info_msg(f"using FDM engine {engine}")
@@ -395,7 +410,7 @@ def fdm(ctx, initial, boundary,
     if multisteps.lower() in ["y", "yes"]:
         # first step is to solve \nabla^2 \phi_0 = 0 with given boundary conditions, using float32. 
         phi_0, err_phi0 = solve(iarr, barr, bool_edges,
-                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float32) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float32, **edge_kwds) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
         potential_float32 = potential+"_float32"
         increment_float32 = increment+"_float32"
         ctx.obj.put(potential_float32, phi_0, taxon="potential", **params)
@@ -407,7 +422,7 @@ def fdm(ctx, initial, boundary,
         phi_0 = phi_0.to(torch.float64) # remove this first to check the laplacian of phi_0 in float32. It should give me zero
         # precision = 3e-5
         delta_phi, err_delta_phi0 = solve(iarr*0, barr, bool_edges,
-                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=phi_0, _dtype=torch.float64)
+                        precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=phi_0, _dtype=torch.float64, **edge_kwds)
         potential_float64 = potential+"_float64_delta" ## delta
         increment_float64 = increment+"_float64_delta" ## error on delta
         ctx.obj.put(potential_float64, delta_phi, taxon="potential", **params)
@@ -426,7 +441,7 @@ def fdm(ctx, initial, boundary,
         if ins is not None:
             extra['insulator'] = ins
         phi_0, err_phi0 = solve(iarr, barr, bool_edges,
-                                precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64, epsilon=eps, **extra) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
+                                precision, epoch, nepochs, info_msg=info_msg, ctx=ctx, potential=potential, increment=increment, params=params, phi0=None, _dtype=torch.float64, epsilon=eps, **extra, **edge_kwds) # , ctx=ctx, potential=potential, increment=increment : arguments to save checkpoints during the solve
         ctx.obj.put(potential, phi_0, taxon="potential", **params)
         ctx.obj.put(increment, err_phi0, taxon="increment", **params)
 
@@ -555,6 +570,7 @@ def make_pixel_start_points(z_depth=148.0, ngridpoints=10, pitch=4.4, spacing=No
     pixelSize    : float  — existing key, used to derive pitch
     pixelGap     : float  — existing key, used to derive pitch
     """
+    spacing = 0.44 # mm
     if spacing is None:
         spacing = pitch / ngridpoints  # e.g. 4.4/10 = 0.44 mm
     half = spacing / 2.0                    # cell-centred offset: 0.22 mm
@@ -1185,8 +1201,19 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
             pad_center = (0.5*(_xs[_ix.min()] + _xs[_ix.max()]),
                           0.5*(_ys[_iy.min()] + _ys[_iy.max()]))
             print(f'collecting-pad center (aligned to pinned W=1 mask): {pad_center}')
+        # npaths is the per-side count of the drift start grid (nGridPoints in
+        # the JSON config): _shift_paths_pixel_grid indexes the_paths as
+        # i + lvl*npaths over npaths**2 entries, so a hard-wired value crashes
+        # with IndexError whenever nGridPoints is changed.  Read it from the
+        # same config helper the output tag already uses (see _npaths below).
+        _ngrid = _load_start_point_config(configs)["ngridpoints"]
+        if _ngrid * _ngrid != the_paths.shape[0]:
+            raise ValueError(
+                f'nGridPoints={_ngrid} implies {_ngrid*_ngrid} paths but '
+                f'{paths} holds {the_paths.shape[0]}; regenerate the starts/paths '
+                f'or fix nGridPoints in {configs}')
         shifted_paths = _shift_paths_pixel_grid(
-            the_paths=the_paths, npaths=10, # change back to 10 after checking the many paths
+            the_paths=the_paths, npaths=_ngrid,
             npixels=geom["npixels"],
             pixel_pitch=geom["pixel_pitch"],
             pixel_gap=geom["pixel_gap"],
@@ -1222,6 +1249,8 @@ def induce_pixel(ctx, charge, weighting, paths, average, npixels, configs, outpu
     assert Q.shape[1] == nsteps
     numpy.set_printoptions(threshold=sys.maxsize)
 
+    numpy.save(os.path.join(STORE_DIR, 'shifted_paths.npy'), shifted_paths)
+    numpy.save(os.path.join(STORE_DIR, 'Charge_Q.npy'), Q)
     dQ = Q[:, 1:] - Q[:, :-1]
     if plot:
         import matplotlib.pyplot as plt
