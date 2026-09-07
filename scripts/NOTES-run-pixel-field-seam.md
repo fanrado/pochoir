@@ -443,3 +443,145 @@ remains a Phase 2 question — but it is now a question about *speed*, not about
 *reachability*.
 
 No fix attempted, no default in `pochoir/` changed.
+
+
+---
+
+# Phase 3/Step 1 — band 5 at 20 sweeps: does an exact fine-node pin improve the rate?
+
+Beads: `pochoir-douz`. A **speed** question only — Phase 2 already settled
+reachability.
+
+Identical to Phase 2/Step 1 except `--band-cells 5` and the store name
+`store_seam_drift_band5_sweeps20`. Solo on the GPU, so directly comparable to
+Phase 2's solo numbers. **Bands 10 and 20 were not run**, for the reason already
+recorded: pinning the coarse far solve to fine data over a large fraction of its
+depth converges the seam by turning the hybrid into the single-spacing solve.
+
+## The band moved — confirmed before trusting anything else
+
+```
+schwarz: interface z=19.8 coarse idx 90 (inner 85), near top idx 198 (seed 197)
+```
+
+**`inner 85`, not 87.** Coarse node 85 = z **18.70 mm** = fine node 187 exactly,
+so this band's far Dirichlet pin lands on a **real fine node** and is exact,
+against band 3's inner plane at 19.14 mm which is interpolated. The width
+difference is only 0.44 mm (1.10 mm vs 0.66 mm).
+
+## THE CONTRACTION RATIO — the whole point of the step
+
+| sweep | near delta | ratio to previous |
+|---|---|---|
+| 0 | 0.8345370995033363 | — |
+| 1 | 0.7291638228919055 | 0.8737 |
+| 2 | 0.6370979895199298 | 0.8737 |
+| 3 | 0.5566566820564276 | 0.8737 |
+| 4 | 0.4863720582111455 | 0.8737 |
+| 5 | 0.4249617162129198 | 0.8737 |
+| 6 | 0.3713051710010404 | 0.8737 |
+| 7 | 0.3244234121623322 | 0.8737 |
+| 8 | 0.2834610411573522 | 0.8737 |
+| 9 | 0.2476706638342421 | 0.8737 |
+| 10 | 0.2163992535745365 | 0.8737 |
+| 11 | 0.1890762362520491 | 0.8737 |
+| 12 | 0.1652030796062718 | 0.8737 |
+| 13 | 0.1443441970955064 | 0.8737 |
+| 14 | 0.1261190002317107 | 0.8737 |
+| 15 | 0.110194954418148 | 0.8737 |
+| 16 | 0.09628151156380227 | 0.8737 |
+| 17 | 0.08412480878041606 | 0.8737 |
+| 18 | 0.073503036433749 | 0.8737 |
+| 19 | 0.06422239103153515 | 0.8737 |
+
+**0.8737, flat to four decimal places across all nineteen gaps** — the same
+"fixed property of the band, no transient" character as band 3, at a different
+value.
+
+| band | inner plane | pin | contraction ratio |
+|---|---|---|---|
+| 3 | 19.14 mm | interpolated | **0.9237** |
+| 5 | 18.70 mm | **exact fine node** | **0.8737** |
+
+**The rate improves materially — 0.9237 → 0.8737, below the ~0.88 threshold
+this step set for "the exact pin matters".**
+
+Note the sweep-0 delta is *larger* for band 5 (0.8345 vs 0.5044): the two bands
+start from different far pins, so only the rate is comparable, not the
+magnitudes.
+
+## The seam at 20 sweeps
+
+| quantity | band 3 | band 5 |
+|---|---|---|
+| E_z below | 55.7497232 | **55.8404534** |
+| E_z above | 55.9076713 | **55.8924068** |
+| kink (V/mm) | 0.157948 | **0.0519533** |
+| **kink as % of 56.0** | **0.2821 %** | **0.0928 %** |
+
+Both sides are closer to their own grids' measured far values (fine 55.885,
+coarse 55.996) than band 3 managed. Transverse corrugation on the seam plane is
+3.638e-05 V — unchanged, still a non-factor.
+
+**At 20 sweeps band 5 is already past the 0.199 % geometry floor**, sitting at
+0.47× it.
+
+> A kink *below* the floor is not "more accurate" in any deep sense: the floor is
+> the systematic disagreement between what the two grids model (different pad
+> area, chamfer and pad-block thickness). Once the seam discontinuity is smaller
+> than that, the seam has stopped being the limiting error. It is a stopping
+> criterion, not a target to beat.
+
+## Cost
+
+| | band 3 | band 5 |
+|---|---|---|
+| total wall clock | 647 s | **666 s** |
+| per sweep | 27.81 s | **28.76 s** |
+| geometry generation ×3 | 46.8 s | 45.5 s |
+| coarse solve | 31.0 s | 31.7 s |
+| near solve (sweep 0) | 10.4 s | 10.5 s |
+| store size | 68 MB | 68 MB |
+
+The wider band costs **3.4 % more per sweep** (28.76 vs 27.81 s), as expected —
+the far re-solve carries a slightly deeper pin. Everything else is unchanged.
+
+## TIME TO FLOOR — the comparison that decides it
+
+Extrapolating each band's own measured rate down to the 0.111 V/mm floor:
+
+| band | rate | sweeps to floor | sweeping wall clock |
+|---|---|---|---|
+| 3 | 0.9237 | 24.4 → **25** | 695 s (**11.6 min**) |
+| 5 | 0.8737 | 14.4 → **15** | 431 s (**7.2 min**) |
+
+**Band 5 wins on rate and on time-to-floor, despite costing more per sweep** —
+which is exactly the comparison this step asked for. 15 sweeps at 28.76 s beats
+25 sweeps at 27.81 s by **264 s, a 38 % saving**, and the saving compounds on
+the weighting field where each sweep is far more expensive.
+
+## CONCLUSION — which of the two outcomes
+
+**The first: the rate improves materially, the exact pin matters, and band 5 is
+the better default.**
+
+The Phase 1 hypothesis is **supported, not dead**: the interpolated inner pin at
+19.14 mm *was* capping the coupling, and landing the pin on a real fine node
+recovers a meaningfully better rate. Phase 2 could only say the rate was fixed;
+this step shows *what* fixes it.
+
+**Recommendation for Phase 3/Step 3: `--band-cells 5` with `--max-sweeps 15`**
+for the drift field, subject to the weighting field's cost measured in Phase
+3/Step 2 (`pochoir-h92v`), which may force a different sweep count there.
+
+Two caveats on that recommendation, both honest limits of this measurement:
+
+* the 15 is an **extrapolation** from a clean geometric fit, not a measured
+  15-sweep run. The fit is exact to four decimals over nineteen gaps, so it is
+  a strong extrapolation — but it has not been confirmed at the endpoint.
+* band 5 is the *first* exactly-pinned band. Whether 10 would be better still is
+  untested **and deliberately not tested**, for the single-spacing-solve reason
+  above.
+
+No fix applied, `run-pixel-field.sh` not touched, no default in `pochoir/`
+changed — setting the shipped values is Phase 3/Step 3.
