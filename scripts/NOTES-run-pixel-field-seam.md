@@ -975,3 +975,204 @@ did the same for the weighting probe — the field that actually motivated the
 move — is Phase 4/Step 7.
 
 Nothing was changed: no runner, no config, no `pochoir/` default.
+
+
+---
+
+# Phase 4/Step 7 — the weighting seam at 29.7 mm: did the interface move work?
+
+Beads: `pochoir-wkgx`. **The step the whole retarget was for.** Store
+`store_15cm_weight_band2`, solo on the GPU, dimensionless probe so no
+`--design-field`. Band confirmed first: `schwarz: interface z=29.7 coarse idx 54
+(inner 52)`. Disk checked before starting (1.1 TB free); the store came to
+**2.5 GB**.
+
+## 1. DID THE INTERFACE MOVE FIX THE KINK? **Improved 2.2×, not fixed.**
+
+| geometry | interface | kink as % of local &#124;E_z&#124; |
+|---|---|---|
+| 8 cm, coarse 0.22, band 5 | 19.8 mm | **4.20 %** |
+| 15 cm, coarse 0.55, band 2 | 29.7 mm | **1.88 %** |
+
+E_z below 4.45723e-04, above 4.54172e-04, kink +8.44903e-06 per mm. Note the
+kink is now **positive** (far side above near side); at 19.8 mm it was negative.
+
+So moving the interface out of the corrugated zone removed **55 %** of the kink.
+That is a real improvement and it vindicates the diagnosis — but **1.88 % is
+still 20× the drift field's 0.093 %** at comparable settings, so the weighting
+seam remains substantially the worse of the two. The corrugation was *a* cause,
+not *the* cause.
+
+For honest comparison the two runs differ in more than the interface: the coarse
+grid also went 0.22 → 0.55 mm and the depth 8 → 15 cm. **The 4.20 % → 1.88 %
+improvement cannot be attributed to the interface move alone** on this evidence.
+
+## 2. CORRUGATION AT THE NEW SEAM PLANE — as a fraction of local W
+
+| z [mm] | W at pad centre | max − min | **ratio** |
+|---|---|---|---|
+| 10.5 | 0.788355 | 7.862e-01 | 0.9973 |
+| 15.0 | 0.110118 | 8.964e-02 | 0.8140 |
+| 19.8 | 0.048770 | 1.849e-02 | **0.3792** ← the old interface |
+| 25.0 | 0.037403 | 4.149e-03 | 0.1109 |
+| **29.7** | **0.034294** | **1.089e-03** | **0.0318** ← the new interface |
+| 30.0 | 0.034157 | 1.003e-03 | 0.0294 |
+| 40.0 | 0.030693 | 5.984e-05 | 0.0019 |
+| 60.0 | 0.024793 | 4.203e-07 | 0.0000 |
+| 100.0 | 0.013458 | 1.235e-09 | 0.0000 |
+
+**0.0318 at the new seam against 0.3792 at the old — a 12× reduction**, and it
+matches the ~3.4 % the step predicted from the 8 cm decay curve almost exactly.
+The 0.3792 here also reproduces the 0.400 measured at 19.8 mm on the 8 cm
+geometry, which is a useful cross-check that the two geometries' corrugation
+profiles agree where they overlap.
+
+**The interface move did what it was designed to do.** The residual 1.88 % kink
+is therefore *not* mostly corrugation any more — 3.2 % of transverse spread
+cannot account for it — which is what makes point 3 the live question.
+
+## 3. WHAT DID THE COARSE PAD AREA DO TO THE FAR TAIL?
+
+**This question cannot be answered from this store, and the expectation recorded
+in the configs is not confirmed.** Both parts of that need stating plainly.
+
+Comparing the coarse solve against the fine near solve on the pad-centre axis:
+
+| z [mm] | coarse W (0.55) | near W (0.1) | bias |
+|---|---|---|---|
+| 16.50 | 0.083437 | 0.077218 | **+8.05 %** |
+| 19.80 | 0.050767 | 0.049140 | +3.31 % |
+| 22.00 | 0.043036 | 0.042288 | +1.77 % |
+| 24.75 | 0.038361 | 0.038014 | +0.91 % |
+| 27.50 | 0.035941 | 0.035843 | +0.27 % |
+| 28.60 | 0.035268 | 0.035221 | +0.13 % |
+| 29.70 | 0.034691 | 0.034691 | **0.00 %** |
+
+**The measured bias is POSITIVE — the coarse solve runs HIGH — where the config
+predicted roughly −11 % tracking the pad-area ratio 0.889.** Sign and magnitude
+both disagree with the recorded expectation. A plausible reading is that the
+coarse pad being 11 % smaller in area (which lowers W) is more than offset by
+its *top* sitting 0.45 mm closer to the field point at 10.45 mm rather than
+10.00 mm (which raises W), plus the coarser grid smoothing the near-pad
+gradient. That is a hypothesis, not a measurement.
+
+**Two reasons this table is not the answer to the question asked:**
+
+1. **The comparison is circular near the interface.** The near solve is *pinned*
+   to the coarse solution at 29.7 mm by construction, so the 0.00 % at the
+   interface is an identity, not agreement, and the values just below it are
+   dragged toward the coarse field by that pin. The apparent convergence to zero
+   as z → 29.7 mm is an artefact of the method.
+2. **The far tail — the thing actually asked about — has no fine reference at
+   all.** Beyond 29.7 mm the stitched output *is* the upsampled coarse solution;
+   there is no independent fine solve out there to compare it with. Measuring the
+   coarse pad's effect on the far tail requires a **full-depth fine weighting
+   solve** (220×220×1497 ≈ 72.5 M nodes) as a reference, which the hybrid
+   deliberately never computes. That is a separate, expensive run and is **not
+   attempted here**.
+
+So: **the −11 % expectation the configs record is unverified, and the one number
+that can be measured has the opposite sign.** The configs should not keep
+claiming −11 % as the expected bias without either that reference solve or a
+re-derivation. I have not edited them (out of scope), but the expectation as
+written is misleading and worth an issue.
+
+This is *not yet* an argument for reverting the weighting field to a finer
+coarse grid — the evidence needed for that call does not exist.
+
+## 4. PER-SWEEP COST AND CONTRACTION
+
+| sweep | near delta | ratio to previous |
+|---|---|---|
+| 0 | 0.000141021 | — |
+| 1 | 8.48283e-05 | 0.6015 |
+| 2 | 5.51394e-05 | 0.6500 |
+| 3 | 3.99633e-05 | 0.7248 |
+| 4 | 3.26182e-05 | 0.8162 |
+| 5 | 3.04547e-05 | 0.9337 |
+| 6 | 2.97177e-05 | 0.9758 |
+| 7 | 2.78852e-05 | 0.9383 |
+| 8 | 2.719e-05 | 0.9751 |
+| 9 | 2.60153e-05 | 0.9568 |
+| 10 | 2.47655e-05 | 0.9520 |
+| 11 | 2.27444e-05 | 0.9184 |
+| 12 | 2.21245e-05 | 0.9727 |
+| 13 | 2.11427e-05 | 0.9556 |
+| 14 | 1.93471e-05 | 0.9151 |
+
+**The degrading-rate character persists**, and is more erratic than at 8 cm. The
+ratio starts at 0.6015, degrades through 0.72, 0.82, 0.93 and then wanders in
+the 0.92–0.98 band, ending at 0.9151 with a mean around 0.87. Unlike either
+drift band — flat to four decimals — this field's rate is neither fixed nor
+smoothly monotonic. At 8 cm it went 0.4622 → 0.8974 monotonically; here it
+reaches a worse plateau faster and then oscillates, which suggests the tail is
+limited by something other than the Schwarz coupling.
+
+Final delta 1.93e-05, stopped on **`max_iters=15`**, ~2.8 orders above the tol —
+so the tol still does not gate, but the margin keeps shrinking (drift 7.3, 8 cm
+weighting 1.8, here 2.8 orders).
+
+### Cost
+
+Total **552 s**, against the 8 cm weighting run's 324 s.
+
+| stage | 8 cm | 15 cm | note |
+|---|---|---|---|
+| geometry generation ×3 | 33.2 s | 39.9 s | |
+| **coarse solve** | 57.0 s | **8.0 s** | 8.3× fewer nodes — a real 7× win here |
+| refine + `near_bc` | 1.4 s | ~0 s | |
+| near solve (sweep 0) | 20.3 s | 42.0 s | z extent +50 % |
+| **Schwarz sweep** | 205.2 s (20 sw) | **250.5 s** (15 sw) | |
+| **per sweep** | **10.10 s** | **16.65 s** | **+65 %** |
+| **stitch** | 4.6 s | **208.9 s** | **45×** |
+| store size | 1.6 GB | 2.5 GB | |
+
+Two things stand out, neither of them the sweep:
+
+* **the coarse solve is the one place coarsening genuinely paid** — 57.0 → 8.0 s,
+  a 7× win on an 8.3× node reduction. That is the opposite of the drift field,
+  where the same 8.3× reduction bought only 30 %, and it is consistent with the
+  launch-latency explanation: the weighting coarse grid (0.44 M nodes) is still
+  big enough to be arithmetic-bound, so shrinking it actually helps.
+* **the stitch is now 209 s — 38 % of the entire run**, up from 4.6 s. The output
+  lattice only doubled (72.5 M vs 38 M nodes), so 45× is not arithmetic: at
+  float64 the stitched array is ~580 MB and this is I/O to NFS. **On this field
+  the write, not the solve, is becoming the bottleneck.** Worth knowing before
+  anyone raises the sweep count to chase the remaining kink — extra sweeps are
+  16.65 s each, but the run already spends 209 s writing.
+
+Per sweep the field got 65 % *more* expensive despite the coarser bulk, because
+the near solve and the sweeps live on the 0.1 mm grid whose z extent grew 50 %.
+
+## KNOWN CONFOUND: the far side IS the unphysical ramp, and the seam sits at its
+foot
+
+Recorded, not fixed. The `fix,fix,fix` transverse edges are a Neumann mirror
+rather than a Dirichlet zero, so the 5×5 patch behaves as an infinite periodic
+pad array. **Confirmed again on this geometry, and now directly relevant:**
+
+fitting W on the pad-centre axis from 40 mm to the cathode gives
+
+```
+W = -2.792e-04 * z + 0.041523,  max |residual| 3.4e-04 = 1.1 % of W(40mm)
+zero crossing at z = 148.7 mm   (cathode at 149.6 mm)
+```
+
+i.e. **linear to ~1 % over 110 mm, reaching zero essentially at the cathode** —
+the parallel-plate signature, not a decay.
+
+**The interface at 29.7 mm sits right at the foot of that ramp.** The local slope
+over 29.7–40 mm is 1.23× the far-field slope, so the seam is exactly in the
+transition between the near-field decay and the unphysical linear tail. **That
+answers the question the step posed: moving the interface to 29.7 mm is not
+sufficient on its own.** It fixed the corrugation problem (point 2) but placed
+the seam where the far side is already governed by the mirror BC, and the
+residual 1.88 % kink is consistent with the near solve's genuine decay being
+stitched to a far solve whose shape is wrong.
+
+**No band or sweep count addresses this.** Fixing the transverse BC is the
+outstanding work for the weighting field, and until it is done the far weighting
+tail — and any induced current computed from it — is not physical regardless of
+seam quality. The BC was **not** changed here.
+
+Nothing was changed: no runner, no config, no `pochoir/` default.
