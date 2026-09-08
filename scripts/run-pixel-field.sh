@@ -144,52 +144,87 @@ wcfg_fine="example_gen_pixel_with_grid_task13_fine.json"
 ## must be re-derived BY HAND whenever the configs' pitch or depth moves.  See
 ## the SPACINGS note below for what that derivation is.
 ##
-## Geometry: pitch 4.4mm (pixelSize 3.5 + pixelGap 0.9), Npixels 5,
-## driftZDepth 79.15, pad plane 9.9mm, interface 19.8mm.  This is the 8cm /
-## 2cm method-confirmation geometry -- the real LArPix v2a tile, at the true
-## design values.
+## Geometry: pitch 4.4mm (pixelSize 3.5 + pixelGap 0.9 on the fine grid),
+## Npixels 5, driftZDepth 149.55, pad plane 9.9mm, interface 29.7mm.  This is
+## the real LArPix v2a tile at a 15cm drift length.
 ##
-## SPACINGS ARE 0.22 / 0.1.  DERIVATION -- this table is the authority and must
-## be re-derived BY HAND if the configs move:
+## PHASE 4 RETARGET.  This was the 8cm / 0.22mm-coarse / 19.8mm-interface
+## geometry.  Two measurements moved it, both in NOTES-run-pixel-field-seam.md:
+##   * 0.22mm was far too fine for the BULK.  The far field out there is
+##     essentially 1-D linear, and linear fields are exact on ANY spacing, so
+##     the resolution bought nothing.  Coarse relaxes to 0.55mm.
+##   * the interface at 19.8mm was measured sitting INSIDE the corrugated zone
+##     for the WEIGHTING field -- transverse corrugation 40% of the local W on
+##     the seam plane, against 7e-08 for drift -- which no number of Schwarz
+##     sweeps can fix, because the sweep converges the two domains to each
+##     other, not to the truth.  The interface moves out to 29.7mm.
 ##
-##   pitch      4.4mm   =  20 coarse cells   =  44 fine cells
-##   probe    5*4.4mm   = 100 coarse         = 220 fine     (weighting, 22mm)
-##   depth     79.2mm   = 360 coarse cells   = 792 fine cells  -> 361 / 793 nodes
-##   interface 19.8mm   =  90 coarse cells   = 198 fine cells  -> near 199 nodes
-##   pad plane  9.9mm   =  45 coarse         =  99 fine
+## THE BULK FIELD IS NOW 50.0 V/mm.  It REPLACES the old 56.0 V/mm rather than
+## being preserved: CathodePotential -6982.5 = -50.0 * (149.55 - 9.9).  The 8cm
+## geometry's -3878 V existed specifically to hold 56.0 V/mm, and that choice
+## has been given up.  Drift velocities and induced currents from this geometry
+## are therefore NOT comparable to the 8cm results -- velo derives mobility
+## from E through a nonlinear LAr parameterisation, so a 10.7% lower field is
+## not a 10.7% slower drift.  Do not "restore" 56.0 V/mm.
+##
+## SPACINGS ARE 0.55 / 0.1.  ONE coarse spacing serves BOTH fields.
+## DERIVATION -- this table is the authority and must be re-derived BY HAND if
+## the configs move:
+##
+##   pitch      4.4mm   =   8 coarse cells   =  44 fine cells
+##   probe    5*4.4mm   =  40 coarse         = 220 fine     (weighting, 22mm)
+##   depth    149.6mm   = 272 coarse cells   = 1496 fine    -> 273 / 1497 nodes
+##   interface 29.7mm   =  54 coarse cells   =  297 fine    -> near 298 nodes
+##   pad plane  9.9mm   =  18 coarse         =   99 fine
 ##
 ## Transverse counts use N = extent/spacing (the far node is the wrap of the
-## near one, not duplicated); z uses N = extent/spacing + 1 (both faces are real
-## planes).  That is the convention _cells() implements with its `closed` flag.
+## near one, not duplicated); z uses N = extent/spacing + 1 (both faces are
+## real planes).  That is the convention _cells() implements with its `closed`
+## flag.  All eight shapes below were verified in Phase 4/Step 1 by calling
+## _extents() and _cells() directly on the retargeted configs.
 ##
-## WHY 0.22 AND NOT 0.4.  Searching every coarse spacing that divides the 4.4mm
-## pitch, 0.22 is the only one that both snaps the pad to within +1.1% of area
-## (3.52mm; 0.2 and 0.4 give 3.6mm and +5.8%) and puts the pad plane on a node
-## of BOTH grids -- shared nodes come every 1.1mm and 9.9 = 9 x 1.1, whereas
-## 0.44 forces multiples of 2.2mm, which would move the pad plane to 8.8 or
-## 11.0.  Coarse being only 2.2x coarser costs nothing: 100x100x361 is about
-## 3.6M nodes.
+## 1.1mm IS THE SHARED PERIOD of the 0.55 and 0.1mm grids -- they share nodes
+## ONLY every 1.1mm -- and every plane that must land on both is a whole
+## multiple of it: 4.4 = 4x1.1, 9.9 = 9x1.1, 29.7 = 27x1.1, 149.6 = 136x1.1.
+## That rule is the constraint to respect if any plane is ever moved, and it is
+## also what makes the --band-cells choice load-bearing (see the SCHWARZ block
+## above PART A).
 ##
-## CONSEQUENCE: the coarse:fine ratio is 2.2, NOT an integer, so coarse nodes
-## are not a subset of fine nodes -- they coincide only every 1.1mm.  This is
-## supported: pochoir/nearfar.py is explicitly coordinate-based interpolation
-## and works for both up- and downsampling, and _cells() only checks each grid
-## against the geometry, never the ratio.  But the near->coarse restriction now
-## INTERPOLATES rather than subsamples, and the coarse-cell staircase is
-## non-commensurate with the fine grid.
+## CONSEQUENCE: the coarse:fine ratio is now 5.5 -- still NOT an integer, so
+## coarse nodes are not a subset of fine nodes; they coincide only every 1.1mm.
+## This is supported: pochoir/nearfar.py is explicitly coordinate-based
+## interpolation and works for both up- and downsampling, and _cells() only
+## checks each grid against the geometry, never the ratio.  But the near->coarse
+## restriction INTERPOLATES rather than subsamples, and the coarse-cell
+## staircase is non-commensurate with the fine grid.
 ##
-## NO DEAD SPACE: depth 79.2mm equals driftZDepth's cathode node
-## (ceil(79.15/0.22) = 360 coarse = 792 fine), so the cathode is the last plane
-## on both grids, while the launch node 79.15 does not land on it.
+## THE PRICE OF COARSENING TO 0.55mm: the coarse pad snaps to 3.30mm + 1.10mm
+## gap (6 + 2 = 8 cells), which is a pad area of (3.3/4.4)^2 = 0.5625 against
+## the fine grid's (3.5/4.4)^2 = 0.6327 -- i.e. -11.1%, much worse than the
+## +1.1% at 0.22mm.  The chamfer is undercut 21% (0.55 vs 0.7) and the coarse
+## pad top lands at 10.45mm against the fine grid's 10.00mm.  The far field in
+## the stitched output IS the upsampled coarse solution, so that error biases
+## the far amplitude by roughly the same fraction, smoothly, where the
+## Laplacian residual metric cannot see it.  This is the accepted cost; it is
+## MEASURED in Phase 4/Steps 6-7, not assumed here.  In particular the 0.199%
+## coarse/fine far-field "geometry floor" quoted for the 8cm geometry does NOT
+## transfer and must be re-measured.
+##
+## NO DEAD SPACE: depth 149.6mm equals driftZDepth's cathode node
+## (ceil(149.55/0.55) = 272 coarse = 1496 fine), so the cathode is the last
+## plane on both grids, while the launch node 149.55 does not land on it.
 ##
 ##                                    drift          weighting
-##   coarse 0.22mm,  full depth       20,20,361      100,100,361
-##   near   0.1mm,   to interface     44,44,199      220,220,199
-##   fine   0.1mm,   full depth       44,44,793      220,220,793
-##   single 0.1mm    (--hybrid no)    44,44,793      220,220,793
+##   coarse 0.55mm,  full depth       8,8,273        40,40,273
+##   near   0.1mm,   to interface     44,44,298      220,220,298
+##   fine   0.1mm,   full depth       44,44,1497     220,220,1497
+##   single 0.1mm    (--hybrid no)    44,44,1497     220,220,1497
 ##
-## The weighting fine grid is ~38 M nodes, well down from the ~225 M of the
-## retired 9x9 / 0.0925mm transcription.
+## COST: the weighting fine grid is ~72.5 M nodes (was ~38 M at 8cm) and the
+## drift fine grid ~2.9 M; the coarse grids are tiny -- 17 k drift and 0.44 M
+## weighting.  Note hybrid_iterate does NOT solve the full-depth fine grid:
+## _stitch upsamples the coarse solution onto that lattice and overwrites the
+## first 298 planes with the near solution.
 ##
 ## The single row and the fine row are the SAME grid ON PURPOSE -- that is what
 ## makes the two modes comparable on identical output lattices.  They are kept
@@ -200,22 +235,22 @@ wcfg_fine="example_gen_pixel_with_grid_task13_fine.json"
 ## THE test/ COPIES NOW DIVERGE.  The four task13 configs under scripts/ have
 ## been retargeted to this geometry; their same-named copies in test/ have NOT,
 ## and test/run-task13-hybrid.sh is OUT OF SCOPE for this work and still solves
-## the old 3.7mm / 9x9 / 159.9mm geometry.  The DUPLICATED CONFIGS rule in the
-## header -- edit both copies -- was therefore KNOWINGLY NOT APPLIED here.  The
-## cmp recipe in that header will report all four pairs as differing; that is
-## expected, not a mistake to "fix" by copying either way.
-d_coarse_shape="20,20,361"
-d_near_shape="44,44,199"
-d_fine_shape="44,44,793"
-d_single_shape="44,44,793"
+## an older geometry.  The DUPLICATED CONFIGS rule in the header -- edit both
+## copies -- was therefore KNOWINGLY NOT APPLIED here.  The cmp recipe in that
+## header will report all four pairs as differing; that is expected, not a
+## mistake to "fix" by copying either way.
+d_coarse_shape="8,8,273"
+d_near_shape="44,44,298"
+d_fine_shape="44,44,1497"
+d_single_shape="44,44,1497"
 
-w_coarse_shape="100,100,361"
-w_near_shape="220,220,199"
-w_fine_shape="220,220,793"
-w_single_shape="220,220,793"
+w_coarse_shape="40,40,273"
+w_near_shape="220,220,298"
+w_fine_shape="220,220,1497"
+w_single_shape="220,220,1497"
 
-interface='19.8*mm'
-coarse_spacing=0.22
+interface='29.7*mm'
+coarse_spacing=0.55
 fine_spacing=0.1
 spacing=0.1
 precision=0.00000002
@@ -232,78 +267,74 @@ export POCHOIR_LOG="${POCHOIR_STORE}/pochoir_driftfield.log"
 ## to the SOLVE only -- never to velo or drift below.
 ## SCHWARZ PARAMETERS (stated explicitly below rather than inherited from
 ## hybrid_iterate.py's DEFAULT_BAND_CELLS / DEFAULT_MAX_SWEEPS / DEFAULT_TOL).
-## These values are MEASURED, not guessed -- the full study, with every number
-## below, is in scripts/NOTES-run-pixel-field-seam.md.
+## The full study behind them is scripts/NOTES-run-pixel-field-seam.md.
 ##
-##   --band-cells 5 --max-sweeps 15 --schwarz-tol 2e-8   (BOTH fields)
+##   --band-cells 2 --max-sweeps 15 --schwarz-tol 2e-8   (BOTH fields)
 ##
-## THE SWEEP COUNT IS THE ONLY KNOB.  --schwarz-tol 2e-8 NEVER GATES: on the
-## drift field the sweep stops on max_sweeps with the final near delta ~6.7
-## ORDERS OF MAGNITUDE above the tol (0.112 at 20 sweeps against 2e-8).  Every
-## run measured so far ended on max_sweeps, never on the tolerance.  So seam
-## quality is set by --max-sweeps and by nothing else.
+## THE BAND WIDTH IN MM MUST BE A MULTIPLE OF 1.1mm.  THIS IS THE RULE; THE
+## CELL COUNT IS ONLY ITS CONSEQUENCE, AND IT CHANGES WHEN THE COARSE SPACING
+## CHANGES.  1.1mm is the shared period of the 0.55 and 0.1mm grids, so a band
+## whose inner plane sits a multiple of 1.1mm below the interface lands on a
+## REAL FINE NODE and its far Dirichlet pin is EXACT; any other width leaves
+## the pin INTERPOLATED onto the near grid.
 ##
-## WHY 15 SWEEPS, AND WHAT 4 WAS COSTING.  The E_z kink at the seam, as a
-## percentage of the 56.0 V/mm design field, measured on the drift field:
+##   --band-cells 2 at 0.55mm = 1.10mm  -> inner plane 29.7 - 1.1 = 28.6mm
+##                                      = coarse node 52 = fine node 286 EXACTLY
 ##
-##     sweeps      0        1        4       20
-##     band 3   1.3798%  1.2745%  1.0045%  0.2821%
-##     band 5                              0.0928%
+## The PHYSICAL band is therefore UNCHANGED from the validated configuration --
+## only the cell count moved, because the cells are 2.5x bigger.  At the
+## previous 0.22mm coarse spacing the same 1.1mm band was --band-cells 5.
 ##
-## The reference is the 0.199% COARSE/FINE GEOMETRY FLOOR -- the two grids'
-## own measured far E_z, 55.996 V/mm coarse against 55.885 fine.  That gap is
-## systematic (the grids model different pads: 3.52 vs 3.5mm, chamfer 0.66 vs
-## 0.70, and padThicknessCells 3 is a CELL count so the pad block is 0.66mm
-## coarse against 0.30mm fine).  A seam kink below it has stopped being the
-## limiting error; it is a stopping criterion, not a target to beat.
+## DO NOT CARRY --band-cells 5 OVER FROM THE 8cm GEOMETRY: 5 x 0.55 = 2.75mm,
+## which is 2.5 x 1.1mm and NOT a whole multiple, so the pin would silently go
+## back to being interpolated.  There is NO error message for this -- the run
+## succeeds and just converges more slowly.  Phase 3 measured what that costs:
+## the Schwarz contraction rate was 0.9237/sweep with an interpolated pin
+## against 0.8737/sweep with an exact one, a difference worth ~10 sweeps to
+## reach the same seam quality.
 ##
-## The shipped --max-sweeps 4 left the kink at 1.0045%, about 5x that floor.
-## Band 5 reaches the floor at ~15 sweeps, which is why 15 is the value here.
+## THE SWEEP COUNT IS THE ONLY OTHER KNOB.  --schwarz-tol 2e-8 NEVER GATES: on
+## the 8cm drift field the sweep stopped on max_sweeps with the final near delta
+## ~6.7 ORDERS OF MAGNITUDE above the tol.  Every run measured so far ended on
+## max_sweeps, never on the tolerance.
 ##
-## WHY BAND 5 AND NOT 3.  The Schwarz contraction is a FIXED geometric rate
-## per band -- flat to four decimals across all nineteen gaps of a 20-sweep
-## run, with no transient.  Band 3's inner plane is 19.14mm, which is NOT a
-## fine node (the grids share nodes only every 1.1mm at the 2.2 ratio), so its
-## far Dirichlet pin is INTERPOLATED.  Band 5's inner plane is 18.70mm = fine
-## node 187 exactly, so its pin is EXACT.  That is worth a real rate change:
+## --max-sweeps 15 is CARRIED OVER, NOT RE-DERIVED.  It came from the band-5
+## exact-pin rate at the 8cm / 0.22mm geometry, where 15 sweeps brought the
+## drift kink to the then-measured 0.199% coarse/fine floor (against 1.0045% at
+## the 4 sweeps originally shipped).  WHETHER 15 STILL SUFFICES HERE IS AN OPEN
+## QUESTION measured in Phase 4/Step 6 -- the geometry, the coarse spacing, the
+## bulk field and the pad snap have all changed, and that 0.199% floor itself
+## does not transfer and must be re-measured.  Do not treat 15 as validated for
+## this geometry.
 ##
-##     band 3 (interpolated pin)   0.9237/sweep   ~25 sweeps to the floor
-##     band 5 (exact pin)          0.8737/sweep   ~15 sweeps to the floor
-##
-## Band 5 costs 3.4% more per sweep (28.76s vs 27.81s) and still wins by 38%
-## on time-to-floor.  Only band_cells that are MULTIPLES OF 5 give an exact
-## pin at this 2.2 ratio.
-##
-## BANDS 10 AND 20 ARE DELIBERATELY NOT USED.  Pinning the coarse far solve to
-## fine data over a large fraction of its depth converges the seam by turning
-## the hybrid into the single-spacing solve, which defeats the point of the
-## method.  Do not "improve" the seam by widening the band.
+## WIDER BANDS ARE DELIBERATELY NOT USED.  Pinning the coarse far solve to fine
+## data over a large fraction of its depth converges the seam by turning the
+## hybrid into the single-spacing solve, which defeats the point of the method.
+## Do not "improve" the seam by widening the band.
 ##
 ## --schwarz-tol 2e-8 is undimensioned ON PURPOSE so one value serves both the
 ## volt-valued drift potential and the dimensionless [0,1] weighting probe.
 ##
-## COST, HONESTLY.  15 sweeps is not free, and the sweep dominates the run:
+## KNOWN BLOCKER (Phase 4/Step 1, pochoir-honm): --interface '29.7*mm' is
+## REJECTED by hybrid_iterate._check_interface as of this writing.  That check
+## compares the requested interface against the near grid's implied split with
+## an exact float !=, and (298-1)*0.1 == 29.700000000000003, not 29.7.  The
+## geometry is integer-exact -- 54 coarse and 297 fine cells -- so this is
+## purely a float-equality defect; the old 19.8mm worked only because 198*0.1
+## round-trips to exactly 19.8.  Until that check compares with a tolerance (or
+## compares integer cell counts), BOTH --hybrid yes branches below will abort
+## immediately.  Do NOT work around it by perturbing the interface string.
 ##
-##     drift      28.76 s/sweep  ->  ~431 s of sweeping, ~9 min total
-##     weighting  10.10 s/sweep  ->  ~152 s of sweeping, ~4 min total
-##
-## The WEIGHTING field is CHEAPER per sweep than the drift field despite 25x
-## more nodes (coarse 3.6M vs 144k, near 9.6M vs 385k, output 38M vs 1.5M):
-## the drift grids are small enough to be kernel-launch-latency bound, so the
-## GPU inverts the naive scaling.  This was measured, not extrapolated.  It is
-## why BOTH fields can afford the same sweep count and the runner does not
-## need to split them.
-##
-## WHAT 15 SWEEPS DOES NOT FIX.  The weighting seam is NOT sweep-limited.  At
-## band 5 / 20 sweeps its kink is 4.20% of the local |E_z| (against the drift
-## field's 0.093%), because at 19.8mm the TRANSVERSE CORRUGATION is still 40%
-## of the local W value -- for the drift field the same quantity is 7e-08, so
-## the interface is deep inside the corrugated zone for one field and clear of
-## it for the other.  More sweeps cannot fix that: the sweep converges the two
-## domains to each other, not to the truth.  The weighting far tail is also a
-## linear ramp rather than a decay, from the fix,fix,fix Neumann-mirror edges
-## (see scripts/NOTES-weighting-farfield.md).  Both are open questions, not
-## settled by this sweep count.
+## WHAT THE SWEEP COUNT DOES NOT FIX.  The weighting seam is not sweep-limited:
+## at the 8cm geometry its kink was 4.20% of the local |E_z| against the drift
+## field's 0.093%, because the interface sat where transverse corrugation was
+## still 40% of the local W.  Moving the interface to 29.7mm is the Phase 4
+## response to exactly that, and whether it worked is measured in Phase 4/Step
+## 7.  Separately, the weighting far tail is a linear ramp rather than a decay,
+## because the fix,fix,fix transverse edges are implemented as a NEUMANN MIRROR
+## rather than a Dirichlet zero (fdm_generic.py:8-34); see
+## scripts/NOTES-weighting-farfield.md.  That is a known open defect and no
+## sweep count addresses it.
 
 if [ "$HYBRID" = yes ] ; then
     want potential/drift3d \
@@ -315,7 +346,7 @@ if [ "$HYBRID" = yes ] ; then
          --fine-shape "$d_fine_shape" \
          --interface "$interface" \
          --coarse-spacing "$coarse_spacing" --fine-spacing "$fine_spacing" \
-         --band-cells 5 --max-sweeps 15 --schwarz-tol 2e-8 \
+         --band-cells 2 --max-sweeps 15 --schwarz-tol 2e-8 \
          --precision "$precision"
 else
     want potential/drift3d \
@@ -379,7 +410,7 @@ if [ "$HYBRID" = yes ] ; then
          --fine-shape "$w_fine_shape" \
          --interface "$interface" \
          --coarse-spacing "$coarse_spacing" --fine-spacing "$fine_spacing" \
-         --band-cells 5 --max-sweeps 15 --schwarz-tol 2e-8 \
+         --band-cells 2 --max-sweeps 15 --schwarz-tol 2e-8 \
          --precision "$precision"
 else
     want potential/weight3d \
