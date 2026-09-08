@@ -908,9 +908,10 @@ of it is the pad-area snap, not the laminate thickness.**
 **The kink is 0.305647 V/mm = 0.371× the floor — it is comfortably BELOW it.**
 
 The seam is therefore *not* the limiting error on this geometry, and 15 sweeps
-is more than enough: extrapolating the 0.9361 rate backwards, the kink was
-already below the floor **from sweep 0**. No extra sweeps are needed and none
-are recommended.
+is more than enough: extrapolating the 0.9361 rate backwards puts the kink at
+0.822975 V/mm at sweep 0 against the 0.822810 V/mm floor — **essentially exactly
+at the floor from the very first sweep** (1.0002× it), crossing below during
+sweep 1. No extra sweeps are needed and none are recommended.
 
 But that verdict deserves its plain-language version, because "converged" here
 is not good news:
@@ -939,12 +940,14 @@ Total **496 s**, against the 8 cm band-5 run's 666 s.
 | stitch | 0.19 s | 0.3 s | |
 | store size | 68 MB | 105 MB | +54 % |
 
-**The 16× smaller coarse grid bought only 30 % off the coarse solve, and the
+**The 8.3× smaller coarse grid bought only 30 % off the coarse solve, and the
 per-sweep cost barely moved (−5.6 %).** This is exactly the launch-latency
 effect Phase 3 identified, now confirmed from the other direction: the coarse
-grid went from 144 k nodes to **17 k** — 8×8×273, smaller than many test
-fixtures — and the solve did not get 16× faster because at that size the GPU is
-not arithmetic-bound at all. **Shrinking an already-small grid buys almost
+grid went from 20×20×361 = 144,400 nodes to **8×8×273 = 17,472** — smaller than
+many test fixtures — and the solve did not get 8.3× faster because at that size
+the GPU is not arithmetic-bound at all. (The transverse shrink is 6.25×, but the
+depth *grew* 273/361, so the net is 8.3× and not the larger figure a
+transverse-only count suggests.) **Shrinking an already-small grid buys almost
 nothing.**
 
 The near solve got *slower* (+23 %), which is the honest counterweight: its z
