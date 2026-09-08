@@ -444,6 +444,24 @@ def _near_interface(prof, grids):
     the split is fixed entirely by the near grid's z extent -- NOT by the
     --interface option.
     '''
+    cells, spacing = _near_interface_cells(prof, grids)
+    return cells * spacing
+
+
+def _near_interface_cells(prof, grids):
+    '''
+    The near/far split as an INTEGER CELL COUNT, plus the near grid's spacing.
+
+    The cell count is what callers should compare on.  `_near_interface`
+    reconstructs millimetres from it for display and for the callers that want a
+    physical coordinate, but a reconstructed float must never be compared for
+    equality: `(nz-1) * spacing` is not exactly the decimal it prints as.  At
+    0.1mm, 198 cells round-trips to exactly 19.8 while 297 cells gives
+    29.700000000000003 -- a 3.6e-15 difference that made `--interface 29.7*mm`
+    fail against a grid that implements it exactly.  The grids are integer-exact
+    by construction (`_cells` refuses a fractional count), so the integers are
+    the truth and the millimetres are the lossy view of them.
+    '''
     from pochoir.util import unitify
 
     near_key = _key(prof, 'domain', 'near')
@@ -451,7 +469,8 @@ def _near_interface(prof, grids):
         if key != near_key:
             continue
         nz = int(shape.split(',')[2])
-        return (nz - 1) * unitify(spacing)
+        # `spacing` arrives as a units STRING ('0.1*mm'), not a float.
+        return nz - 1, unitify(spacing)
     raise ValueError(f'field profile has no {near_key} entry')
 
 
@@ -463,17 +482,27 @@ def _check_interface(prof, grids, interface):
     The plane comes from the near grid's z extent (see `_near_interface`), not
     from this option.  A mismatch used to be silently ignored, so
     `--interface 30*mm` ran happily and still split at 20mm.
+
+    The comparison is on INTEGER CELL COUNTS, never on reconstructed
+    millimetres.  Both grids are integer-exact by construction, so the cell
+    count is the truth; comparing floats made this check reject geometries it
+    should accept, and it did so only for some of them -- 19.8mm passed because
+    198*0.1 happens to round-trip exactly, while 29.7mm failed on a 3.6e-15
+    discrepancy.  A tolerance would have hidden that rather than fixed it.
     '''
     from pochoir.util import unitify
 
-    want = unitify(interface)
-    have = _near_interface(prof, grids)
-    if want != have:
+    want_mm = unitify(interface)
+    have_cells, spacing = _near_interface_cells(prof, grids)
+    want_cells = int(round(want_mm / spacing))
+    if want_cells != have_cells:
         raise ValueError(
-            f'--interface {interface} ({want}) disagrees with the split implied '
-            f'by {_key(prof, "domain", "near")} ({have}).  The near/far plane is '
-            f'set by the near grid z extent in the field profile, not by this '
-            f'option; re-shape the near grid to move it.')
+            f'--interface {interface} ({want_mm}, {want_cells} cells of '
+            f'{spacing}) disagrees with the split implied by '
+            f'{_key(prof, "domain", "near")} ({have_cells * spacing}, '
+            f'{have_cells} cells).  The near/far plane is set by the near grid '
+            f'z extent in the field profile, not by this option; re-shape the '
+            f'near grid to move it.')
 
 
 def _near_solve(ctx, prof, precision, log):
