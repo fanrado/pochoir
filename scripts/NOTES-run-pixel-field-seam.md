@@ -791,3 +791,184 @@ and the unphysical far-field BC are.**
    corrugation is ~3 % of W) or fixing the transverse BC.
 
 `run-pixel-field.sh` not touched; no default in `pochoir/` changed.
+
+
+---
+
+# Phase 4/Step 6 — the drift seam at 15 cm / 0.55 mm / band 2
+
+Beads: `pochoir-jteg`. First solve on the retargeted geometry. Store
+`store_15cm_drift_band2`, solo on the GPU. **Note the design field is now
+50.0 V/mm**, so `--design-field 50.0`, not 56.0.
+
+This step could not run until `pochoir-oq8a` fixed `_check_interface` (it
+compared reconstructed float millimetres, so `--interface '29.7*mm'` was
+rejected outright). Band confirmed from the log **before** trusting any number:
+
+```
+schwarz: interface z=29.7 coarse idx 54 (inner 52), near top idx 297 (seed 296)
+```
+
+**`inner 52`** — coarse node 52 = z 28.6 mm = fine node 286 exactly, so the far
+Dirichlet pin *is* on a real fine node, as designed.
+
+## 1. DID THE EXACT PIN SURVIVE THE RESPACING? **No — and this is the finding.**
+
+| sweep | near delta | ratio to previous |
+|---|---|---|
+| 0 | 0.8968357064619568 | — |
+| 1 | 0.8395385925741721 | 0.9361 |
+| 2 | 0.7859046959684974 | 0.9361 |
+| 3 | 0.7356971992733179 | 0.9361 |
+| 4 | 0.6886972069187323 | 0.9361 |
+| 5 | 0.6446964559281696 | 0.9361 |
+| 6 | 0.6035100502684827 | 0.9361 |
+| 7 | 0.5649548365148576 | 0.9361 |
+| 8 | 0.5288627209429251 | 0.9361 |
+| 9 | 0.4950763486317555 | 0.9361 |
+| 10 | 0.463448417270115 | 0.9361 |
+| 11 | 0.4338410349514561 | 0.9361 |
+| 12 | 0.4061251189863242 | 0.9361 |
+| 13 | 0.3801798331271584 | 0.9361 |
+| 14 | 0.3558920607457594 | 0.9361 |
+
+**The contraction ratio is 0.9361 — flat to four decimals across all fourteen
+gaps, and WORSE than the 0.9237 that an *interpolated* pin gave at 0.22 mm.**
+
+This is the outcome the step flagged as "a real finding": the pin is landing
+exactly where it should (`inner 52`, verified), the band is the same 1.1 mm
+physical width that produced 0.8737 at 0.22 mm coarse — and the rate did not
+follow.
+
+| configuration | band | physical width | pin | rate |
+|---|---|---|---|---|
+| 8 cm, coarse 0.22 | 3 | 0.66 mm | interpolated | 0.9237 |
+| 8 cm, coarse 0.22 | 5 | 1.10 mm | **exact** | **0.8737** |
+| 15 cm, coarse 0.55 | 2 | 1.10 mm | **exact** | **0.9361** |
+
+So **the exact pin is not sufficient on its own**, and the Phase 3 conclusion —
+that landing the pin on a fine node is what bought the rate — was
+over-attributed. Holding the pin exact and the physical band width fixed, the
+rate still got worse when the coarse grid was relaxed. Something else in the
+respacing dominates. Two candidates, neither tested here:
+
+* **the coarse grid itself is 2.5× coarser**, so the far solve the near domain
+  is being pinned *to* is a much lower-fidelity field. The pin being on-node
+  says nothing about the accuracy of the value being pinned.
+* **the domain is 1.9× deeper** (149.6 vs 79.2 mm), and the Schwarz rate for
+  this kind of alternating iteration generally degrades as the far domain grows
+  relative to the overlap.
+
+Distinguishing those needs one run at 15 cm with 0.22 mm coarse (isolating
+depth) or one at 8 cm with 0.55 mm (isolating spacing). **Not attempted here** —
+it is a new experiment, not this step's question.
+
+## 2. IS THE SEAM CONVERGED AT 15 SWEEPS? **Yes — but only because the floor got
+much worse.**
+
+It stopped on `max_iters=15`, final delta 0.3559, still ~7.3 orders above the
+tol; the tolerance does not gate.
+
+Interface on node **297** of 1497, exactly.
+
+| quantity | value |
+|---|---|
+| E_z just BELOW the plane | 49.6868501 V/mm |
+| E_z just ABOVE the plane | 49.9924973 V/mm |
+| kink (above − below) | **+0.305647 V/mm** |
+| as % of the local &#124;E_z&#124; (49.840) | 0.6133 % |
+| **as % of the 50.0 V/mm design field** | **0.6113 %** |
+
+### THE NEW FLOOR, MEASURED — not carried over
+
+The 0.199 % floor is an 8 cm / 0.22 mm number and does **not** transfer, so it
+was re-measured the same way it was originally obtained — the far E_z on the
+coarse solve against the fine near solve, on the pad-centre axis:
+
+| solve | window | far E_z | uniformity (sd) |
+|---|---|---|---|
+| `potential/coarse` (0.55 mm) | z = 40–140 mm | **50.06609 V/mm** | 9.9e-06 |
+| `potential/coarse` (0.55 mm) | z = 20–29 mm | 50.06609 V/mm | — |
+| `potential/near` (0.1 mm) | z = 20–29 mm | **49.24328 V/mm** | 1.9e-05 |
+
+**NEW FLOOR = 0.82281 V/mm = 1.6456 % of the 50.0 V/mm design field.**
+
+That is **8.3× the old 0.199 %**, and it confirms — with a measurement, not an
+assumption — the expectation recorded in the configs and the geometry note: the
+−11.1 % coarse pad-area snap and the 0.45 mm pad-top offset made the two grids
+disagree far more than they did at 0.22 mm.
+
+The pad-top offset alone does not explain it. The naive chords are
+6982.5/(149.6 − 10.45) = 50.180 V/mm coarse against 6982.5/(149.6 − 10.00) =
+50.018 fine, a spread of only 0.32 %. The measured spread is 1.65 %, so **most
+of it is the pad-area snap, not the laminate thickness.**
+
+### So, against that measured floor
+
+**The kink is 0.305647 V/mm = 0.371× the floor — it is comfortably BELOW it.**
+
+The seam is therefore *not* the limiting error on this geometry, and 15 sweeps
+is more than enough: extrapolating the 0.9361 rate backwards, the kink was
+already below the floor **from sweep 0**. No extra sweeps are needed and none
+are recommended.
+
+But that verdict deserves its plain-language version, because "converged" here
+is not good news:
+
+> **The seam stopped being the limiting error only because the coarse grid got
+> so much worse that its systematic pad error now dwarfs it.** At 8 cm the
+> stitch had to work to reach a 0.199 % floor; here it clears a 1.65 % floor
+> without trying. Relaxing the bulk to 0.55 mm bought a cheap far solve and
+> paid for it in far-field accuracy — 1.65 % of the design field is a real
+> error in the stitched output, smooth, and invisible to the Laplacian residual
+> metric. Whether that is an acceptable trade is a physics judgement, not a
+> seam-quality one, and it is not this step's to make.
+
+## 3. WHAT DOES THE COARSER BULK COST OR SAVE?
+
+Total **496 s**, against the 8 cm band-5 run's 666 s.
+
+| stage | 8 cm (band 5) | 15 cm (band 2) | change |
+|---|---|---|---|
+| geometry generation ×3 | 45.5 s | **50.2 s** | +10 % |
+| **coarse solve** | 31.7 s | **22.3 s** | **−30 %** |
+| refine + `near_bc` | 0.4 s | 0.1 s | |
+| near solve (sweep 0) | 10.5 s | 12.9 s | +23 % |
+| **Schwarz sweep** | 575 s (20 sw) | **407.4 s** (15 sw) | |
+| **per sweep** | **28.76 s** | **27.14 s** | **−5.6 %** |
+| stitch | 0.19 s | 0.3 s | |
+| store size | 68 MB | 105 MB | +54 % |
+
+**The 16× smaller coarse grid bought only 30 % off the coarse solve, and the
+per-sweep cost barely moved (−5.6 %).** This is exactly the launch-latency
+effect Phase 3 identified, now confirmed from the other direction: the coarse
+grid went from 144 k nodes to **17 k** — 8×8×273, smaller than many test
+fixtures — and the solve did not get 16× faster because at that size the GPU is
+not arithmetic-bound at all. **Shrinking an already-small grid buys almost
+nothing.**
+
+The near solve got *slower* (+23 %), which is the honest counterweight: its z
+extent grew 50 % (298 vs 199 nodes). The sweep still dominates at 82 % of the
+run.
+
+Net: the respacing is roughly cost-neutral per sweep. The 170 s saving over the
+8 cm run is almost entirely the 5 fewer sweeps, not the coarser bulk.
+
+## Transverse corrugation at the seam
+
+| z [mm] | index | max − min of phi [V] |
+|---|---|---|
+| 10.5 | 105 | 18.92 |
+| 15.0 | 150 | 0.0300847 |
+| 19.8 | 198 | 3.211e-05 |
+| **29.7 (seam)** | **297** | **2.547e-11** |
+| 30.0 | 300 | 1.796e-11 |
+| 40.0 | 400 | 1.137e-12 |
+
+**2.5e-11 V on a 988 V potential** — six orders below the old 19.8 mm value,
+which was itself a non-factor. Moving the interface out to 29.7 mm has made
+corrugation utterly irrelevant *for the drift field*, as expected. Whether it
+did the same for the weighting probe — the field that actually motivated the
+move — is Phase 4/Step 7.
+
+Nothing was changed: no runner, no config, no `pochoir/` default.
