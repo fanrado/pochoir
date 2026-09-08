@@ -1,0 +1,25 @@
+{
+    "_comment": "WEIGHTING config for a 0.55 mm cell (5.5x coarser than the 0.1 mm variant kept in .0p1mm). The nominal LArPix-v2a lengths below are the TRUE design values and are left unsnapped on purpose: the generators snap them to the 0.55 mm cell internally (pixelSize 3.5 -> 3.3 = 6 cells, pixelGap 0.9 -> 1.1 = 2 cells, pitch 4.4 = 8 cells exactly). EVERY length here is an EXACT multiple of the 0.55mm cell, so the geometry is predictable instead of whatever the generator's rounding happens to produce. Single-cell features are set exactly to the spacing: pixelPlaneWidth, padThickness, FR4Thickness = 0.55 = 1 cell each (do NOT leave these at their sub-cell design values -- pixelPlaneWidth goes through a bare int(w/spacing) with no max(1,..) guard and would collapse to ZERO cells). Geometry is pre-snapped: pixelSize 3.5->3.3 (6 cells), pixelGap 0.9->1.1 (2 cells) -- the PITCH is preserved exactly at 3.3+1.1 = 4.4mm = 8 cells, which is what the 8x8 drift tile and the 40x40 weighting domain assume; chamfer_r 0.7->0.55 (1 cell). pixelPlaneLowEdgePosition 9.9 = 18 cells is already exact. driftZDepth 159.9 is deliberately NOT snapped: it is overloaded, setting both the grounded cathode node (round(159.9/0.55) = 291, deterministic) and the path start z in continuous mm. Snapping it to 159.5 would move the cathode to node 290 AND place the start exactly ON that grounded node; paths are interpolated, so a non-multiple start z is fine and correct. padThicknessCells=3 sets the grounded pad depth (1.65mm here). The _design_* keys record the true LArPix-v2a values and are ignored by the generators. The 0.1mm variant of this config, where no snapping is needed, is kept in .0p1mm.",
+
+    "HoleRadius" : 1.9,
+    "PcbWidth" : 1.6,
+    "GridHoleShape" : "None",
+
+    "pixelPlaneLowEdgePosition" : 9.9,
+    "pixelPlaneWidth" : 0.55,
+    "padThickness" : 0.55,
+    "padThicknessCells" : 3,
+    "FR4Thickness" : 0.55,
+
+    "_design_pixelSize" : 3.5,
+    "_design_pixelGap" : 0.9,
+    "_design_chamfer_r" : 0.7,
+
+    "pixelSize" : 3.3,
+    "pixelGap" : 1.1,
+    "chamfer_r": 0.55,
+    "Npixels" : 5,
+    "enableInsulatorFR4": true,
+    "driftZDepth": 159.9,
+    "nGridPoints": 10
+}
