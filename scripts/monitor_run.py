@@ -24,6 +24,7 @@ import csv
 import datetime
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -60,6 +61,13 @@ def _parse(mine):
     ap.add_argument('--out-dir', default='.',
                     help='directory to write the report files into; created if '
                          'missing (default: the current directory)')
+    ap.add_argument('--per-step', dest='per_step', action='store_true',
+                    default=None,
+                    help='attribute time and GPU memory to each `pochoir '
+                         '<subcommand>` the runner echoes (default: ON when '
+                         'both runtime and gpu-mem monitoring are active)')
+    ap.add_argument('--no-per-step', dest='per_step', action='store_false',
+                    help='disable the per-subcommand breakdown')
     ap.add_argument('--gpu-mem-scope', choices=('proc-tree', 'device'),
                     default='proc-tree',
                     help="'proc-tree' counts only the target's own processes; "
@@ -73,6 +81,8 @@ def _parse(mine):
         a.gpu_mem = True
     if a.interval <= 0:
         ap.error('--interval must be positive, got %r' % a.interval)
+    if a.per_step is None:
+        a.per_step = bool(a.runtime and a.gpu_mem)
     return a
 
 
@@ -280,6 +290,98 @@ class GpuSampler(object):
         return peak
 
 
+# The runner scripts' want() helper echoes the whole `pochoir ...` command line
+# to stdout immediately before running it (scripts/helpers.sh:9 and the inline
+# override in the run-*.sh scripts), which makes the streamed stdout a usable
+# phase marker.
+#
+# NOTE the character class is [\w-], not \w: `induce-pixel` is one of the
+# subcommands and a bare \w+ would clip it to `induce`.
+_MARKER = re.compile(r'^pochoir ([\w-]+)')
+
+
+class SegmentTracker(object):
+    """Splits the run into segments at each `pochoir <subcommand>` marker.
+
+    A segment runs from its marker to the next one (the last closes at the end
+    of the run).  Anything echoed before the first marker is not a segment --
+    it is setup, and inventing a name for it would be worse than omitting it.
+    """
+
+    def __init__(self):
+        self.segments = []
+
+    def mark(self, name, elapsed):
+        if self.segments:
+            self.segments[-1]['end_seconds'] = elapsed
+        self.segments.append(dict(subcommand=name,
+                                  start_seconds=elapsed,
+                                  end_seconds=None))
+
+    def close(self, elapsed):
+        if self.segments and self.segments[-1]['end_seconds'] is None:
+            self.segments[-1]['end_seconds'] = elapsed
+
+    def finish(self, samples):
+        """Attach duration and per-GPU peak over each segment's own window."""
+        out = []
+        for seg in self.segments:
+            t0 = seg['start_seconds']
+            t1 = seg['end_seconds']
+            inside = [smp for smp in samples
+                      if smp[0] >= t0 and (t1 is None or smp[0] < t1)]
+
+            def _peak(rows):
+                peak = {}
+                for _t, per_gpu, _fb in rows:
+                    for idx, mib in per_gpu.items():
+                        if mib > peak.get(idx, -1.0):
+                            peak[idx] = mib
+                return {str(i): v for i, v in sorted(peak.items())}
+
+            own = [smp for smp in inside if not smp[2]]
+            out.append(dict(
+                subcommand=seg['subcommand'],
+                start_seconds=t0,
+                end_seconds=t1,
+                duration_seconds=(round(t1 - t0, 3)
+                                  if t1 is not None else None),
+                n_samples=len(inside),
+                peak_mib=_peak(inside),
+                # Same caveat as the run-level figure: a device-fallback tick
+                # can carry other processes' memory, and on a shared card that
+                # swamps the segment's real usage.  Both are reported so the
+                # breakdown stays meaningful either way.
+                n_samples_excluding_fallback=len(own),
+                peak_mib_excluding_fallback=_peak(own),
+            ))
+        return out
+
+
+def _pump_stdout(pipe, tracker, t0_mono, out=sys.stdout):
+    """Re-emit the target's stdout line by line, tagging markers as we go.
+
+    Parsing stdout means it has to come through a pipe rather than being
+    inherited, so each line is written straight back out and flushed to keep the
+    run looking live.  One consequence worth knowing: the target's stdout is no
+    longer a tty, and stdout/stderr interleaving is no longer guaranteed by the
+    kernel (stderr stays inherited).  That is the price of phase markers.
+    """
+    try:
+        for raw in iter(pipe.readline, ''):
+            elapsed = round(time.monotonic() - t0_mono, 3)
+            out.write(raw)
+            out.flush()
+            m = _MARKER.match(raw.strip())
+            if m and tracker is not None:
+                tracker.mark(m.group(1), elapsed)
+    finally:
+        try:
+            pipe.close()
+        except Exception:                        # noqa: BLE001
+            pass
+
+
 def _report_stem(target, when):
     """<scriptname>_<UTC timestamp> -- the shared stem of both report files.
 
@@ -383,8 +485,15 @@ def main(argv=None):
     # inherited, so the run streams through unchanged.
     t0 = time.time()
     t0_mono = time.monotonic()
+    # --per-step needs to READ stdout, so it comes through a pipe and is
+    # re-emitted by _pump_stdout.  Without it stdout stays inherited, which is
+    # the cheaper and more faithful path.
+    tracker = SegmentTracker() if a.per_step else None
     try:
-        proc = subprocess.Popen(target, start_new_session=True)
+        proc = subprocess.Popen(
+            target, start_new_session=True,
+            stdout=(subprocess.PIPE if a.per_step else None),
+            universal_newlines=True, bufsize=1)
     except FileNotFoundError:
         print('monitor_run: cannot execute %r -- no such file' % target[0],
               file=sys.stderr)
@@ -393,6 +502,13 @@ def main(argv=None):
         print('monitor_run: cannot execute %r -- not executable' % target[0],
               file=sys.stderr)
         return 126
+
+    pump = None
+    if a.per_step:
+        pump = threading.Thread(target=_pump_stdout,
+                                args=(proc.stdout, tracker, t0_mono),
+                                daemon=True)
+        pump.start()
 
     sampler = None
     if a.gpu_mem:
@@ -414,6 +530,9 @@ def main(argv=None):
     finally:
         for sig, old in prev.items():
             signal.signal(sig, old)
+        if pump is not None:
+            # Drain whatever the target already wrote before summarising.
+            pump.join(timeout=5.0)
         if sampler is not None:
             sampler.stop()
         elapsed = time.monotonic() - t0_mono
@@ -446,7 +565,11 @@ def main(argv=None):
                           if sampler is not None else None),
             fell_back_to_device=(bool(sampler.fell_back_to_device)
                                  if sampler is not None else False),
+            per_step=bool(a.per_step),
         )
+        if tracker is not None:
+            tracker.close(round(elapsed, 3))
+            summary['segments'] = tracker.finish(samples)
         if sampler is not None and sampler.fell_back_to_device:
             # Fallback ticks can carry other processes' memory, so the
             # own-only peaks are reported alongside rather than silently mixed.
@@ -491,6 +614,18 @@ def main(argv=None):
                   % (a.gpu_mem_scope,
                      ', '.join('gpu%s %.0f MiB' % (k, v['peak_mib'])
                                for k, v in stats.items()), note))
+        if tracker is not None and summary.get('segments'):
+            for seg in summary['segments']:
+                dur = ('%.2f s' % seg['duration_seconds']
+                       if seg['duration_seconds'] is not None else '?')
+                own = seg['peak_mib_excluding_fallback']
+                use, tag = ((own, '') if own
+                            else (seg['peak_mib'], ' [whole-device]'))
+                pk = (', '.join('gpu%s %.0f MiB' % (k, v)
+                                for k, v in use.items()) + tag
+                      or 'no samples')
+                print('  segment %-14s %8s  %s'
+                      % (seg['subcommand'], dur, pk))
         print('reports: %s' % (', '.join(written) if written
                                else '(none written)'))
         sys.stdout.flush()
