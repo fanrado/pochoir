@@ -20,6 +20,8 @@ is accepted and reported as requested but its sampler is a later step -- see the
 note printed at exit, which says so rather than implying a measurement happened.
 """
 import argparse
+import csv
+import datetime
 import json
 import os
 import signal
@@ -55,9 +57,9 @@ def _parse(mine):
                     help='measure GPU memory (default when neither is given)')
     ap.add_argument('--interval', type=float, default=2.0,
                     help='sampling interval in seconds (default 2.0)')
-    ap.add_argument('--out-dir', default=None,
-                    help='directory to write the measurement summary into; '
-                         'created if missing.  Omit to print only.')
+    ap.add_argument('--out-dir', default='.',
+                    help='directory to write the report files into; created if '
+                         'missing (default: the current directory)')
     ap.add_argument('--gpu-mem-scope', choices=('proc-tree', 'device'),
                     default='proc-tree',
                     help="'proc-tree' counts only the target's own processes; "
@@ -278,6 +280,50 @@ class GpuSampler(object):
         return peak
 
 
+def _report_stem(target, when):
+    """<scriptname>_<UTC timestamp> -- the shared stem of both report files.
+
+    The script's basename is used, with any extension dropped, so
+    `./scripts/run-task10b-drift-2cm-gap09-chamf07.sh` becomes
+    `run-task10b-drift-2cm-gap09-chamf07`.
+    """
+    name = os.path.basename(target[0]) if target else 'run'
+    name = os.path.splitext(name)[0] or 'run'
+    safe = ''.join(c if (c.isalnum() or c in '-_.') else '_' for c in name)
+    return '%s_%s' % (safe, when.strftime('%Y%m%dT%H%M%SZ'))
+
+
+def _write_csv(path, samples):
+    """One row per sample per GPU: t_seconds,gpu_index,used_mib.
+
+    Written even when there are no samples -- a header-only file says
+    "measured, found nothing" and is easy to plot; a missing file is
+    indistinguishable from a crash.
+    """
+    with open(path, 'w', newline='') as fp:
+        w = csv.writer(fp)
+        w.writerow(['t_seconds', 'gpu_index', 'used_mib'])
+        for t, per_gpu, _fb in samples:
+            for idx in sorted(per_gpu):
+                w.writerow([t, idx, per_gpu[idx]])
+
+
+def _per_gpu_stats(samples):
+    """{gpu_index: {peak_mib, mean_mib, n_samples}} over the given samples."""
+    acc = {}
+    for _t, per_gpu, _fb in samples:
+        for idx, mib in per_gpu.items():
+            a = acc.setdefault(idx, [0.0, 0.0, 0])   # peak, total, n
+            if mib > a[0]:
+                a[0] = mib
+            a[1] += mib
+            a[2] += 1
+    return {str(i): dict(peak_mib=round(a[0], 1),
+                         mean_mib=round(a[1] / a[2], 1) if a[2] else None,
+                         n_samples=a[2])
+            for i, a in sorted(acc.items())}
+
+
 def _forward_to_group(pid):
     """Send SIGINT/SIGTERM on to the target's whole process group.
 
@@ -353,9 +399,16 @@ def main(argv=None):
         sampler = GpuSampler(proc.pid, a.interval, a.gpu_mem_scope,
                              t0_mono).start()
 
+    # Report paths are fixed BEFORE the wait, so the finally block below can
+    # write them no matter how the run ends.
+    stem = _report_stem(target, datetime.datetime.utcnow())
+    csv_path = os.path.join(out_dir, 'monitor_%s.csv' % stem)
+    json_path = os.path.join(out_dir, 'monitor_%s_summary.json' % stem)
+
     prev = {}
     for sig in (signal.SIGINT, signal.SIGTERM):
         prev[sig] = signal.signal(sig, _forward_to_group(proc.pid))
+    rc = None
     try:
         rc = proc.wait()
     finally:
@@ -363,73 +416,84 @@ def main(argv=None):
             signal.signal(sig, old)
         if sampler is not None:
             sampler.stop()
-    elapsed = time.monotonic() - t0_mono
-    t1 = time.time()
+        elapsed = time.monotonic() - t0_mono
+        t1 = time.time()
 
-    # A child killed by signal N reports -N; report it the way a shell does.
-    exit_code = rc if rc >= 0 else 128 + (-rc)
-
-    if a.runtime:
-        print('monitor_run: wall clock %.2f s (%s)'
-              % (elapsed, _hms(elapsed)), file=sys.stderr)
-    if rc < 0:
-        print('monitor_run: target killed by signal %d -> exit %d'
-              % (-rc, exit_code), file=sys.stderr)
-    else:
-        print('monitor_run: target exited %d' % exit_code, file=sys.stderr)
-    if a.gpu_mem:
-        if sampler.disabled_reason:
-            print('monitor_run: no GPU memory measured (%s)'
-                  % sampler.disabled_reason, file=sys.stderr)
-        elif not sampler.samples:
-            print('monitor_run: GPU sampling ran but collected no samples '
-                  '(target finished inside one %.3gs interval)' % a.interval,
-                  file=sys.stderr)
+        # A child killed by signal N reports -N; report it the way a shell does.
+        if rc is None:
+            exit_code = 1                      # we never got a status at all
+        elif rc >= 0:
+            exit_code = rc
         else:
-            peak = sampler.peaks()
-            scope = ('device' if a.gpu_mem_scope == 'device'
-                     else ('proc-tree, fell back to device on some ticks'
-                           if sampler.fell_back_to_device else 'proc-tree'))
-            print('monitor_run: peak GPU memory (%s, %d samples): %s'
-                  % (scope, len(sampler.samples),
-                     ', '.join('gpu%d %.0f MiB' % (i, peak[i])
-                               for i in sorted(peak))), file=sys.stderr)
+            exit_code = 128 + (-rc)
 
-    summary = dict(
-        command=target,
-        wall_seconds=round(elapsed, 3),
-        wall_hms=_hms(elapsed),
-        started_unix=round(t0, 3),
-        ended_unix=round(t1, 3),
-        exit_code=exit_code,
-        killed_by_signal=(-rc if rc < 0 else None),
-        measured=dict(runtime=bool(a.runtime), gpu_mem=bool(a.gpu_mem)),
-        interval=a.interval,
-        gpu_mem_scope=a.gpu_mem_scope,
-        gpu_mem=None,
-        gpu_mem_note=None,
-    )
-    if a.gpu_mem:
-        summary['gpu_mem'] = dict(
-            scope=a.gpu_mem_scope,
-            fell_back_to_device=bool(sampler.fell_back_to_device),
-            n_samples=len(sampler.samples),
-            peak_mib={str(i): v for i, v in sorted(sampler.peaks().items())},
+        samples = sampler.samples if sampler is not None else []
+        stats = _per_gpu_stats(samples)
+
+        summary = dict(
+            command=target,
+            exit_code=exit_code,
+            wall_seconds=round(elapsed, 3),
+            wall_hms=_hms(elapsed),
+            started_unix=round(t0, 3),
+            ended_unix=round(t1, 3),
+            killed_by_signal=((-rc) if (rc is not None and rc < 0) else None),
+            measured=dict(runtime=bool(a.runtime), gpu_mem=bool(a.gpu_mem)),
+            interval=a.interval,
+            gpu_mem_scope=a.gpu_mem_scope,
+            per_gpu=stats,
+            gpu_mem_note=(sampler.disabled_reason
+                          if sampler is not None else None),
+            fell_back_to_device=(bool(sampler.fell_back_to_device)
+                                 if sampler is not None else False),
         )
-        summary['gpu_mem_note'] = sampler.disabled_reason
-        summary['gpu_mem']['peak_mib_excluding_fallback'] = {
-            str(i): v for i, v in sorted(sampler.peaks(own_only=True).items())}
-        summary['gpu_samples'] = [
-            dict(t_seconds=t,
-                 used_mib={str(i): v for i, v in sorted(g.items())},
-                 device_fallback=bool(fb))
-            for t, g, fb in sampler.samples]
-    if out_dir:
-        path = os.path.join(out_dir, 'monitor_run.json')
-        with open(path, 'w') as fp:
-            json.dump(summary, fp, indent=2)
-            fp.write('\n')
-        print('monitor_run: wrote %s' % path, file=sys.stderr)
+        if sampler is not None and sampler.fell_back_to_device:
+            # Fallback ticks can carry other processes' memory, so the
+            # own-only peaks are reported alongside rather than silently mixed.
+            summary['per_gpu_excluding_fallback'] = _per_gpu_stats(
+                [smp for smp in samples if not smp[2]])
+
+        # BOTH files are written unconditionally -- a failed or interrupted run
+        # is exactly when the measurement is most wanted.  A write error here
+        # must not mask the child's own exit code, so it is reported and
+        # swallowed.
+        written = []
+        try:
+            _write_csv(csv_path, samples)
+            written.append(csv_path)
+        except OSError as e:
+            print('monitor_run: could not write %s (%s)' % (csv_path, e),
+                  file=sys.stderr)
+        try:
+            with open(json_path, 'w') as fp:
+                json.dump(summary, fp, indent=2)
+                fp.write('\n')
+            written.append(json_path)
+        except OSError as e:
+            print('monitor_run: could not write %s (%s)' % (json_path, e),
+                  file=sys.stderr)
+
+        # --- the 3-line summary, on stdout ---
+        print('wall time: %.2f s (%s), exit %d'
+              % (elapsed, _hms(elapsed), exit_code))
+        if sampler is None:
+            print('peak GPU memory: not measured (--gpu-mem not given)')
+        elif sampler.disabled_reason:
+            print('peak GPU memory: not measured (%s)'
+                  % sampler.disabled_reason)
+        elif not stats:
+            print('peak GPU memory: no samples (target finished inside one '
+                  '%.3gs interval)' % a.interval)
+        else:
+            note = ' [some ticks are whole-device readings]' \
+                if sampler.fell_back_to_device else ''
+            print('peak GPU memory (%s): %s%s'
+                  % (a.gpu_mem_scope,
+                     ', '.join('gpu%s %.0f MiB' % (k, v['peak_mib'])
+                               for k, v in stats.items()), note))
+        print('reports: %s' % (', '.join(written) if written
+                               else '(none written)'))
+        sys.stdout.flush()
 
     return exit_code
 
