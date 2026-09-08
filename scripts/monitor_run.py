@@ -328,17 +328,7 @@ class SegmentTracker(object):
         for seg in self.segments:
             t0 = seg['start_seconds']
             t1 = seg['end_seconds']
-            inside = [smp for smp in samples
-                      if smp[0] >= t0 and (t1 is None or smp[0] < t1)]
-
-            def _peak(rows):
-                peak = {}
-                for _t, per_gpu, _fb in rows:
-                    for idx, mib in per_gpu.items():
-                        if mib > peak.get(idx, -1.0):
-                            peak[idx] = mib
-                return {str(i): v for i, v in sorted(peak.items())}
-
+            inside = _window(samples, t0, t1)
             own = [smp for smp in inside if not smp[2]]
             out.append(dict(
                 subcommand=seg['subcommand'],
@@ -347,13 +337,13 @@ class SegmentTracker(object):
                 duration_seconds=(round(t1 - t0, 3)
                                   if t1 is not None else None),
                 n_samples=len(inside),
-                peak_mib=_peak(inside),
+                peak_mib=_peak_mib(inside),
                 # Same caveat as the run-level figure: a device-fallback tick
                 # can carry other processes' memory, and on a shared card that
                 # swamps the segment's real usage.  Both are reported so the
                 # breakdown stays meaningful either way.
                 n_samples_excluding_fallback=len(own),
-                peak_mib_excluding_fallback=_peak(own),
+                peak_mib_excluding_fallback=_peak_mib(own),
             ))
         return out
 
@@ -410,19 +400,42 @@ def _write_csv(path, samples):
                 w.writerow([t, idx, per_gpu[idx]])
 
 
+def _window(samples, t0, t1):
+    """The samples inside [t0, t1), with t1 None meaning "to the end".
+
+    Half-open on purpose: a tick landing exactly on a segment boundary belongs
+    to the segment that is starting, not the one that just closed.
+    """
+    return [smp for smp in samples
+            if smp[0] >= t0 and (t1 is None or smp[0] < t1)]
+
+
+def _peak_mib(samples):
+    """{str(gpu_index): peak_mib} over the given samples.
+
+    The single peak implementation in this file -- both the run-level stats and
+    the per-segment breakdown go through it, so they cannot drift apart.
+    """
+    peak = {}
+    for _t, per_gpu, _fb in samples:
+        for idx, mib in per_gpu.items():
+            if mib > peak.get(idx, -1.0):
+                peak[idx] = mib
+    return {str(i): round(v, 1) for i, v in sorted(peak.items())}
+
+
 def _per_gpu_stats(samples):
     """{gpu_index: {peak_mib, mean_mib, n_samples}} over the given samples."""
+    peaks = _peak_mib(samples)
     acc = {}
     for _t, per_gpu, _fb in samples:
         for idx, mib in per_gpu.items():
-            a = acc.setdefault(idx, [0.0, 0.0, 0])   # peak, total, n
-            if mib > a[0]:
-                a[0] = mib
-            a[1] += mib
-            a[2] += 1
-    return {str(i): dict(peak_mib=round(a[0], 1),
-                         mean_mib=round(a[1] / a[2], 1) if a[2] else None,
-                         n_samples=a[2])
+            a = acc.setdefault(idx, [0.0, 0])        # total, n
+            a[0] += mib
+            a[1] += 1
+    return {str(i): dict(peak_mib=peaks[str(i)],
+                         mean_mib=round(a[0] / a[1], 1) if a[1] else None,
+                         n_samples=a[1])
             for i, a in sorted(acc.items())}
 
 
