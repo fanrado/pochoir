@@ -111,13 +111,13 @@ Recorded plainly, because it is the real cost of relaxing the far grid:
 | `pixelSize` | 3.5 mm (35 cells) | **3.30 mm** (6 cells) | |
 | `pixelGap` | 0.9 mm (9 cells) | **1.10 mm** (2 cells) | |
 | pitch | 4.4 mm (44) | 4.4 mm (6+2 = 8) | exact — `_cells()` requires it |
-| pad **area** | (3.5/4.4)² = 0.6332 | (3.3/4.4)² = 0.5625 | **−11.2 %** |
+| pad **area** | (3.5/4.4)² = 0.6327 | (3.3/4.4)² = 0.5625 | **−11.1 %** |
 | `chamfer_r` | 0.7 mm | **0.55 mm** (1 cell) | −21 % undercut |
 | `padThickness` | | 0.55 (→ 1 cell) | |
 | `FR4Thickness` | | 0.55 (→ 1 cell) | |
 | pad **top** plane | 10.0 mm | **(18+1)×0.55 = 10.45 mm** | the grids model different pads |
 
-The −11.2 % pad-area error is **much worse than the 8 cm geometry's +1.1 %** at
+The −11.1 % pad-area error is **much worse than the 8 cm geometry's +1.1 %** at
 0.22 mm, and it matters for the same reason recorded there: the far field in the
 stitched output *is* the upsampled coarse solution, so a coarse pad-area error
 biases the far weighting field by roughly the same percentage, and it is a
